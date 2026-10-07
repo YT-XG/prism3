@@ -1,0 +1,10 @@
+# 国内 crates.io 镜像，解决官方稀疏索引拉取极慢/超时的问题。
+# 删除本文件即可回退到官方 registry。
+#
+# 若希望全局生效，把同样内容放到 %USERPROFILE%\.cargo\config.toml。
+
+[source.crates-io]
+replace-with = "rsproxy-sparse"
+
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
