@@ -7,6 +7,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { MonitorPanel } from "@/components/monitor/monitor-panel";
+import { cn } from "@/lib/utils";
 import { useAppStore } from "@/stores/app-store";
 
 import { AppSidebar } from "./sidebar-nav";
@@ -20,6 +22,13 @@ import { TitleBar } from "./title-bar";
 export function AppShell() {
   const activeView = useAppStore((state) => state.activeView);
 
+  // 数据型页面（监控）充分利用窗口宽度，表单型页面保持窄栏更易读。
+  const contentWidth = {
+    home: "max-w-3xl",
+    settings: "max-w-3xl",
+    monitor: "max-w-6xl",
+  }[activeView];
+
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-sidebar text-sidebar-foreground">
       <TitleBar />
@@ -29,8 +38,10 @@ export function AppShell() {
 
         <main className="min-w-0 flex-1 overflow-hidden rounded-tl-xl border-t border-l border-border/60 bg-background text-foreground">
           <ScrollArea className="h-full">
-            <div className="mx-auto w-full max-w-3xl p-6">
-              {activeView === "home" ? <HomeView /> : <SettingsPanel />}
+            <div className={cn("mx-auto w-full p-6", contentWidth)}>
+              {activeView === "home" && <HomeView />}
+              {activeView === "settings" && <SettingsPanel />}
+              {activeView === "monitor" && <MonitorPanel />}
             </div>
           </ScrollArea>
         </main>

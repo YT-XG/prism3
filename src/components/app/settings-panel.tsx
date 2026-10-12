@@ -101,6 +101,21 @@ export function SettingsPanel() {
 
       <Card>
         <CardHeader>
+          <CardTitle>快捷小窗</CardTitle>
+          <CardDescription>在屏幕右缘显示一条灰线，鼠标移上去展开小面板。</CardDescription>
+        </CardHeader>
+        <CardContent className="flex items-center justify-between">
+          <Label htmlFor="quick-panel">启用右缘快捷小窗</Label>
+          <Switch
+            id="quick-panel"
+            checked={config.quickPanel}
+            onCheckedChange={(checked) => void apply({ quickPanel: checked })}
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>重置</CardTitle>
           <CardDescription>把主题与窗口行为恢复为默认值。</CardDescription>
         </CardHeader>

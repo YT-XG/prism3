@@ -16,6 +16,16 @@ pub enum Theme {
     Dark,
 }
 
+/// 快捷小窗吸附的屏幕边缘。不含底部（底部与任务栏冲突且非习惯位置）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DockEdge {
+    #[default]
+    Right,
+    Left,
+    Top,
+}
+
 /// 应用配置，持久化为 `%APPDATA%\<identifier>\config.json`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -25,6 +35,13 @@ pub struct AppConfig {
     /// 关闭主窗口时隐藏到托盘而不是退出。
     pub close_to_tray: bool,
     pub last_opened: Option<String>,
+    /// 是否启用屏幕边缘的快捷小窗。
+    pub quick_panel: bool,
+    /// 快捷小窗吸附的屏幕边缘。
+    pub quick_panel_edge: DockEdge,
+    /// 快捷小窗沿吸附边缘的偏移（逻辑像素）：`left`/`right` 时为纵向 y，`top` 时为横向 x。
+    /// 由面板窗口独占写入。
+    pub quick_panel_y: Option<i32>,
 }
 
 impl Default for AppConfig {
@@ -34,6 +51,9 @@ impl Default for AppConfig {
             language: "zh-CN".to_string(),
             close_to_tray: true,
             last_opened: None,
+            quick_panel: false,
+            quick_panel_edge: DockEdge::default(),
+            quick_panel_y: None,
         }
     }
 }

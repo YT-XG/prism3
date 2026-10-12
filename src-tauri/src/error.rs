@@ -11,7 +11,6 @@ pub enum AppError {
     #[error("Tauri 错误: {0}")]
     Tauri(#[from] tauri::Error),
     /// 兜底变体：用于放置不便归类的临时错误，避免为每个场景新增变体。
-    #[allow(dead_code)]
     #[error("{0}")]
     Other(String),
 }

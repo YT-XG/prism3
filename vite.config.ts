@@ -16,6 +16,16 @@ export default defineConfig(() => ({
     },
   },
 
+  // 两个窗口各有 HTML 入口；多页必须在 build 中声明，否则 dist 里缺少 quick-panel.html。
+  build: {
+    rollupOptions: {
+      input: {
+        main: path.resolve(import.meta.dirname, "index.html"),
+        quickPanel: path.resolve(import.meta.dirname, "quick-panel.html"),
+      },
+    },
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

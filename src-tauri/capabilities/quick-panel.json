@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "quick-panel",
+  "description": "Capability for the quick panel windows (bar + body)",
+  "windows": ["quick-panel", "quick-panel-body"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-position",
+    "core:window:allow-set-size",
+    "core:event:allow-emit-to",
+    "log:default"
+  ]
+}

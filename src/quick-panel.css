@@ -1,0 +1,53 @@
+@import "./index.css";
+
+/*
+ * 未分层规则优先于 `@layer base` 中 body 的 `bg-background`，
+ * 保证无边框窗口的背景真正透明（Windows 上依赖 alpha=0）。
+ */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+}
+
+/*
+ * 面板展开/收起：沿「灰条所在的一侧」擦拭（`--qp-clip` 由吸附边缘给出，值为 `inset(...)`）+ 淡入。
+ *
+ * 刻意只做纯 CSS 动画而不是逐帧改窗口几何：窗口位移与 WebView 内容重绘无法跨进程
+ * 同帧提交，逐帧移动窗口会让贴着窗口边缘的灰条看起来跟着抖。面板与灰条是两个窗口，
+ * 因此面板怎么动都不会牵连灰条。
+ */
+@keyframes quick-panel-enter {
+  from {
+    opacity: 0.55;
+    clip-path: var(--qp-clip, inset(0 0 100% 0));
+  }
+  to {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+@keyframes quick-panel-exit {
+  from {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+  }
+  to {
+    opacity: 0;
+    clip-path: var(--qp-clip, inset(0 0 100% 0));
+  }
+}
+
+/* 收起态保持不可见（窗口真正隐藏前不留残影），且保留动画结束事件用于隐藏窗口。 */
+.quick-panel-body[data-state="open"] {
+  animation: quick-panel-enter 320ms cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+.quick-panel-body[data-state="closed"] {
+  animation: quick-panel-exit 220ms cubic-bezier(0.65, 0, 0.35, 1) forwards;
+}

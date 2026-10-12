@@ -1,10 +1,11 @@
-import { House, Settings } from "lucide-react";
+import { Activity, House, Settings } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useAppStore, type AppView } from "@/stores/app-store";
 
 const items: { id: AppView; label: string; icon: typeof House }[] = [
   { id: "home", label: "首页", icon: House },
+  { id: "monitor", label: "监控", icon: Activity },
   { id: "settings", label: "设置", icon: Settings },
 ];
 
