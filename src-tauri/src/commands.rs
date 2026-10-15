@@ -5,6 +5,7 @@ use tauri::{
 
 use crate::config::{AppConfig, AppState, DockEdge};
 use crate::error::{AppError, AppResult};
+use crate::status::{self, AppStatus, AppStatusState};
 
 /// 快捷小窗**灰条**窗口标签。灰条独占交互与状态。
 const QUICK_PANEL_LABEL: &str = "quick-panel";
@@ -14,6 +15,8 @@ const QUICK_PANEL_BODY_LABEL: &str = "quick-panel-body";
 const QUICK_PANEL_EVENT: &str = "quick-panel:state";
 /// 通知面板窗口播放展开/收起动画的事件名。
 const QUICK_PANEL_BODY_EVENT: &str = "quick-panel:body-state";
+/// 广播应用运行状态变化的事件名（灰条据此换色相与动画）。广播给所有窗口：状态是应用级的。
+const APP_STATUS_EVENT: &str = "app:status";
 
 /// 面板状态事件载荷。
 #[derive(Clone, Serialize)]
@@ -38,6 +41,10 @@ fn quick_panel_body(app: &AppHandle) -> AppResult<tauri::WebviewWindow> {
         .ok_or_else(|| AppError::Other("快捷小窗面板窗口不存在".into()))
 }
 
+/// 灰条窗口尺寸（与前端 `LINE_WIDTH` / `LINE_HEIGHT` 保持一致；前端会在 show 前后再落实一次）。
+const QUICK_PANEL_BAR_WIDTH: f64 = 8.0;
+const QUICK_PANEL_BAR_HEIGHT: f64 = 64.0;
+
 /// 按需创建灰条窗口 `quick-panel`（透明、置顶、不占任务栏、不可聚焦，仅拖动/换边时改几何）。
 fn build_bar_window(app: &AppHandle) -> AppResult<()> {
     WebviewWindowBuilder::new(
@@ -46,7 +53,7 @@ fn build_bar_window(app: &AppHandle) -> AppResult<()> {
         WebviewUrl::App("quick-panel.html".into()),
     )
     .title("Prism3 快捷小窗")
-    .inner_size(6.0, 64.0)
+    .inner_size(QUICK_PANEL_BAR_WIDTH, QUICK_PANEL_BAR_HEIGHT)
     .resizable(false)
     .decorations(false)
     .transparent(true)
@@ -339,4 +346,53 @@ pub fn get_system_statics(
     state: State<'_, crate::monitor::MonitorState>,
 ) -> crate::monitor::SystemStatics {
     state.statics()
+}
+
+/// 读取当前运行状态（窗口挂载 / 热重载后兜底拉取：事件不缓存）。
+#[tauri::command]
+pub fn get_app_status(state: State<'_, AppStatusState>) -> AppStatus {
+    state.current()
+}
+
+/// 采样一次系统负载并更新运行状态，**仅在档位变化时**广播。
+///
+/// 由灰条窗口按固定间隔驱动，且只在灯可见时调用，因此不新增常驻采样——
+/// 沿用 `MonitorState` 既有的「按需采集」模型。
+#[tauri::command(async)]
+pub fn refresh_app_status(
+    app: AppHandle,
+    monitor: State<'_, crate::monitor::MonitorState>,
+    status: State<'_, AppStatusState>,
+) -> AppStatus {
+    let peak = status::peak_percent(&monitor.snapshot());
+    let next = status::classify(peak, status.current());
+
+    if status.update(next) {
+        // 广播失败不该让命令失败：灯停在旧档位上仍可正常使用。
+        if let Err(err) = app.emit(APP_STATUS_EVENT, next) {
+            log::warn!("广播运行状态失败：{err}");
+        }
+    }
+    next
+}
+
+fn emit_quick_panel_state(app: &AppHandle, config: &AppConfig) {
+    let _ = app.emit_to(
+        QUICK_PANEL_LABEL,
+        QUICK_PANEL_EVENT,
+        QuickPanelState {
+            enabled: config.quick_panel,
+            edge: config.quick_panel_edge,
+            offset: config.quick_panel_y,
+        },
+    );
+}
+
+fn emit_quick_panel_body_state(app: &AppHandle, open: bool, edge: DockEdge) -> AppResult<()> {
+    app.emit_to(
+        QUICK_PANEL_BODY_LABEL,
+        QUICK_PANEL_BODY_EVENT,
+        QuickPanelBodyState { open, edge },
+    )?;
+    Ok(())
 }

@@ -51,3 +51,97 @@ body,
 .quick-panel-body[data-state="closed"] {
   animation: quick-panel-exit 220ms cubic-bezier(0.65, 0, 0.35, 1) forwards;
 }
+/*
+ * 灰条本体（`quick-panel` 窗口本身就是它）：呼吸 + 状态色相。
+ *
+ * 三条通道各占一个属性，互不抢占：
+ *   色相 = `background-image`（`--qp-tone` / `--qp-tone-soft`，跨短边渐变把两条长边柔化）
+ *   明暗 = `opacity`（呼吸动画）
+ *   悬停 · 拖动 = `filter`
+ *
+ * 两处刻意的设计：
+ * 1. **三档共用同一套呼吸参数**（2.4s、幅度相同），只有色相不同。换档若同时改动画名或时长，
+ *    运行中的动画会重启 / 相位重算，切换瞬间亮度会跳一下。
+ * 2. 色相走 `@property` 注册过的自定义属性 + `transition`，因此换档是「颜色慢慢化过去」
+ *    而不是硬切——`background-image` 的渐变本身不可过渡，必须借注册属性插值
+ *    （未注册的自定义属性是未解析 token，同样不能过渡）。
+ */
+@property --qp-tone {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: #a3a3a3;
+}
+
+@property --qp-tone-soft {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: rgb(163 163 163 / 0.5);
+}
+
+.quick-panel-bar {
+  --qp-tone: #a3a3a3;
+  --qp-tone-soft: rgb(163 163 163 / 0.5);
+  animation: qp-breath 2.4s ease-in-out infinite;
+  transition:
+    --qp-tone 500ms ease,
+    --qp-tone-soft 500ms ease,
+    filter 220ms ease;
+  background-image: linear-gradient(
+    to right,
+    var(--qp-tone-soft),
+    var(--qp-tone),
+    var(--qp-tone-soft)
+  );
+}
+
+/* 上边缘吸附时窗口横放（64×8），长边变成上下两条，渐变随之转 90°。 */
+.quick-panel-bar[data-edge="top"] {
+  background-image: linear-gradient(
+    to bottom,
+    var(--qp-tone-soft),
+    var(--qp-tone),
+    var(--qp-tone-soft)
+  );
+}
+
+@keyframes qp-breath {
+  0%,
+  100% {
+    opacity: 0.42;
+  }
+  50% {
+    opacity: 0.92;
+  }
+}
+
+/* 常态（CPU 与内存都 ≤ 50）：中性灰。 */
+.quick-panel-bar[data-status="normal"] {
+  --qp-tone: #a3a3a3;
+  --qp-tone-soft: rgb(163 163 163 / 0.5);
+}
+
+/* 偏忙（任一方 > 50）：暖黄。 */
+.quick-panel-bar[data-status="busy"] {
+  --qp-tone: #e8bd6a;
+  --qp-tone-soft: rgb(232 189 106 / 0.5);
+}
+
+/* 吃紧（任一方 ≥ 70）：暖红。与偏忙同样是呼吸，只是颜色更靠红——不闪。 */
+.quick-panel-bar[data-status="warn"] {
+  --qp-tone: #e2795f;
+  --qp-tone-soft: rgb(226 121 95 / 0.5);
+}
+
+/* 悬停 / 拖动：提亮。刻意不停表——停表会把透明度瞬间拉到某一定值，看起来是「跳」一下。 */
+.quick-panel-bar[data-status]:hover,
+.quick-panel-bar[data-dragging="true"] {
+  filter: brightness(1.2);
+}
+
+/* 减少动态：停止呼吸、停在亮端；颜色仍表达状态。 */
+@media (prefers-reduced-motion: reduce) {
+  .quick-panel-bar {
+    animation: none;
+    opacity: 0.85;
+  }
+}

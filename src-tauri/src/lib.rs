@@ -2,6 +2,7 @@ mod commands;
 mod config;
 mod error;
 mod monitor;
+mod status;
 mod tray;
 
 use std::sync::RwLock;
@@ -63,6 +64,9 @@ pub fn run() {
             // 系统监控状态：前端在监控页按需轮询时才会真正采集。
             app.manage(monitor::MonitorState::new());
 
+            // 应用运行状态：由灰条窗口按固定间隔采样系统负载驱动（见 status.rs）。
+            app.manage(status::AppStatusState::new());
+
             tray::init(app)?;
 
             // 窗口以 visible: false 启动，避免白屏闪烁。
@@ -111,7 +115,9 @@ pub fn run() {
             commands::close_quick_panel_body,
             commands::hide_quick_panel_body,
             commands::get_system_snapshot,
-            commands::get_system_statics
+            commands::get_system_statics,
+            commands::get_app_status,
+            commands::refresh_app_status
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

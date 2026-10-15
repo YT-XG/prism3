@@ -5,6 +5,9 @@ export type Theme = "system" | "light" | "dark";
 /** 快捷小窗可吸附的屏幕边缘（不含底部）。 */
 export type DockEdge = "left" | "right" | "top";
 
+/** 应用运行状态（与 Rust 侧 `AppStatus` 一一对应）：灰条据此决定色相与动画。 */
+export type AppStatus = "normal" | "busy" | "warn";
+
 /** 与 Rust 侧 `AppConfig` 一一对应。 */
 export interface AppConfig {
   theme: Theme;
@@ -38,6 +41,10 @@ export const ipc = {
   closeQuickPanelBody: (edge: DockEdge) => invoke<void>("close_quick_panel_body", { edge }),
   /** 直接隐藏面板窗口（动画结束回调与兜底路径）。 */
   hideQuickPanelBody: () => invoke<void>("hide_quick_panel_body"),
+  /** 读取当前运行状态（窗口挂载后兜底拉取；档位变化由 `app:status` 事件广播）。 */
+  getAppStatus: () => invoke<AppStatus>("get_app_status"),
+  /** 采样一次系统负载并返回（可能已更新的）运行状态；由灰条窗口按可见性驱动。 */
+  refreshAppStatus: () => invoke<AppStatus>("refresh_app_status"),
   /** 每次轮询变化的动态量（CPU/内存/网络/磁盘）。 */
   getSystemSnapshot: () => invoke<DynamicSnapshot>("get_system_snapshot"),
   /** 不随时间变化的静态信息（硬件型号/OS/主机名），进程启动时采集一次。 */

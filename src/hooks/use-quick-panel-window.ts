@@ -6,8 +6,8 @@ import { error as logError } from "@tauri-apps/plugin-log";
 
 import { ipc, type DockEdge } from "@/lib/ipc";
 
-/** 灰条尺寸；灰条窗口的尺寸即该值（吸附 top 时宽高互换）。 */
-export const LINE_WIDTH = 6;
+/** 灰条尺寸；灰条窗口的尺寸即该值（吸附 top 时宽高互换）。与 Rust `QUICK_PANEL_BAR_*` 保持一致。 */
+export const LINE_WIDTH = 8;
 export const LINE_HEIGHT = 64;
 /** 面板常规宽度（概览 / 关于页）。 */
 export const PANEL_WIDTH = 360;
