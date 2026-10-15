@@ -28,13 +28,10 @@ export const ipc = {
   /** 一次性设置**灰条窗口**的几何（拖动每帧调用，合并两次 IPC）；展开/收起不改变灰条几何。 */
   setQuickPanelGeometry: (x: number, y: number, width: number, height: number) =>
     invoke<void>("set_quick_panel_geometry", { x, y, width, height }),
-  /** 仅移动**面板窗口**（拖动灰条时逐帧跟随）。 */
+  /** 仅移动**面板窗口**（拖动灰条时逐帧跟随）；窗口尺寸恒定，任何路径都不缩放。 */
   setQuickPanelBodyPosition: (x: number, y: number) =>
     invoke<void>("set_quick_panel_body_position", { x, y }),
-  /** 重定位并缩放**面板窗口**（宽度随页面变化，帮助页加宽；高度不变）。 */
-  setQuickPanelBodyGeometry: (x: number, y: number, width: number, height: number) =>
-    invoke<void>("set_quick_panel_body_geometry", { x, y, width, height }),
-  /** 展开面板：按当前页宽度定位 + 缩放 → 显示 → 面板窗口播放展开动画。 */
+  /** 展开面板：定位（只移动）→ 显示 → 面板窗口播放展开动画；宽高恒为固定常量。 */
   openQuickPanelBody: (x: number, y: number, width: number, height: number, edge: DockEdge) =>
     invoke<void>("open_quick_panel_body", { x, y, width, height, edge }),
   /** 收起面板：面板窗口播放收起动画（结束后自行隐藏）。 */

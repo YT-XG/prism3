@@ -107,7 +107,6 @@ pub fn run() {
             commands::set_quick_panel_dock,
             commands::set_quick_panel_geometry,
             commands::set_quick_panel_body_position,
-            commands::set_quick_panel_body_geometry,
             commands::open_quick_panel_body,
             commands::close_quick_panel_body,
             commands::hide_quick_panel_body,

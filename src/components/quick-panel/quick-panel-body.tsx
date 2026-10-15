@@ -3,7 +3,11 @@ import { useCallback, useMemo, type CSSProperties } from "react";
 import type { PanelPage } from "@/components/quick-panel/panel-pager";
 import { PanelPager } from "@/components/quick-panel/panel-pager";
 import { useQuickPanelBody, CLIP_BY_EDGE } from "@/hooks/use-quick-panel-body";
-import { PANEL_WIDTH, PANEL_WIDTH_WIDE } from "@/hooks/use-quick-panel-window";
+import {
+  PANEL_WIDTH,
+  PANEL_WIDTH_TRANSITION,
+  PANEL_WIDTH_WIDE,
+} from "@/hooks/use-quick-panel-window";
 import { useSystemMonitor } from "@/hooks/use-system-monitor";
 import { formatBytes, formatPercent, formatRate, formatUptime } from "@/lib/format";
 import type { SystemSnapshot } from "@/lib/ipc";
@@ -16,10 +20,17 @@ const APP_VERSION = "0.1.0";
 /**
  * 快捷小窗面板本体：跑在独立窗口 `quick-panel-body` 中，高度恒为 `PANEL_HEIGHT`。
  *
- * 展开/收起只做 CSS 动画（从灰条一侧擦拭展开 + 淡入，收起反向），**完全不动窗口**，
- * 所以灰条窗口不会因为面板动画而位移。页面切换到帮助页时面板内容宽度过渡加宽
- * （窗口宽度由灰条窗口按上报宽度同步缩放），切回其它页恢复原宽。内容在收起状态下
- * 保持「不可见」而非卸载，因此系统监控用 `phase` 显式停表，避免收起后继续轮询。
+ * **窗口尺寸恒为最大页宽（`PANEL_WINDOW_WIDTH × PANEL_HEIGHT`），可见期间从不
+ * 缩放**：WebView 内容跟不上窗口缩放，缩放瞬间旧帧会贴新视口左上角被画出一两
+ * 帧（面板整体平移 / 瘦成一条再弹回，见 docs/quick-panel-flash-postmortem.md）。
+ * 换页调宽调窄只做面板盒子自身的宽度过渡（贴灰条一侧），窗口几何完全不动；
+ * 各页内容按各自宽度定宽，过渡期间文字不重排。窄页时窗口比盒子宽出的部分是
+ * 透明死区（贴远侧）：不参与悬停（悬停挂在盒子上），但面板展开期间会拦截
+ * 该区域的点击。
+ *
+ * 展开/收起只做 CSS 动画（从灰条一侧擦拭展开 + 淡入，收起反向），同样不动窗口。
+ * 内容在收起状态下保持「不可见」而非卸载，因此系统监控用 `phase` 显式停表，
+ * 避免收起后继续轮询。
  */
 export function QuickPanelBody() {
   const { phase, edge, contentWidth, requestWidth, rootProps, bodyProps } = useQuickPanelBody();
@@ -51,33 +62,38 @@ export function QuickPanelBody() {
     [requestWidth],
   );
 
-  // 面板始终贴住灰条一侧：外层滑动遮罩只以宽度过渡揭开面板，内容已按目标宽度布局，
-  // 因此加宽/收窄时文字不会随宽度逐帧重排（避免切换瞬间的文字闪动）。
+  // 面板盒子自身以宽度过渡加宽 / 收窄，始终贴住灰条一侧：远侧边缘移出或收回，
+  // 内容按各页自己的宽度定宽（见 `PanelPager`），因此过渡期间没有任何文字重排。
+  // 窗口尺寸恒定不动（见组件注释），宽度变化纯属盒子的 CSS 过渡。
   const isLeft = edge === "left";
-  const anchorSide = isLeft ? "left-0" : "right-0";
-  const anchorJustify = isLeft ? "justify-start" : "justify-end";
 
   return (
-    <div className="relative h-full w-full" {...rootProps}>
+    <div className="relative h-full w-full">
       <div
-        style={{ width: contentWidth }}
+        {...rootProps}
+        {...bodyProps}
+        style={
+          {
+            "--qp-clip": CLIP_BY_EDGE[edge],
+            width: contentWidth,
+            transitionDuration: `${PANEL_WIDTH_TRANSITION}ms`,
+          } as CSSProperties
+        }
         className={cn(
-          "absolute inset-y-0 flex overflow-hidden transition-[width] duration-200 ease-out",
-          anchorSide,
-          anchorJustify,
+          "quick-panel-body absolute inset-y-0 flex flex-col overflow-hidden rounded-xl border border-border bg-background text-foreground transition-[width] ease-out",
+          isLeft ? "left-0" : "right-0",
         )}
       >
-        <div
-          {...bodyProps}
-          style={{ "--qp-clip": CLIP_BY_EDGE[edge], width: contentWidth } as CSSProperties}
-          className="quick-panel-body flex h-full shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-background text-foreground"
-        >
-          <div className="flex h-9 shrink-0 items-center border-b border-border/60 px-3">
-            <span className="text-xs font-medium text-muted-foreground">快捷小窗</span>
-          </div>
-
-          <PanelPager pages={pages} onActiveChange={handleActiveChange} />
+        <div className="flex h-9 shrink-0 items-center border-b border-border/60 px-3">
+          <span className="text-xs font-medium text-muted-foreground">快捷小窗</span>
         </div>
+
+        <PanelPager
+          pages={pages}
+          defaultPanelWidth={PANEL_WIDTH}
+          anchor={isLeft ? "start" : "end"}
+          onActiveChange={handleActiveChange}
+        />
       </div>
     </div>
   );

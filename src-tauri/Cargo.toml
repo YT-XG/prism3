@@ -31,9 +31,15 @@ sysinfo = { version = "0.39", default-features = false, features = ["system", "d
 thiserror = "2"
 log = "0.4"
 
-# Windows 专用：DXGI 枚举显卡（型号 + 专用显存），WMI 查询主板/整机/内存条。
+# Windows 专用：DXGI 枚举显卡（型号 + 专用显存），WMI 查询主板/整机/内存条；
+# WindowsAndMessaging 用于把窗口位置与尺寸合并成一次 SetWindowPos（见 commands.rs）。
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"] }
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_UI_WindowsAndMessaging",
+] }
 wmi = "0.17"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

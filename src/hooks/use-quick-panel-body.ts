@@ -9,7 +9,7 @@ import {
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { error as logError } from "@tauri-apps/plugin-log";
 
-import { PANEL_WIDTH, PANEL_WIDTH_TRANSITION } from "@/hooks/use-quick-panel-window";
+import { PANEL_WIDTH } from "@/hooks/use-quick-panel-window";
 import { ipc, type DockEdge } from "@/lib/ipc";
 
 /** 灰条窗口标签，与 `tauri.conf.json` 一致。 */
@@ -18,10 +18,6 @@ const BAR_LABEL = "quick-panel";
 const BODY_HOVER_EVENT = "quick-panel:body-hover";
 /** 面板窗口就绪（挂载 / 热重载后）事件名：让灰条按真实状态重推一次。 */
 const BODY_READY_EVENT = "quick-panel:body-ready";
-/** 面板窗口向灰条窗口上报期望宽度（随页面变化）的事件名，与 `use-quick-panel-window.ts` 一致。 */
-const BODY_WIDTH_EVENT = "quick-panel:body-width";
-/** 收窄时窗口延后于内容过渡再缩的缓冲（毫秒），避免内容被提前裁掉。 */
-const SHRINK_WINDOW_BUFFER = 60;
 /** 灰条窗口（Rust 命令）驱动面板展开/收起的事件名。 */
 const BODY_STATE_EVENT = "quick-panel:body-state";
 /** 收起动画名：播完即隐藏窗口。 */
@@ -46,8 +42,13 @@ export const CLIP_BY_EDGE: Record<DockEdge, string> = {
 
 /**
  * 面板窗口（`quick-panel-body`）的交互状态：只负责播放展开/收起动画、向灰条窗口
- * 上报悬停、收起动画结束后隐藏自己。何时展开/收起完全由灰条窗口决定，
- * 因此面板窗口永不移动窗口几何，也就不会牵连灰条。
+ * 上报悬停、收起动画结束后隐藏自己，以及按当前页驱动面板盒子的宽度过渡。
+ * 何时展开/收起完全由灰条窗口决定。
+ *
+ * 面板窗口的**窗口尺寸恒为最大页宽**（见 `use-quick-panel-window.ts` 的
+ * `PANEL_WINDOW_WIDTH`），换页调宽调窄都只改 CSS 宽度、完全不碰窗口几何——
+ * WebView 内容跟不上窗口缩放（缩放瞬间会以旧帧贴新视口左上角绘制一两帧），
+ * 可见期间缩放窗口必然闪动，故从结构上杜绝。
  *
  * 该 hook 只在面板窗口内使用。
  */
@@ -58,49 +59,6 @@ export function useQuickPanelBody() {
   const [contentWidth, setContentWidth] = useState(PANEL_WIDTH);
 
   const hideTimerRef = useRef<number | null>(null);
-  const contentWidthRef = useRef<number>(PANEL_WIDTH);
-  const widthTimerRef = useRef<number | null>(null);
-
-  const cancelWidthTimer = useCallback(() => {
-    if (widthTimerRef.current !== null) {
-      window.clearTimeout(widthTimerRef.current);
-      widthTimerRef.current = null;
-    }
-  }, []);
-
-  /** 向灰条窗口上报面板窗口应有的宽度（由其重定位缩放窗口）。 */
-  const emitWidth = useCallback((width: number) => {
-    void emitTo(BAR_LABEL, BODY_WIDTH_EVENT, width).catch((cause) =>
-      logError(`上报面板宽度失败：${String(cause)}`),
-    );
-  }, []);
-
-  /**
-   * 请求切换到目标宽度：内容立即开始 CSS 过渡；窗口宽度则分方向处理——
-   * 加宽时先让窗口变大（避免内容溢出被裁），收窄时等内容过渡结束再缩窗口。
-   */
-  const requestWidth = useCallback(
-    (width: number) => {
-      if (width === contentWidthRef.current) return;
-      const expanding = width > contentWidthRef.current;
-      contentWidthRef.current = width;
-
-      cancelWidthTimer();
-      if (expanding) {
-        // 先把窗口放大（内容已按目标宽度布局，窗口须足够大才不被裁），再落定内容。
-        emitWidth(width);
-        setContentWidth(width);
-      } else {
-        // 内容先过渡收窄，窗口等过渡结束再缩；否则内容会被提前裁掉。
-        setContentWidth(width);
-        widthTimerRef.current = window.setTimeout(() => {
-          widthTimerRef.current = null;
-          emitWidth(width);
-        }, PANEL_WIDTH_TRANSITION + SHRINK_WINDOW_BUFFER);
-      }
-    },
-    [cancelWidthTimer, emitWidth],
-  );
 
   const cancelHide = useCallback(() => {
     if (hideTimerRef.current !== null) {
@@ -140,8 +98,7 @@ export function useQuickPanelBody() {
         if (active) unlisten = off;
         else off();
 
-        // 订阅就绪后上报当前宽度再报就绪：热重载时灰条也能拿到正确宽度重推展开。
-        emitWidth(contentWidthRef.current);
+        // 订阅就绪后上报一次：热重载时灰条也能拿到真实状态重推展开。
         void emitTo(BAR_LABEL, BODY_READY_EVENT).catch((cause) =>
           logError(`上报面板就绪失败：${String(cause)}`),
         );
@@ -154,9 +111,8 @@ export function useQuickPanelBody() {
       active = false;
       unlisten?.();
       cancelHide();
-      cancelWidthTimer();
     };
-  }, [cancelHide, cancelWidthTimer, emitWidth, scheduleHide]);
+  }, [cancelHide, scheduleHide]);
 
   const reportHover = useCallback((hovering: boolean) => {
     void emitTo(BAR_LABEL, BODY_HOVER_EVENT, hovering).catch((cause) =>
@@ -166,6 +122,14 @@ export function useQuickPanelBody() {
 
   const handleMouseEnter = useCallback(() => reportHover(true), [reportHover]);
   const handleMouseLeave = useCallback(() => reportHover(false), [reportHover]);
+
+  /**
+   * 切换面板内容宽度：只改 CSS（面板盒子自身带宽度过渡），不碰窗口几何。
+   * 窗口恒为最大页宽，加宽不会被裁、收窄也不需要等窗口；过渡被打断时 CSS 自动反向。
+   */
+  const requestWidth = useCallback((width: number) => {
+    setContentWidth(width);
+  }, []);
 
   /** 收起动画自然结束才隐藏；中途反向（重新展开）会触发 animationcancel，不会误隐藏。 */
   const handleAnimationEnd = useCallback(
@@ -181,7 +145,7 @@ export function useQuickPanelBody() {
     edge,
     contentWidth,
     requestWidth,
-    /** 挂在窗口根节点：整块面板区域都算「悬停」，避免缝隙里误收起。 */
+    /** 挂在面板盒子（可视卡片）上：透明死区不算悬停，移出卡片即开始收起计时。 */
     rootProps: { onMouseEnter: handleMouseEnter, onMouseLeave: handleMouseLeave },
     bodyProps: {
       "data-state": phase,

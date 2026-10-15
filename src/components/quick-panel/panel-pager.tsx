@@ -17,15 +17,19 @@ export interface PanelPage {
   label: string;
   icon: LucideIcon;
   content: ReactNode;
-  /** 该页期望的面板窗口宽度；缺省即常规宽度。 */
+  /** 该页期望的面板宽度；缺省即 `defaultPanelWidth`。 */
   panelWidth?: number;
 }
 
 interface PanelPagerProps {
   pages: PanelPage[];
+  /** 未声明 `panelWidth` 的页面所用的面板宽度。 */
+  defaultPanelWidth: number;
+  /** 面板贴住灰条的一侧：`end` = 内容靠右（灰条在右 / 上），`start` = 靠左。 */
+  anchor?: "start" | "end";
   /** 记忆当前页 id 的 localStorage 键。 */
   storageKey?: string;
-  /** 当前激活页变化（含首次挂载恢复）时回调，用于按页调整面板窗口宽度。 */
+  /** 当前激活页变化（含首次挂载恢复）时回调，用于按页调整面板宽度。 */
   onActiveChange?: (page: PanelPage) => void;
   className?: string;
 }
@@ -33,13 +37,29 @@ interface PanelPagerProps {
 /** 非当前页相对视口的轻微位移，滑页时形成层次感。 */
 const PARALLAX = 10;
 
+/** 左缘图标栏宽度（px）：图标栏样式与内容宽度换算共用，避免两处各写一份。 */
+const RAIL_WIDTH = 44;
+/** 面板本体左右各 1px 边框（`quick-panel-body.tsx` 的 `border`），换算内容宽度时扣除。 */
+const PANEL_FRAME_WIDTH = 2;
+
+/** 该页面板宽度下的内容宽度：面板宽度减去图标栏与本体边框。 */
+function contentWidthOf(pageWidth: number) {
+  return pageWidth - RAIL_WIDTH - PANEL_FRAME_WIDTH;
+}
+
 /**
  * 通用分页器：左缘图标栏（选中高亮胶囊垂直滑动）+ 纵向滑页内容轨道，
  * 支持点击 / 滚轮与触控板手势切换，底部宫格可一键直达任意页，按 id 记忆停留页。
  * 图标栏在页面增多时自动滚动，当前页始终保持在可视区内。
+ *
+ * 每页内容按**该页自身宽度**定宽布局（而非跟随视口），并靠灰条一侧对齐：
+ * 面板换页时宽度会过渡，定宽内容不会随视口逐帧重排，切换瞬间不会出现文字折行闪动；
+ * 宽度变化只表现为远侧被裁掉 / 揭开，与面板本体的宽度过渡方向一致。
  */
 export function PanelPager({
   pages,
+  defaultPanelWidth,
+  anchor = "start",
   storageKey = "prism3:quick-panel:page",
   onActiveChange,
   className,
@@ -100,7 +120,10 @@ export function PanelPager({
   return (
     <div className={cn("flex min-h-0 flex-1 flex-col", className)}>
       <div className="flex min-h-0 flex-1">
-        <div className="flex w-11 shrink-0 flex-col border-r border-border/60 bg-muted/30">
+        <div
+          className="flex shrink-0 flex-col border-r border-border/60 bg-muted/30"
+          style={{ width: RAIL_WIDTH }}
+        >
           <div
             ref={railRef}
             role="tablist"
@@ -168,7 +191,14 @@ export function PanelPager({
                     sectionRefs.current[i] = node;
                   }}
                   aria-hidden={!active}
-                  className="h-full w-full shrink-0 overflow-y-auto overflow-x-hidden px-3 py-3"
+                  style={{ width: contentWidthOf(page.panelWidth ?? defaultPanelWidth) }}
+                  className={cn(
+                    "h-full shrink-0 overflow-y-auto overflow-x-hidden px-3 py-3",
+                    // 交叉轴对齐（而非 `ml-auto`）：内容比视口宽时 auto 外边距会退化成 0，
+                    // 页宽被视口裁在灰条一侧、内容还会跟着视口左缘横移；`self-end/start`
+                    // 是「不安全对齐」，超宽时溢出到远侧，页内容在屏幕上纹丝不动。
+                    anchor === "end" ? "self-end" : "self-start",
+                  )}
                 >
                   <div
                     className="transition-transform duration-[360ms] ease-[cubic-bezier(0.32,0.72,0,1)] will-change-transform"

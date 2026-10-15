@@ -1,7 +1,6 @@
 use serde::Serialize;
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, WebviewUrl,
-    WebviewWindowBuilder,
+    AppHandle, Emitter, LogicalPosition, Manager, State, WebviewUrl, WebviewWindowBuilder,
 };
 
 use crate::config::{AppConfig, AppState, DockEdge};
@@ -61,7 +60,16 @@ fn build_bar_window(app: &AppHandle) -> AppResult<()> {
     Ok(())
 }
 
-/// 按需创建面板窗口 `quick-panel-body`（初始 360×520，高度恒定；宽度随页面加宽，仅由灰条窗口驱动）。
+/// 面板窗口沿交叉轴的固定尺寸：宽 = 最大页宽（帮助页），高 = 面板高度。
+/// 与前端 `PANEL_WINDOW_WIDTH` / `PANEL_HEIGHT` 常量保持一致。
+///
+/// **窗口尺寸恒定、可见期间从不缩放**：WebView 内容跟不上窗口缩放，缩放瞬间
+/// 旧帧会贴着新视口左上角被画出一两帧（面板整体平移 / 瘦成一条再弹回）。
+/// 换页调宽只改面板盒子自身的 CSS 宽度，窗口几何不动（见 docs/quick-panel-flash-postmortem.md）。
+const QUICK_PANEL_BODY_WIDTH: f64 = 520.0;
+const QUICK_PANEL_BODY_HEIGHT: f64 = 520.0;
+
+/// 按需创建面板窗口 `quick-panel-body`（恒为最大页宽 × 面板高度，可见期间不缩放）。
 fn build_body_window(app: &AppHandle) -> AppResult<()> {
     WebviewWindowBuilder::new(
         app,
@@ -69,7 +77,7 @@ fn build_body_window(app: &AppHandle) -> AppResult<()> {
         WebviewUrl::App("quick-panel.html".into()),
     )
     .title("Prism3 快捷小窗面板")
-    .inner_size(360.0, 520.0)
+    .inner_size(QUICK_PANEL_BODY_WIDTH, QUICK_PANEL_BODY_HEIGHT)
     .resizable(false)
     .decorations(false)
     .transparent(true)
@@ -195,6 +203,62 @@ pub fn set_quick_panel_dock(
     crate::config::save(&app, &config)
 }
 
+/// 一次性落实窗口的位置与尺寸：**单次 `SetWindowPos`**，位置与尺寸同帧生效。
+///
+/// 不能用 Tauri 的 `set_position` + `set_size`：那是两次 Win32 调用，两次之间窗口
+/// 处于「新位置 + 旧尺寸」的中间态。面板内容贴灰条一侧锚定，中间态会让整块内容
+/// 平移一个宽度差（帮助页 ↔ 其它页相差 160 逻辑像素；右侧吸附时表现为面板被推到
+/// 屏幕外、露出一两帧错位），灰条换边时同样可能瞬时越出工作区。
+#[cfg(windows)]
+fn apply_window_bounds(
+    window: &tauri::WebviewWindow,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> AppResult<()> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER,
+    };
+
+    // 逻辑像素 → 物理像素：与 Tauri 的 LogicalPosition / LogicalSize 同一换算。
+    let scale = window.scale_factor()?;
+    let (px, py) = ((x * scale).round() as i32, (y * scale).round() as i32);
+    let (pw, ph) = (
+        (width * scale).round() as i32,
+        (height * scale).round() as i32,
+    );
+
+    // SAFETY: hwnd 属于本进程持有的窗口；SetWindowPos 在当前线程同步改窗口几何。
+    let outcome = unsafe {
+        SetWindowPos(
+            HWND(window.hwnd()?.0),
+            None,
+            px,
+            py,
+            pw,
+            ph,
+            SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
+        )
+    };
+    outcome.map_err(|cause| AppError::Other(format!("设置窗口几何失败：{cause}")))
+}
+
+/// 非 Windows 退化为「先位置后尺寸」两次调用（本项目只发布 Windows，仅为可编译性保留）。
+#[cfg(not(windows))]
+fn apply_window_bounds(
+    window: &tauri::WebviewWindow,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> AppResult<()> {
+    window.set_position(LogicalPosition::new(x, y))?;
+    window.set_size(tauri::LogicalSize::new(width, height))?;
+    Ok(())
+}
+
 /// 一次调用同时设置**灰条窗口**的尺寸与位置（拖动每帧调用，合并两次 IPC 为一次）。
 ///
 /// 展开/收起面板时不会调用它：灰条窗口的几何只在拖动与换边时变化，
@@ -211,45 +275,23 @@ pub fn set_quick_panel_geometry(
         .get_webview_window(QUICK_PANEL_LABEL)
         .ok_or_else(|| AppError::Other("快捷小窗窗口不存在".into()))?;
 
-    // 先位置后尺寸：set_size 会固定左上角向右下扩展，若先改尺寸，
-    // 吸附右边缘时窗口会瞬时越过工作区右界（多显示器下溢到右侧副屏，
-    // 触发 DPI/缩放切换而抖动）。先定位则中间态只会在工作区内留出
-    // 至多一帧的缝隙，不会跨到相邻显示器。
-    window.set_position(LogicalPosition::new(x, y))?;
-    window.set_size(LogicalSize::new(width, height))?;
-    Ok(())
+    // 位置与尺寸一次落定：分两次改会让窗口瞬时越出工作区（多显示器下溢到相邻副屏）。
+    apply_window_bounds(&window, x, y, width, height)
 }
 
-/// 仅移动**面板窗口**：拖动灰条时逐帧跟随，尺寸恒定（`PANEL_WIDTH × PANEL_HEIGHT`）故不设尺寸。
+/// 仅移动**面板窗口**：拖动灰条时逐帧跟随；面板窗口尺寸恒定（最大页宽 × 面板高度），
+/// 任何路径都不再缩放它（可见期间缩放会残留旧帧闪动，见 `build_body_window` 注释）。
 #[tauri::command]
 pub fn set_quick_panel_body_position(app: AppHandle, x: f64, y: f64) -> AppResult<()> {
     quick_panel_body(&app)?.set_position(LogicalPosition::new(x, y))?;
     Ok(())
 }
 
-/// 一次调用重定位并缩放**面板窗口**：宽度随页面变化（帮助页加宽），高度不变。
+/// 展开面板：定位（只移动，尺寸恒定）→ 显示 → 通知面板窗口播放展开动画。
 ///
-/// 与 `set_quick_panel_body_position` 的区别是这里同时改尺寸；面板窗口为
-/// `resizable(false)`，但程序化 `set_size` 仍生效（灰条窗口换边时已依赖同一行为）。
-#[tauri::command]
-pub fn set_quick_panel_body_geometry(
-    app: AppHandle,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-) -> AppResult<()> {
-    let window = quick_panel_body(&app)?;
-    // 先定位后改尺寸：set_size 固定左上角向右下扩展，先定位可保证锚定边（右/上）不越过工作区。
-    window.set_position(LogicalPosition::new(x, y))?;
-    window.set_size(LogicalSize::new(width, height))?;
-    Ok(())
-}
-
-/// 展开面板：按当前页宽度定位 + 缩放 → 显示 → 通知面板窗口播放展开动画。
-///
-/// 面板窗口在收起（隐藏）期间不再同步尺寸，故这里必须一并落实宽度，
-/// 否则按帮助页（加宽）重新展开时会沿用上次的旧尺寸。
+/// `width`/`height` 恒为 `QUICK_PANEL_BODY_WIDTH/HEIGHT`（前端传同一常量），
+/// 这里仍一并落实：对已存在窗口是无操作缩放（不触发内容重排），但可自愈
+/// 尺寸漂移。真正的宽度变化由面板盒子自身的 CSS 过渡承担，窗口不缩放。
 #[tauri::command]
 pub fn open_quick_panel_body(
     app: AppHandle,
@@ -260,12 +302,10 @@ pub fn open_quick_panel_body(
     edge: DockEdge,
 ) -> AppResult<()> {
     let window = quick_panel_body(&app)?;
-    // 隐藏窗口上的 set_size 可能不生效，show 前后各落实一次，避免旧尺寸残留。
-    window.set_position(LogicalPosition::new(x, y))?;
-    window.set_size(LogicalSize::new(width, height))?;
+    // show 前后各落实一次定位，避免隐藏期间窗口被移动后残留旧位置。
+    apply_window_bounds(&window, x, y, width, height)?;
     window.show()?;
-    window.set_position(LogicalPosition::new(x, y))?;
-    window.set_size(LogicalSize::new(width, height))?;
+    apply_window_bounds(&window, x, y, width, height)?;
     emit_quick_panel_body_state(&app, true, edge)?;
     Ok(())
 }
@@ -299,25 +339,4 @@ pub fn get_system_statics(
     state: State<'_, crate::monitor::MonitorState>,
 ) -> crate::monitor::SystemStatics {
     state.statics()
-}
-
-fn emit_quick_panel_state(app: &AppHandle, config: &AppConfig) {
-    let _ = app.emit_to(
-        QUICK_PANEL_LABEL,
-        QUICK_PANEL_EVENT,
-        QuickPanelState {
-            enabled: config.quick_panel,
-            edge: config.quick_panel_edge,
-            offset: config.quick_panel_y,
-        },
-    );
-}
-
-fn emit_quick_panel_body_state(app: &AppHandle, open: bool, edge: DockEdge) -> AppResult<()> {
-    app.emit_to(
-        QUICK_PANEL_BODY_LABEL,
-        QUICK_PANEL_BODY_EVENT,
-        QuickPanelBodyState { open, edge },
-    )?;
-    Ok(())
 }

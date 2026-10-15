@@ -13,7 +13,15 @@ export const LINE_HEIGHT = 64;
 export const PANEL_WIDTH = 360;
 /** 面板加宽宽度（帮助页）：只改宽度，高度不变。 */
 export const PANEL_WIDTH_WIDE = 520;
-/** 面板宽度过渡时长（毫秒）；面板窗口与内容动画共用，收窄时窗口延后该时长再缩。 */
+/**
+ * 面板**窗口**的固定宽度：恒为最大页宽，可见期间从不缩放。
+ * WebView 内容跟不上窗口缩放——缩放瞬间旧帧会贴着新视口左上角被画出一两帧
+ * （表现为面板整体平移 / 瘦成一条再弹回，见 docs/quick-panel-flash-postmortem.md），
+ * 因此换页调宽调窄只改面板盒子的 CSS 宽度，窗口几何不动。
+ * **约束**：新增页面时 `panelWidth` 不得超过该值，否则内容会被窗口裁掉。
+ */
+export const PANEL_WINDOW_WIDTH = PANEL_WIDTH_WIDE;
+/** 面板宽度过渡时长（毫秒）：面板盒子 CSS 过渡用（窗口不参与，纯视觉）。 */
 export const PANEL_WIDTH_TRANSITION = 200;
 /** 面板高度；面板窗口高度恒为该值。 */
 export const PANEL_HEIGHT = 520;
@@ -33,8 +41,6 @@ const SNAP_RADIUS = 72;
 const BODY_HOVER_EVENT = "quick-panel:body-hover";
 /** 面板窗口就绪（挂载 / 热重载后）事件名，与 `use-quick-panel-body.ts` 一致。 */
 const BODY_READY_EVENT = "quick-panel:body-ready";
-/** 面板窗口上报期望宽度（随页面变化）的事件名，与 `use-quick-panel-body.ts` 一致。 */
-const BODY_WIDTH_EVENT = "quick-panel:body-width";
 
 const win = getCurrentWindow();
 
@@ -127,12 +133,12 @@ function barPosition(bounds: MonitorBounds, edge: DockEdge, offset: number | nul
 }
 
 /**
- * 面板沿边起点：以灰条为锚点居中展开，贴到工作区边界时夹取。
- * 保证灰条始终落在面板范围内（`panelStart <= barPos <= panelStart + panelLen - LINE_HEIGHT`）。
- * 宽度变化时（帮助页加宽）沿边长度随之变化，起点重算以保持灰条锚定侧不变。
+ * 面板窗口沿边起点：以灰条为锚点、按**窗口沿边长度**（恒定，top 吸附时为
+ * `PANEL_WINDOW_WIDTH`，否则 `PANEL_HEIGHT`）夹取到工作区内。窗口尺寸不随
+ * 页面变化，故该值也与当前页无关；面板盒子在窗口内贴灰条一侧对齐。
  */
-function panelStart(bounds: MonitorBounds, edge: DockEdge, barPos: number, width: number) {
-  const panelLen = edge === "top" ? width : PANEL_HEIGHT;
+function panelStart(bounds: MonitorBounds, edge: DockEdge, barPos: number) {
+  const panelLen = edge === "top" ? PANEL_WINDOW_WIDTH : PANEL_HEIGHT;
   const { min, max } = alongAxis(bounds, edge, panelLen);
   return clamp(barPos + LINE_HEIGHT - panelLen, min, max);
 }
@@ -151,28 +157,27 @@ function barGeometry(bounds: MonitorBounds, edge: DockEdge, barPos: number): Geo
 }
 
 /**
- * 面板几何：面板窗口**只装面板本体**（灰条由独立窗口承担），高度恒为 `PANEL_HEIGHT`，
- * 宽度随页面变化（帮助页加宽）；位置按灰条锚定侧重算，与灰条隔 `BAR_GAP`。
+ * 面板窗口几何：**尺寸恒为 `PANEL_WINDOW_WIDTH × PANEL_HEIGHT`**（最大页宽，
+ * 换页不再缩放窗口），位置按灰条锚定侧重算，与灰条隔 `BAR_GAP`。
+ * 窄页时窗口比面板盒子宽出的部分是透明死区（贴远侧），不参与悬停。
  */
-function panelGeometry(
-  bounds: MonitorBounds,
-  edge: DockEdge,
-  barPos: number,
-  width: number,
-): Geometry {
-  const start = panelStart(bounds, edge, barPos, width);
+function panelGeometry(bounds: MonitorBounds, edge: DockEdge, barPos: number): Geometry {
+  const start = panelStart(bounds, edge, barPos);
   if (edge === "top") {
     return {
       x: Math.round(start),
       y: bounds.top + BAR_STRIP,
-      width,
+      width: PANEL_WINDOW_WIDTH,
       height: PANEL_HEIGHT,
     };
   }
   return {
-    x: edge === "left" ? bounds.left + BAR_STRIP : bounds.right - BAR_STRIP - width,
+    x:
+      edge === "left"
+        ? bounds.left + BAR_STRIP
+        : bounds.right - BAR_STRIP - PANEL_WINDOW_WIDTH,
     y: Math.round(start),
-    width,
+    width: PANEL_WINDOW_WIDTH,
     height: PANEL_HEIGHT,
   };
 }
@@ -203,9 +208,10 @@ function nearestDockEdge(
 /**
  * 灰条窗口（`quick-panel`）的几何与交互，并驱动面板窗口（`quick-panel-body`）。
  *
- * 关键不变式：**灰条窗口的几何只在拖动灰条与开关/换边时变化**。
- * 展开/收起面板完全不碰灰条窗口（面板是另一个窗口，用 CSS 动画展开），
- * 所以「灰条只在被拖动时移动」是结构保证，不依赖逐帧对齐窗口位移与 CSS 补偿。
+ * 关键不变式：**灰条窗口的几何只在拖动灰条与开关/换边时变化；面板窗口的
+ * 尺寸永远不变（位置只在展开与拖动时变）**。展开/收起与换页调宽全部只做
+ * 面板盒子自身的 CSS 动画，任何窗口都不缩放——WebView 内容跟不上窗口缩放，
+ * 可见期间缩放必然闪帧（见 docs/quick-panel-flash-postmortem.md）。
  *
  * 该 hook 只在灰条窗口内使用；窗口自身尺寸即灰条尺寸，故无需在窗口内做偏移补偿。
  */
@@ -223,14 +229,12 @@ export function useQuickPanelWindow() {
   const dragStateRef = useRef<DragState | null>(null);
   /** 面板是否已请求展开。 */
   const openRef = useRef(false);
-  /** 灰条 / 面板窗口的悬停状态：两者都不悬停才允许自动收起。 */
+  /** 灰条 / 面板盒子的悬停状态：两者都不悬停才允许自动收起。 */
   const barHoverRef = useRef(false);
   const bodyHoverRef = useRef(false);
   /** 拖动中待刷新的几何（raf 节流）。 */
   const rafRef = useRef<number | null>(null);
   const pendingRef = useRef<{ bar: Geometry; body: Geometry | null } | null>(null);
-  /** 面板窗口当前宽度（由面板窗口按页面上报，帮助页会加宽）。 */
-  const bodyWidthRef = useRef<number>(PANEL_WIDTH);
 
   const getBounds = useCallback(async () => {
     const bounds = await resolveWorkArea();
@@ -261,26 +265,6 @@ export function useQuickPanelWindow() {
     return ipc.setQuickPanelGeometry(geometry.x, geometry.y, geometry.width, geometry.height);
   }, []);
 
-  /**
-   * 按面板窗口上报的宽度重定位并缩放面板窗口（一次 IPC，不逐帧改几何）。
-   * 面板窗口在展开/收窄时自行按同一时长播放内容宽度过渡，收窄会延后上报，
-   * 因此这里始终按目标宽度直接落定即可。
-   */
-  const applyBodyWidth = useCallback(
-    (width: number) => {
-      bodyWidthRef.current = width;
-      if (!openRef.current) return;
-      const bounds = boundsRef.current;
-      if (!bounds) return;
-      const geometry = panelGeometry(bounds, edgeRef.current, currentBarPos(bounds), width);
-      reportFailure(
-        "调整快捷小窗面板宽度",
-        ipc.setQuickPanelBodyGeometry(geometry.x, geometry.y, geometry.width, geometry.height),
-      );
-    },
-    [currentBarPos],
-  );
-
   /** 贴到当前边缘显示灰条窗口（面板窗口此时应是隐藏的）。 */
   const showBar = useCallback(async () => {
     const bounds = boundsRef.current ?? (await getBounds());
@@ -297,12 +281,12 @@ export function useQuickPanelWindow() {
     await applyBarGeometry(geometry);
   }, [applyBarGeometry, currentBarPos, getBounds]);
 
-  /** 定位并显示面板窗口，同时让面板播放展开动画。 */
+  /** 定位并显示面板窗口（只定位不缩放：尺寸恒定），同时让面板播放展开动画。 */
   const placeAndShowBody = useCallback(async () => {
     const bounds = boundsRef.current ?? (await getBounds());
     const barPos = currentBarPos(bounds);
     offsetRef.current = barPos;
-    const geometry = panelGeometry(bounds, edgeRef.current, barPos, bodyWidthRef.current);
+    const geometry = panelGeometry(bounds, edgeRef.current, barPos);
     await ipc.openQuickPanelBody(
       geometry.x,
       geometry.y,
@@ -465,28 +449,6 @@ export function useQuickPanelWindow() {
     };
   }, [resyncBody]);
 
-  // 面板窗口上报宽度（随页面变化）：展开时立即重定位缩放，收窄时面板延后上报至过渡结束。
-  useEffect(() => {
-    let active = true;
-    let unlisten: (() => void) | undefined;
-
-    void listen<number>(BODY_WIDTH_EVENT, (event) => {
-      if (active) applyBodyWidth(event.payload);
-    })
-      .then((off) => {
-        if (active) unlisten = off;
-        else off();
-      })
-      .catch((cause) => {
-        void logError(`订阅面板宽度事件失败：${String(cause)}`);
-      });
-
-    return () => {
-      active = false;
-      unlisten?.();
-    };
-  }, [applyBodyWidth]);
-
   // 卸载时清理定时器与待刷新的帧。
   useEffect(() => {
     return () => {
@@ -551,9 +513,7 @@ export function useQuickPanelWindow() {
 
     pendingRef.current = {
       bar: barGeometry(bounds, nextEdge, barPos),
-      body: openRef.current
-        ? panelGeometry(bounds, nextEdge, barPos, bodyWidthRef.current)
-        : null,
+      body: openRef.current ? panelGeometry(bounds, nextEdge, barPos) : null,
     };
     if (rafRef.current !== null) return;
     rafRef.current = window.requestAnimationFrame(() => {
@@ -598,7 +558,7 @@ export function useQuickPanelWindow() {
       // 拖动中已实时定位，落点直接对齐最终几何并持久化。
       reportFailure("落定快捷小窗灰条", applyBarGeometry(barGeometry(bounds, edge, barPos)));
       if (openRef.current) {
-        const body = panelGeometry(bounds, edge, barPos, bodyWidthRef.current);
+        const body = panelGeometry(bounds, edge, barPos);
         reportFailure("落定快捷小窗面板", ipc.setQuickPanelBodyPosition(body.x, body.y));
       }
       reportFailure("保存快捷小窗位置", ipc.setQuickPanelDock(edge, Math.round(barPos)));
