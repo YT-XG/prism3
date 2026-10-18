@@ -29,6 +29,14 @@ export interface AppConfig {
   bleActiveAddress: string | null;
   /** 已记住的耳机列表；增删与选中都整份写回配置，由 Rust 侧检测变化后重同步会话。 */
   bleDevices: BleDeviceEntry[];
+  /** 是否记录剪贴板历史（文本 + 图片）。 */
+  clipboardHistory: boolean;
+  /** 剪贴板历史保留天数；`0` 表示永久保留。 */
+  clipboardRetentionDays: number;
+  /** 是否把剪贴板里的图片也计入历史（截图体积较大，可单独关掉）。 */
+  clipboardCaptureImages: boolean;
+  /** 点击一条记录时是否自动「回到上一个焦点并粘贴」；关闭后只复制到剪贴板。 */
+  clipboardPasteOnClick: boolean;
 }
 
 /** 打开搜索结果的动作。 */
@@ -160,6 +168,53 @@ export interface BleState {
   watching: boolean;
 }
 
+/** 剪贴板记录的类型（与 Rust 侧 `ClipKind` 一一对应）。 */
+export type ClipKind = "text" | "image";
+
+/** 剪贴板列表的类型筛选（`all` 表示不筛）。 */
+export type ClipKindFilter = "all" | "text" | "image";
+
+/**
+ * 与 Rust 侧 `ClipState` 一一对应：命令返回值与 `clipboard:state` 事件载荷同构。
+ *
+ * 事件只带状态与 `revision`，**不带条目**——列表由前端按 `revision` 重新查询，
+ * 避免图片 / 长文本把广播撑大。
+ */
+export interface ClipState {
+  enabled: boolean;
+  count: number;
+  /** 每次历史变化自增；前端据此重查列表。 */
+  revision: number;
+  /** 保留天数；`0` 表示永久保留。 */
+  retentionDays: number;
+  captureImages: boolean;
+  pasteOnClick: boolean;
+  /** 已占用的存储（字节）。 */
+  storageBytes: number;
+}
+
+/** 与 Rust 侧 `ClipEntryMeta` 一一对应：**不含正文**（正文按需单独取）。 */
+export interface ClipEntryMeta {
+  id: number;
+  kind: ClipKind;
+  /** 列表展示用预览（文本截断 / 图片写尺寸）。 */
+  preview: string;
+  /** 文本长度；图片为 0。 */
+  textLength: number;
+  imageWidth: number | null;
+  imageHeight: number | null;
+  size: number;
+  createdAt: number;
+}
+
+/** 与 Rust 侧 `PasteOutcome` 一一对应。 */
+export interface PasteOutcome {
+  /** 是否真的把 Ctrl+V 发了出去。 */
+  pasted: boolean;
+  /** 没粘上时的原因；`null` 表示「本来就只复制」（配置关掉了自动粘贴）。 */
+  reason: string | null;
+}
+
 export const ipc = {
   getConfig: () => invoke<AppConfig>("get_config"),
   setConfig: (config: AppConfig) => invoke<void>("set_config", { config }),
@@ -237,6 +292,29 @@ export const ipc = {
     invoke<void>("add_ble_device", { address, name }),
   /** 从已记住的列表里移除一台设备。 */
   removeBleDevice: (address: string) => invoke<void>("remove_ble_device", { address }),
+  /** 读取剪贴板历史状态（窗口挂载后兜底拉取；变化由 `clipboard:state` 事件广播）。 */
+  getClipboardState: () => invoke<ClipState>("get_clipboard_state"),
+  /** 查询剪贴板历史；空关键词返回「最近入库」的条目。 */
+  searchClipboard: (query: string, kind: ClipKindFilter, limit?: number) =>
+    invoke<ClipEntryMeta[]>("search_clipboard", { query, kind, limit }),
+  /** 取一条文本记录的完整正文（列表只拿预览）。 */
+  getClipboardText: (id: number) => invoke<string>("get_clipboard_text", { id }),
+  /** 取一条图片记录（默认缩略图），返回 data URL。 */
+  getClipboardImage: (id: number, thumb = true) =>
+    invoke<string>("get_clipboard_image", { id, thumb }),
+  /** 把一条记录复制到系统剪贴板（不粘贴）。 */
+  copyClipboardEntry: (id: number) => invoke<void>("copy_clipboard_entry", { id }),
+  /** 写剪贴板并把焦点还给上一个窗口后粘贴（是否自动粘贴由配置决定）。 */
+  pasteClipboardEntry: (id: number) => invoke<PasteOutcome>("paste_clipboard_entry", { id }),
+  /** 修改一条文本记录的正文。 */
+  updateClipboardText: (id: number, text: string) =>
+    invoke<void>("update_clipboard_text", { id, text }),
+  /** 删除一条记录（图片条目连文件一起删）。 */
+  deleteClipboardEntry: (id: number) => invoke<void>("delete_clipboard_entry", { id }),
+  /** 清空全部剪贴板历史。 */
+  clearClipboardHistory: () => invoke<void>("clear_clipboard_history"),
+  /** 立即按保留策略清理过期条目。 */
+  pruneClipboardHistory: () => invoke<void>("prune_clipboard_history"),
 };
 
 /** 与 Rust 侧 `DiskInfo` 一一对应。 */

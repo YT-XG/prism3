@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 import { ipc, type AppConfig } from "@/lib/ipc";
 
-export type AppView = "home" | "settings" | "monitor" | "search" | "bluetooth";
+export type AppView = "home" | "settings" | "monitor" | "search" | "bluetooth" | "clipboard";
 
 interface AppState {
   config: AppConfig | null;

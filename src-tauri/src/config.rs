@@ -69,6 +69,14 @@ pub struct AppConfig {
     pub ble_active_address: Option<String>,
     /// 已知的耳机设备列表（缓存的名字 + 最近连接时间）。
     pub ble_devices: Vec<BleDeviceEntry>,
+    /// 是否记录剪贴板历史（文本 + 图片，见 `clipboard.rs`）；**默认开启**。
+    pub clipboard_history: bool,
+    /// 剪贴板历史的保留天数；`0` 表示永久保留。
+    pub clipboard_retention_days: u32,
+    /// 是否把剪贴板里的图片也计入历史（截图等体积较大，可单独关掉）。
+    pub clipboard_capture_images: bool,
+    /// 点击一条记录时是否自动「回到上一个焦点并粘贴」；关闭后只复制到剪贴板。
+    pub clipboard_paste_on_click: bool,
 }
 
 impl Default for AppConfig {
@@ -86,6 +94,10 @@ impl Default for AppConfig {
             ble_auto_connect: false,
             ble_active_address: None,
             ble_devices: Vec::new(),
+            clipboard_history: true,
+            clipboard_retention_days: 30,
+            clipboard_capture_images: true,
+            clipboard_paste_on_click: true,
         }
     }
 }
@@ -204,5 +216,23 @@ mod tests {
         );
         assert_eq!(config.ble_devices[0].last_connected_at, Some(7));
         assert!(!config.ble_devices[0].adaptive_anc);
+    }
+
+    #[test]
+    fn clipboard_keys_are_camel_case_and_default_to_sane_values() {
+        // 前端按这些键名读写剪贴板设置（与 `AppConfig` 的 camelCase 约定一致），改名即破坏契约。
+        let value = serde_json::to_value(AppConfig::default()).expect("配置应当可序列化");
+        assert_eq!(value["clipboardHistory"], true);
+        assert_eq!(value["clipboardRetentionDays"], 30);
+        assert_eq!(value["clipboardCaptureImages"], true);
+        assert_eq!(value["clipboardPasteOnClick"], true);
+
+        // 老配置里没有这四个键：必须回落到默认值，而不是整份配置反序列化失败。
+        let config: AppConfig =
+            serde_json::from_str(r#"{"fileSearch":true}"#).expect("老配置应当可读");
+        assert!(config.clipboard_history);
+        assert_eq!(config.clipboard_retention_days, 30);
+        assert!(config.clipboard_capture_images);
+        assert!(config.clipboard_paste_on_click);
     }
 }

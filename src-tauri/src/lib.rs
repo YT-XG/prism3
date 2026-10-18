@@ -1,10 +1,12 @@
 mod ble;
+mod clipboard;
 mod commands;
 mod config;
 mod error;
 mod file_index;
 mod focus;
 mod monitor;
+mod paste;
 mod status;
 mod tray;
 
@@ -63,7 +65,7 @@ pub fn run() {
             let file_search_enabled = initial_config.file_search;
             let file_search_roots = initial_config.file_search_roots.clone();
             app.manage(config::AppState {
-                config: RwLock::new(initial_config),
+                config: RwLock::new(initial_config.clone()),
             });
 
             // 系统监控状态：前端在监控页按需轮询时才会真正采集。
@@ -78,10 +80,21 @@ pub fn run() {
             // 蓝牙耳机：默认不扫描、不占链路，用户点「连接」才起会话线程（见 ble.rs）。
             app.manage(ble::BleState::new());
 
+            // 剪贴板历史：与「启用与否」无关地先读一次落盘历史（几毫秒），
+            // 这样「先禁用、之后重新启用」也能立刻看到旧记录。
+            app.manage(clipboard::ClipboardState::new());
+            {
+                let state = app.state::<clipboard::ClipboardState>();
+                clipboard::load_from_disk(&handle, &state);
+            }
+
             // 蓝牙配置同步：把三个 BLE 键灌进状态镜像，并在「自动连接 + 已知目标」时起看门狗。
             // 这是**唯一**会在启动阶段碰蓝牙的路径：默认配置（不开自动连接）下零 BLE 开销，
             // 也正因为有它，「取出耳机 → 自动连上次那台」在重启之后依然成立。
             ble::sync_from_config(&handle);
+
+            // 剪贴板：启用则起采集线程（默认关闭时零开销）。
+            clipboard::sync(&handle, &initial_config);
 
             tray::init(app)?;
 
@@ -187,7 +200,17 @@ pub fn run() {
             commands::set_adaptive_anc,
             commands::set_eq_preset,
             commands::set_game_mode,
-            commands::set_dual_device
+            commands::set_dual_device,
+            commands::get_clipboard_state,
+            commands::search_clipboard,
+            commands::get_clipboard_text,
+            commands::get_clipboard_image,
+            commands::copy_clipboard_entry,
+            commands::paste_clipboard_entry,
+            commands::update_clipboard_text,
+            commands::delete_clipboard_entry,
+            commands::clear_clipboard_history,
+            commands::prune_clipboard_history
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

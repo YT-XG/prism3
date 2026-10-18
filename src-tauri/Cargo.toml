@@ -38,14 +38,23 @@ btleplug = "0.13.5"
 tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
 tokio-stream = "0.1"
 uuid = "1"
+# 剪贴板历史：`arboard` 读写系统剪贴板（文本 + 图片）；`image` 负责图片的 PNG 编解码与
+# 缩略图（arboard 的 `image-data` 默认特性本来就会引入 `image`，这里直接用，不额外增重）。
+arboard = "3.7"
+image = "0.25"
 
 # Windows 专用：DXGI 枚举显卡（型号 + 专用显存），WMI 查询主板/整机/内存条；
-# WindowsAndMessaging 用于把窗口位置与尺寸合并成一次 SetWindowPos（见 commands.rs）。
+# WindowsAndMessaging 用于把窗口位置与尺寸合并成一次 SetWindowPos（见 commands.rs）；
+# DataExchange 读剪贴板序列号/格式（剪贴板历史采集），Input_KeyboardAndMouse 发 Ctrl+V，
+# Threading 取当前线程 id（焦点归还时的 AttachThreadInput）。
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
+    "Win32_System_DataExchange",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
 wmi = "0.17"

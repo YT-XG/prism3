@@ -1,7 +1,10 @@
+import { useEffect, useState } from "react";
+
 import { info } from "@tauri-apps/plugin-log";
-import { FolderSearch, Monitor, Moon, RotateCcw, Sun } from "lucide-react";
+import { ClipboardList, FolderSearch, Monitor, Moon, RotateCcw, Sun } from "lucide-react";
 import { toast } from "sonner";
 
+import { ClipboardStatus } from "@/components/clipboard/clipboard-status";
 import { SearchIndexStatus } from "@/components/search/search-status";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,12 +15,17 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useClipboardState } from "@/hooks/use-clipboard-state";
 import { useFileIndexState } from "@/hooks/use-file-index-state";
 import { ipc, type AppConfig, type Theme } from "@/lib/ipc";
 import { useAppStore } from "@/stores/app-store";
+
+/** 保留天数的可填范围（0 = 永久保留）。 */
+const MAX_RETENTION_DAYS = 3650;
 
 const themes: { value: Theme; label: string; icon: typeof Sun }[] = [
   { value: "system", label: "跟随系统", icon: Monitor },
@@ -31,6 +39,7 @@ export function SettingsPanel() {
   const saveConfig = useAppStore((state) => state.saveConfig);
   const resetConfig = useAppStore((state) => state.resetConfig);
   const indexState = useFileIndexState(true);
+  const clipboardState = useClipboardState();
   const setActiveView = useAppStore((state) => state.setActiveView);
 
   if (!config) {
@@ -172,8 +181,76 @@ export function SettingsPanel() {
 
       <Card>
         <CardHeader>
+          <CardTitle>剪贴板历史</CardTitle>
+          <CardDescription>
+            记录复制过的文本与图片，点击一条记录即可回到上一个窗口并粘贴；数据只保存在本机，
+            不联网。列表、搜索与编辑在「剪贴板」页。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <Label htmlFor="clipboard-history">启用剪贴板历史</Label>
+            <Switch
+              id="clipboard-history"
+              checked={config.clipboardHistory}
+              onCheckedChange={(checked) => void apply({ clipboardHistory: checked })}
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-col gap-0.5">
+              <Label htmlFor="clipboard-retention">保留天数</Label>
+              <span className="text-xs text-muted-foreground">到期自动清理；填 0 表示永久保留。</span>
+            </div>
+            <RetentionInput
+              value={config.clipboardRetentionDays}
+              onCommit={(days) => void apply({ clipboardRetentionDays: days })}
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-0.5">
+              <Label htmlFor="clipboard-images">记录图片</Label>
+              <span className="text-xs text-muted-foreground">截图等图片体积较大，可单独关掉。</span>
+            </div>
+            <Switch
+              id="clipboard-images"
+              checked={config.clipboardCaptureImages}
+              onCheckedChange={(checked) => void apply({ clipboardCaptureImages: checked })}
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-0.5">
+              <Label htmlFor="clipboard-paste">点击记录时自动粘贴</Label>
+              <span className="text-xs text-muted-foreground">
+                关闭后点击只把内容复制回系统剪贴板。
+              </span>
+            </div>
+            <Switch
+              id="clipboard-paste"
+              checked={config.clipboardPasteOnClick}
+              onCheckedChange={(checked) => void apply({ clipboardPasteOnClick: checked })}
+            />
+          </div>
+
+          <ClipboardStatus state={clipboardState} />
+
+          {config.clipboardHistory && (
+            <div>
+              <Button variant="outline" size="sm" onClick={() => setActiveView("clipboard")}>
+                <ClipboardList data-icon="inline-start" />
+                打开剪贴板页
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>重置</CardTitle>
-          <CardDescription>把主题与窗口行为恢复为默认值。</CardDescription>
+          <CardDescription>把全部设置恢复为默认值。</CardDescription>
         </CardHeader>
         <CardFooter>
           <Button variant="outline" onClick={() => void restoreDefaults()}>
@@ -183,5 +260,52 @@ export function SettingsPanel() {
         </CardFooter>
       </Card>
     </div>
+  );
+}
+
+/**
+ * 保留天数输入框：本地维护草稿，**失焦或回车才提交**。
+ *
+ * 每敲一个字符就写配置会把「30」打成「3」→ 立刻裁掉 3 天以前的记录（真实数据丢失），
+ * 因此中间态只存在这里，提交时再夹到 0..3650。
+ */
+function RetentionInput({
+  value,
+  onCommit,
+}: {
+  value: number;
+  onCommit: (days: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+
+  // 外部值变化（恢复默认 / 别的入口改写配置）时把草稿拉回来对齐。
+  useEffect(() => setDraft(String(value)), [value]);
+
+  const commit = () => {
+    const parsed = Number.parseInt(draft, 10);
+    const days = Number.isFinite(parsed)
+      ? Math.min(MAX_RETENTION_DAYS, Math.max(0, parsed))
+      : value;
+    setDraft(String(days));
+    if (days !== value) onCommit(days);
+  };
+
+  return (
+    <Input
+      id="clipboard-retention"
+      type="number"
+      min={0}
+      max={MAX_RETENTION_DAYS}
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          commit();
+        }
+      }}
+      className="h-8 w-24 text-xs"
+    />
   );
 }

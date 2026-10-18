@@ -8,9 +8,11 @@ use crate::ble::{
     self, AncGradient, BatteryReading, BleCandidate, BleState, BleStateSnapshot, EqPreset,
     NoiseMode,
 };
+use crate::clipboard::{self, ClipEntryMeta, ClipKindFilter, ClipState, ClipboardState};
 use crate::config::{AppConfig, AppState, DockEdge};
 use crate::error::{AppError, AppResult};
 use crate::file_index::{self, FileIndexState, IndexState, SearchHit};
+use crate::paste::{self, PasteOutcome};
 use crate::status::{self, AppStatus, AppStatusState};
 
 /// 快捷小窗**灰条**窗口标签。灰条独占交互与状态。
@@ -211,6 +213,11 @@ pub fn set_config(
     let panel_toggled = guard.quick_panel != config.quick_panel;
     let search_toggled = guard.file_search != config.file_search;
     let search_roots_changed = guard.file_search_roots != config.file_search_roots;
+    let clipboard_toggled = guard.clipboard_history != config.clipboard_history;
+    let clipboard_settings_changed = guard.clipboard_retention_days
+        != config.clipboard_retention_days
+        || guard.clipboard_capture_images != config.clipboard_capture_images
+        || guard.clipboard_paste_on_click != config.clipboard_paste_on_click;
 
     *guard = config.clone();
     drop(guard);
@@ -222,6 +229,9 @@ pub fn set_config(
     }
     if search_toggled || search_roots_changed {
         sync_file_index(&app, &config);
+    }
+    if clipboard_toggled || clipboard_settings_changed {
+        clipboard::sync(&app, &config);
     }
     // BLE 的三个键上面已经被换回权威值（这里必然「无变化」），调用它是为了让
     // 「配置改了 → 运行时跟着改」只有一条共享路径（见 `ble::sync_from_config`）。
@@ -243,6 +253,7 @@ pub fn reset_config(app: AppHandle, state: State<'_, AppState>) -> AppResult<App
 
     sync_quick_panel_windows(&app, &default);
     sync_file_index(&app, &default);
+    clipboard::sync(&app, &default);
     // 恢复默认是**显式**动作（不是过期副本回写）：BLE 键也要跟着回默认并停掉看门狗。
     ble::sync_from_config(&app);
     Ok(default)
@@ -758,6 +769,113 @@ pub async fn set_game_mode(app: AppHandle, enabled: bool) -> AppResult<()> {
 #[tauri::command(async)]
 pub async fn set_dual_device(app: AppHandle, enabled: bool) -> AppResult<()> {
     ble::send_frames(&app, &[ble::dual_device_request(enabled)]).await
+}
+
+// ------------------------------ 剪贴板历史 ------------------------------
+
+/// 读取剪贴板历史状态（窗口挂载时兜底拉取：事件不缓存）。
+#[tauri::command]
+pub fn get_clipboard_state(state: State<'_, ClipboardState>) -> ClipState {
+    state.snapshot()
+}
+
+/// 查询剪贴板历史。空关键词返回「最近入库」的条目。
+///
+/// 走 worker 线程（`async`）：历史虽小，但图片条目多时线性扫描 + 预览拼接也不该压在主线程上。
+#[tauri::command(async)]
+pub fn search_clipboard(
+    state: State<'_, ClipboardState>,
+    query: String,
+    kind: Option<String>,
+    limit: Option<usize>,
+) -> Vec<ClipEntryMeta> {
+    state.query(&query, ClipKindFilter::parse(kind.as_deref()), limit)
+}
+
+/// 取一条文本记录的完整正文（列表只拿预览，编辑 / 展开时才按需拉全文）。
+#[tauri::command(async)]
+pub fn get_clipboard_text(state: State<'_, ClipboardState>, id: u64) -> AppResult<String> {
+    state.text_of(id)
+}
+
+/// 取一条图片记录，返回 data URL（`thumb` 为真时给列表用的缩略图）。
+///
+/// 图片一律经命令回传，**不给前端开 asset protocol / 文件路径权限**——
+/// 与「打开搜索结果走 Rust 侧 opener」同一考虑。
+#[tauri::command(async)]
+pub fn get_clipboard_image(
+    app: AppHandle,
+    state: State<'_, ClipboardState>,
+    id: u64,
+    thumb: Option<bool>,
+) -> AppResult<String> {
+    state.image_data_url(&app, id, thumb.unwrap_or(true))
+}
+
+/// 把一条记录写进系统剪贴板（不粘贴）。
+#[tauri::command(async)]
+pub fn copy_clipboard_entry(
+    app: AppHandle,
+    state: State<'_, ClipboardState>,
+    id: u64,
+) -> AppResult<()> {
+    let content = state.content(&app, id)?;
+    let seq = paste::copy(&content)?;
+    state.note_self_write(seq);
+    Ok(())
+}
+
+/// 写进剪贴板并把焦点还给上一个窗口后粘贴（配置关闭自动粘贴时只复制）。
+///
+/// 返回是否真的粘上了：没粘上时 `reason` 说明原因（前端 `toast`），内容已经在剪贴板里，
+/// 用户可以自己按 Ctrl+V —— 绝不静默失败（蓝牙「写回执」那条教训）。
+#[tauri::command(async)]
+pub fn paste_clipboard_entry(
+    app: AppHandle,
+    state: State<'_, ClipboardState>,
+    id: u64,
+) -> AppResult<PasteOutcome> {
+    let content = state.content(&app, id)?;
+    let seq = paste::copy(&content)?;
+    state.note_self_write(seq);
+
+    if !state.snapshot().paste_on_click {
+        return Ok(PasteOutcome::copied());
+    }
+    Ok(paste::paste(&app))
+}
+
+/// 修改一条文本记录的正文（图片记录不可编辑）。
+#[tauri::command(async)]
+pub fn update_clipboard_text(
+    app: AppHandle,
+    state: State<'_, ClipboardState>,
+    id: u64,
+    text: String,
+) -> AppResult<()> {
+    state.update_text(&app, id, &text)
+}
+
+/// 删除一条记录（图片条目连文件一起删）。
+#[tauri::command]
+pub fn delete_clipboard_entry(
+    app: AppHandle,
+    state: State<'_, ClipboardState>,
+    id: u64,
+) -> AppResult<()> {
+    state.delete(&app, id)
+}
+
+/// 清空全部剪贴板历史（连同图片文件）。
+#[tauri::command]
+pub fn clear_clipboard_history(app: AppHandle, state: State<'_, ClipboardState>) -> AppResult<()> {
+    state.clear(&app)
+}
+
+/// 立即按保留策略清理过期条目。
+#[tauri::command]
+pub fn prune_clipboard_history(app: AppHandle, state: State<'_, ClipboardState>) -> AppResult<()> {
+    state.prune(&app)
 }
 
 fn emit_quick_panel_state(app: &AppHandle, config: &AppConfig) {

@@ -1,4 +1,4 @@
-import { Activity, Bluetooth, House, Search, Settings } from "lucide-react";
+import { Activity, Bluetooth, ClipboardList, House, Search, Settings } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useAppStore, type AppView } from "@/stores/app-store";
@@ -8,6 +8,7 @@ const items: { id: AppView; label: string; icon: typeof House }[] = [
   { id: "search", label: "搜索", icon: Search },
   { id: "monitor", label: "监控", icon: Activity },
   { id: "bluetooth", label: "蓝牙", icon: Bluetooth },
+  { id: "clipboard", label: "剪贴板", icon: ClipboardList },
   { id: "settings", label: "设置", icon: Settings },
 ];
 

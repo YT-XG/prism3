@@ -3,6 +3,7 @@ import { useCallback, useMemo, useState, type CSSProperties } from "react";
 import type { PanelPage } from "@/components/quick-panel/panel-pager";
 import { PanelPager } from "@/components/quick-panel/panel-pager";
 import { QuickPanelBluetooth } from "@/components/quick-panel/quick-panel-bluetooth";
+import { QuickPanelClipboard } from "@/components/quick-panel/quick-panel-clipboard";
 import { QuickPanelSearch } from "@/components/quick-panel/quick-panel-search";
 import { useQuickPanelBody, CLIP_BY_EDGE } from "@/hooks/use-quick-panel-body";
 import {
@@ -15,13 +16,15 @@ import { formatBytes, formatPercent, formatRate, formatUptime } from "@/lib/form
 import type { SystemSnapshot } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
-import { Bluetooth, Gauge, Info, MousePointerClick, Search } from "lucide-react";
+import { Bluetooth, ClipboardList, Gauge, Info, MousePointerClick, Search } from "lucide-react";
 
 const APP_VERSION = "0.1.0";
 /** 搜索页的页面 id（分页器按 id 记忆停留页，改名会丢记忆）。 */
 const SEARCH_PAGE_ID = "search";
 /** 蓝牙页的页面 id（同上：改名会丢停留页记忆）。 */
 const BLUETOOTH_PAGE_ID = "bluetooth";
+/** 剪贴板页的页面 id（同上）。 */
+const CLIPBOARD_PAGE_ID = "clipboard";
 
 /**
  * 快捷小窗面板本体：跑在独立窗口 `quick-panel-body` 中，高度恒为 `PANEL_HEIGHT`。
@@ -76,6 +79,22 @@ export function QuickPanelBody() {
         ),
       },
       {
+        id: CLIPBOARD_PAGE_ID,
+        label: "剪贴板",
+        icon: ClipboardList,
+        // 与搜索页同为最大页宽：行里要放预览 + 时间 + 行内按钮，窄页放不下。
+        panelWidth: PANEL_WIDTH_WIDE,
+        content: (
+          <QuickPanelClipboard
+            active={phase === "open" && activePageId === CLIPBOARD_PAGE_ID}
+            focused={focusMode}
+            onRequestFocus={requestFocus}
+            onReleaseFocus={releaseFocus}
+            onDismiss={dismiss}
+          />
+        ),
+      },
+      {
         id: SEARCH_PAGE_ID,
         label: "搜索",
         icon: Search,
@@ -99,7 +118,7 @@ export function QuickPanelBody() {
       },
       { id: "about", label: "关于", icon: Info, content: <AboutPage /> },
     ],
-    [activePageId, dismiss, focusMode, phase, requestFocus, snapshot],
+    [activePageId, dismiss, focusMode, phase, releaseFocus, requestFocus, snapshot],
   );
 
   const handleActiveChange = useCallback(

@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { BluetoothPanel } from "@/components/bluetooth/bluetooth-panel";
+import { ClipboardPanel } from "@/components/clipboard/clipboard-panel";
 import { MonitorPanel } from "@/components/monitor/monitor-panel";
 import { SearchPanel } from "@/components/search/search-panel";
 import { cn } from "@/lib/utils";
@@ -31,6 +32,7 @@ export function AppShell() {
     monitor: "max-w-6xl",
     search: "max-w-4xl",
     bluetooth: "max-w-4xl",
+    clipboard: "max-w-4xl",
   }[activeView];
 
   return (
@@ -48,6 +50,7 @@ export function AppShell() {
               {activeView === "settings" && <SettingsPanel />}
               {activeView === "monitor" && <MonitorPanel />}
               {activeView === "bluetooth" && <BluetoothPanel />}
+              {activeView === "clipboard" && <ClipboardPanel />}
             </div>
           </ScrollArea>
         </main>
