@@ -13,6 +13,8 @@ export interface AppConfig {
   theme: Theme;
   language: string;
   closeToTray: boolean;
+  /** 开机时自动启动（默认开启；开发模式下后端不注册，见 `src-tauri/src/autostart.rs`）。 */
+  autoStart: boolean;
   lastOpened: string | null;
   quickPanel: boolean;
   /** 快捷小窗吸附的屏幕边缘。 */
@@ -183,6 +185,8 @@ export type ClipKindFilter = "all" | "text" | "image";
 export interface ClipState {
   enabled: boolean;
   count: number;
+  /** 其中收藏的条数（收藏的记录不会被裁剪 / 清空）。 */
+  pinnedCount: number;
   /** 每次历史变化自增；前端据此重查列表。 */
   revision: number;
   /** 保留天数；`0` 表示永久保留。 */
@@ -205,6 +209,8 @@ export interface ClipEntryMeta {
   imageHeight: number | null;
   size: number;
   createdAt: number;
+  /** 是否收藏（收藏的记录置顶显示，且不会被裁剪 / 清空）。 */
+  pinned: boolean;
 }
 
 /** 与 Rust 侧 `PasteOutcome` 一一对应。 */
@@ -311,7 +317,10 @@ export const ipc = {
     invoke<void>("update_clipboard_text", { id, text }),
   /** 删除一条记录（图片条目连文件一起删）。 */
   deleteClipboardEntry: (id: number) => invoke<void>("delete_clipboard_entry", { id }),
-  /** 清空全部剪贴板历史。 */
+  /** 设置 / 取消一条记录的收藏。 */
+  setClipboardPinned: (id: number, pinned: boolean) =>
+    invoke<void>("set_clipboard_pinned", { id, pinned }),
+  /** 清空全部剪贴板历史（收藏的记录会保留）。 */
   clearClipboardHistory: () => invoke<void>("clear_clipboard_history"),
   /** 立即按保留策略清理过期条目。 */
   pruneClipboardHistory: () => invoke<void>("prune_clipboard_history"),

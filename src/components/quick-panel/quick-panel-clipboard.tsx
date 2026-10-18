@@ -61,7 +61,7 @@ export function QuickPanelClipboard({
   const [editingId, setEditingId] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<ClipboardFeedback | null>(null);
 
-  const { entries, state, activeIndex, setActiveIndex, moveActive, paste, copy, remove } =
+  const { entries, state, activeIndex, setActiveIndex, moveActive, paste, copy, remove, togglePin } =
     useClipboardList({
       enabled: active,
       query,
@@ -249,6 +249,7 @@ export function QuickPanelClipboard({
             onCopy={(entry) => void copy(entry.id)}
             onEdit={(entry) => void handleEdit(entry)}
             onDelete={(entry) => void remove(entry.id)}
+            onTogglePin={(entry) => void togglePin(entry.id, !entry.pinned)}
             empty={
               query.trim()
                 ? `没有匹配「${query.trim()}」的记录`

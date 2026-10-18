@@ -1,3 +1,4 @@
+mod autostart;
 mod ble;
 mod clipboard;
 mod commands;
@@ -57,6 +58,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        // 开机自启（Windows 即 HKCU 的 Run 项）；真正的注册由 `autostart::sync` 按配置执行。
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             let handle = app.handle().clone();
 
@@ -95,6 +101,9 @@ pub fn run() {
 
             // 剪贴板：启用则起采集线程（默认关闭时零开销）。
             clipboard::sync(&handle, &initial_config);
+
+            // 开机自启：默认配置即开，这里把系统启动项对齐到配置（开发模式跳过）。
+            autostart::sync(&handle, &initial_config);
 
             tray::init(app)?;
 
@@ -219,6 +228,7 @@ pub fn run() {
             commands::paste_clipboard_entry,
             commands::update_clipboard_text,
             commands::delete_clipboard_entry,
+            commands::set_clipboard_pinned,
             commands::clear_clipboard_history,
             commands::prune_clipboard_history
         ])

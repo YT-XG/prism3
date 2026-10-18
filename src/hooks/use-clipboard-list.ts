@@ -157,6 +157,18 @@ export function useClipboardList({
     [notify],
   );
 
+  /** 收藏 / 取消收藏一条记录（收藏的不会被自动清理，也不被「清空历史」删掉）。 */
+  const togglePin = useCallback(
+    async (id: number, pinned: boolean) => {
+      try {
+        await ipc.setClipboardPinned(id, pinned);
+      } catch (cause) {
+        notify({ tone: "error", text: `操作失败：${String(cause)}` });
+      }
+    },
+    [notify],
+  );
+
   return {
     entries,
     loading,
@@ -167,5 +179,6 @@ export function useClipboardList({
     paste,
     copy,
     remove,
+    togglePin,
   };
 }

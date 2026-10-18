@@ -39,6 +39,7 @@ export function ClipboardPanel() {
     paste,
     copy,
     remove,
+    togglePin,
   } = useClipboardList({ enabled: true, query, kind, limit: RESULT_LIMIT });
 
   const listRef = useRef<HTMLDivElement>(null);
@@ -170,6 +171,7 @@ export function ClipboardPanel() {
             onCopy={(entry) => void copy(entry.id)}
             onEdit={(entry) => setEditingId(entry.id)}
             onDelete={(entry) => void remove(entry.id)}
+            onTogglePin={(entry) => void togglePin(entry.id, !entry.pinned)}
             empty={
               loading
                 ? "读取中…"

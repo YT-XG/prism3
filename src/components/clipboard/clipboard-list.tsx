@@ -1,6 +1,15 @@
 import type { ReactNode } from "react";
 
-import { ClipboardPaste, Copy, Image as ImageIcon, Pencil, Trash2, Type } from "lucide-react";
+import {
+  ClipboardPaste,
+  Copy,
+  Image as ImageIcon,
+  Pencil,
+  Star,
+  StarOff,
+  Trash2,
+  Type,
+} from "lucide-react";
 
 import { ClipboardThumb } from "@/components/clipboard/clipboard-thumb";
 import { formatBytes, formatTimeAgo } from "@/lib/format";
@@ -19,6 +28,8 @@ interface ClipboardListProps {
   /** 编辑（仅文本记录）。 */
   onEdit: (entry: ClipEntryMeta) => void;
   onDelete: (entry: ClipEntryMeta) => void;
+  /** 收藏 / 取消收藏（收藏的记录置顶，且不会被自动清理 / 「清空历史」删掉）。 */
+  onTogglePin: (entry: ClipEntryMeta) => void;
   /** 无结果时展示的内容。 */
   empty?: ReactNode;
   className?: string;
@@ -40,6 +51,7 @@ export function ClipboardList({
   onCopy,
   onEdit,
   onDelete,
+  onTogglePin,
   empty,
   className,
 }: ClipboardListProps) {
@@ -64,6 +76,7 @@ export function ClipboardList({
           onCopy={() => onCopy(entry)}
           onEdit={() => onEdit(entry)}
           onDelete={() => onDelete(entry)}
+          onTogglePin={() => onTogglePin(entry)}
         />
       ))}
     </div>
@@ -79,6 +92,7 @@ interface ClipboardRowProps {
   onCopy: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onTogglePin: () => void;
 }
 
 function ClipboardRow({
@@ -90,6 +104,7 @@ function ClipboardRow({
   onCopy,
   onEdit,
   onDelete,
+  onTogglePin,
 }: ClipboardRowProps) {
   const compact = variant === "compact";
   const isText = entry.kind === "text";
@@ -149,6 +164,13 @@ function ClipboardRow({
         </span>
       )}
 
+      {entry.pinned && (
+        <Star
+          className={cn("shrink-0 fill-current text-amber-500", compact ? "size-3" : "size-3.5")}
+          aria-hidden
+        />
+      )}
+
       <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
         <RowAction label="粘贴到上一个窗口" onClick={onPaste}>
           <ClipboardPaste className="size-3.5" />
@@ -161,6 +183,9 @@ function ClipboardRow({
             <Pencil className="size-3.5" />
           </RowAction>
         )}
+        <RowAction label={entry.pinned ? "取消收藏" : "收藏"} onClick={onTogglePin}>
+          {entry.pinned ? <StarOff className="size-3.5" /> : <Star className="size-3.5" />}
+        </RowAction>
         <RowAction label="删除" onClick={onDelete}>
           <Trash2 className="size-3.5" />
         </RowAction>

@@ -87,6 +87,9 @@ pub struct ClipEntry {
     pub created_at: u64,
     /// 体积（文本为字节数、图片为原图文件字节数）。
     pub size: u64,
+    /// 是否收藏：**收藏的记录不会被保留天数裁剪掉、也不被「清空历史」删掉**，
+    /// 只有对这条记录的手动删除才会移除它。
+    pub pinned: bool,
 }
 
 /// 发给前端的条目元数据：**不含正文**（正文按需单独取，避免广播里塞大文本）。
@@ -103,6 +106,8 @@ pub struct ClipEntryMeta {
     pub image_height: Option<u32>,
     pub size: u64,
     pub created_at: u64,
+    /// 是否收藏（列表按置顶 + 星标展示）。
+    pub pinned: bool,
 }
 
 /// 剪贴板历史状态快照：命令返回值与事件载荷共用同一个结构。
@@ -112,6 +117,8 @@ pub struct ClipState {
     /// 配置里是否启用了剪贴板历史。
     pub enabled: bool,
     pub count: usize,
+    /// 其中收藏的条数（收藏的记录不会被裁剪 / 清空）。
+    pub pinned_count: usize,
     /// 每次历史变化自增；前端据此重查列表（事件本身不带条目）。
     pub revision: u64,
     pub retention_days: u32,
@@ -239,6 +246,7 @@ impl ClipboardState {
         ClipState {
             enabled: inner.enabled,
             count: inner.entries.len(),
+            pinned_count: inner.entries.iter().filter(|entry| entry.pinned).count(),
             revision: inner.revision,
             retention_days: inner.retention_days,
             capture_images: inner.capture_images,
@@ -290,6 +298,7 @@ impl ClipboardState {
                     digest,
                     created_at: now_secs(),
                     size: text.len() as u64,
+                    pinned: false,
                 };
                 self.install(app, entry)
             }
@@ -322,6 +331,7 @@ impl ClipboardState {
                     image: Some(image),
                     digest,
                     created_at: now_secs(),
+                    pinned: false,
                 };
                 self.install(app, entry)
             }
@@ -367,6 +377,8 @@ impl ClipboardState {
             {
                 let old = inner.entries.remove(pos);
                 entry.id = old.id;
+                // 再复制同一条内容时沿用原记录，收藏状态一并保留（不会因为再复制一次就掉收藏）。
+                entry.pinned = old.pinned;
                 if entry.image.is_none() {
                     entry.image = old.image;
                 }
@@ -393,6 +405,8 @@ impl ClipboardState {
     }
 
     /// 查询历史元数据。空关键词返回「最近入库」的条目。
+    ///
+    /// **收藏的记录始终排在前面**（收藏组内仍按最近入库排序），这样收藏才真正「找得到」。
     pub fn query(
         &self,
         raw_query: &str,
@@ -402,9 +416,12 @@ impl ClipboardState {
         let needle = raw_query.trim().to_lowercase();
         let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
 
-        self.read()
-            .entries
-            .iter()
+        let inner = self.read();
+        let (pinned, rest): (Vec<_>, Vec<_>) = inner.entries.iter().partition(|entry| entry.pinned);
+
+        pinned
+            .into_iter()
+            .chain(rest)
             .filter(|entry| kind.accepts(entry.kind))
             .filter(|entry| {
                 needle.is_empty()
@@ -435,23 +452,47 @@ impl ClipboardState {
         Ok(())
     }
 
-    /// 清空全部历史（连同图片文件）。
+    /// 清空历史（连同图片文件）。**收藏的记录会被保留**——收藏只由手动删除移除。
     pub fn clear(&self, app: &AppHandle) -> AppResult<()> {
-        let names = {
+        let (names, removed) = {
             let mut inner = self.write();
-            if inner.entries.is_empty() {
+            let before = inner.entries.len();
+            let mut names = Vec::new();
+            inner.entries.retain(|entry| {
+                if entry.pinned {
+                    return true;
+                }
+                names.extend(image_files_of(entry));
+                false
+            });
+            let removed = before != inner.entries.len();
+            if removed {
+                inner.revision += 1;
+            }
+            (names, removed)
+        };
+        if !removed {
+            return Ok(());
+        }
+        delete_image_files(app, &names);
+        self.persist(app);
+        self.broadcast(app);
+        Ok(())
+    }
+
+    /// 设置 / 取消一条记录的收藏。
+    pub fn set_pinned(&self, app: &AppHandle, id: u64, pinned: bool) -> AppResult<()> {
+        {
+            let mut inner = self.write();
+            let Some(entry) = inner.entries.iter_mut().find(|entry| entry.id == id) else {
+                return Err(AppError::Other("记录不存在".into()));
+            };
+            if entry.pinned == pinned {
                 return Ok(());
             }
-            let names = inner
-                .entries
-                .iter()
-                .flat_map(image_files_of)
-                .collect::<Vec<_>>();
-            inner.entries.clear();
+            entry.pinned = pinned;
             inner.revision += 1;
-            names
-        };
-        delete_image_files(app, &names);
+        }
         self.persist(app);
         self.broadcast(app);
         Ok(())
@@ -768,13 +809,15 @@ impl From<&ClipEntry> for ClipEntryMeta {
             image_height,
             size: entry.size,
             created_at: entry.created_at,
+            pinned: entry.pinned,
         }
     }
 }
 
 /// 按保留天数裁掉过期条目，返回被删掉的图片文件名。
 ///
-/// `retention_days == 0` 表示永久保留（此时不删任何条目）。
+/// `retention_days == 0` 表示永久保留（此时不删任何条目）；
+/// **收藏的记录永不参与裁剪**（无论过期多久都留着，只由手动删除移除）。
 fn prune_locked(inner: &mut Inner, now: u64) -> Vec<String> {
     if inner.retention_days == 0 {
         return Vec::new();
@@ -783,7 +826,7 @@ fn prune_locked(inner: &mut Inner, now: u64) -> Vec<String> {
 
     let mut removed = Vec::new();
     inner.entries.retain(|entry| {
-        if entry.created_at >= cutoff {
+        if entry.pinned || entry.created_at >= cutoff {
             return true;
         }
         removed.extend(image_files_of(entry));
@@ -1612,6 +1655,7 @@ mod tests {
             digest: digest_text(text),
             created_at,
             size: text.len() as u64,
+            pinned: false,
         }
     }
 
@@ -1670,6 +1714,42 @@ mod tests {
         let mut inner = inner_with(vec![text_entry(1, "很久以前", 1)], 0);
         prune_locked(&mut inner, now);
         assert_eq!(inner.entries.len(), 1, "0 = 永久保留，不裁任何条目");
+    }
+
+    #[test]
+    fn prune_keeps_pinned_entries_even_when_expired() {
+        let now = 1_000_000_000u64;
+        let day = 86_400u64;
+        let mut pinned = text_entry(1, "收藏的旧文本", now - 40 * day);
+        pinned.pinned = true;
+
+        let mut inner = inner_with(
+            vec![pinned, text_entry(2, "过期未收藏", now - 40 * day)],
+            30,
+        );
+        prune_locked(&mut inner, now);
+
+        let ids: Vec<u64> = inner.entries.iter().map(|entry| entry.id).collect();
+        assert_eq!(ids, vec![1], "收藏的条目不参与裁剪，其余照常过期删除");
+    }
+
+    #[test]
+    fn query_puts_pinned_entries_first() {
+        let mut pinned = text_entry(3, "pinned", 30);
+        pinned.pinned = true;
+
+        let state = ClipboardState::new();
+        *state.write() = inner_with(
+            vec![text_entry(1, "最新", 40), pinned, text_entry(2, "较早", 20)],
+            30,
+        );
+
+        let ids: Vec<u64> = state
+            .query("", ClipKindFilter::All, None)
+            .iter()
+            .map(|meta| meta.id)
+            .collect();
+        assert_eq!(ids, vec![3, 1, 2], "收藏置顶，其余仍按最近入库排序");
     }
 
     #[test]

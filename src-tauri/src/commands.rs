@@ -214,6 +214,7 @@ pub fn set_config(
     let search_toggled = guard.file_search != config.file_search;
     let search_roots_changed = guard.file_search_roots != config.file_search_roots;
     let theme_changed = guard.theme != config.theme;
+    let auto_start_changed = guard.auto_start != config.auto_start;
     let clipboard_toggled = guard.clipboard_history != config.clipboard_history;
     let clipboard_settings_changed = guard.clipboard_retention_days
         != config.clipboard_retention_days
@@ -230,6 +231,9 @@ pub fn set_config(
     }
     if theme_changed {
         crate::sync_window_background(&app, config.theme);
+    }
+    if auto_start_changed {
+        crate::autostart::sync(&app, &config);
     }
     if search_toggled || search_roots_changed {
         sync_file_index(&app, &config);
@@ -257,6 +261,7 @@ pub fn reset_config(app: AppHandle, state: State<'_, AppState>) -> AppResult<App
 
     sync_quick_panel_windows(&app, &default);
     crate::sync_window_background(&app, default.theme);
+    crate::autostart::sync(&app, &default);
     sync_file_index(&app, &default);
     clipboard::sync(&app, &default);
     // 恢复默认是**显式**动作（不是过期副本回写）：BLE 键也要跟着回默认并停掉看门狗。
@@ -861,7 +866,7 @@ pub fn update_clipboard_text(
     state.update_text(&app, id, &text)
 }
 
-/// 删除一条记录（图片条目连文件一起删）。
+/// 删除一条记录（图片条目连文件一起删）。**收藏的记录也能这样手动删掉**。
 #[tauri::command]
 pub fn delete_clipboard_entry(
     app: AppHandle,
@@ -871,7 +876,18 @@ pub fn delete_clipboard_entry(
     state.delete(&app, id)
 }
 
-/// 清空全部剪贴板历史（连同图片文件）。
+/// 设置 / 取消一条记录的收藏（收藏的条目不会被保留天数裁剪、也不被「清空历史」删掉）。
+#[tauri::command]
+pub fn set_clipboard_pinned(
+    app: AppHandle,
+    state: State<'_, ClipboardState>,
+    id: u64,
+    pinned: bool,
+) -> AppResult<()> {
+    state.set_pinned(&app, id, pinned)
+}
+
+/// 清空全部剪贴板历史（连同图片文件）。收藏的记录会被保留，只由手动删除移除。
 #[tauri::command]
 pub fn clear_clipboard_history(app: AppHandle, state: State<'_, ClipboardState>) -> AppResult<()> {
     state.clear(&app)

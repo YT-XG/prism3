@@ -54,7 +54,10 @@ export function ClipboardStatus({ state, compact = false, className }: Clipboard
   const clear = async () => {
     try {
       await ipc.clearClipboardHistory();
-      toast.success("已清空剪贴板历史");
+      // 收藏的记录会被保留，因此文案跟着状态走（别让用户以为「什么都没了」）。
+      toast.success(
+        (state?.pinnedCount ?? 0) > 0 ? "已清空未收藏的记录（收藏的已保留）" : "已清空剪贴板历史",
+      );
     } catch (cause) {
       toast.error(`清空失败：${String(cause)}`);
     } finally {
@@ -94,5 +97,6 @@ function describe(state: ClipState | null): string {
   const retention = state.retentionDays === 0 ? "永久保留" : `保留 ${state.retentionDays} 天`;
   if (state.count === 0) return `暂无记录 · ${retention}`;
 
-  return `${state.count} 条 · ${retention} · 占用 ${formatBytes(state.storageBytes)}`;
+  const pinned = state.pinnedCount > 0 ? ` · 收藏 ${state.pinnedCount}` : "";
+  return `${state.count} 条${pinned} · ${retention} · 占用 ${formatBytes(state.storageBytes)}`;
 }

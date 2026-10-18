@@ -117,15 +117,33 @@ export function SettingsPanel() {
       <Card>
         <CardHeader>
           <CardTitle>窗口行为</CardTitle>
-          <CardDescription>关闭主窗口时是否保留后台托盘图标。</CardDescription>
+          <CardDescription>关闭主窗口时是否保留后台托盘图标；开机自启默认开启。</CardDescription>
         </CardHeader>
-        <CardContent className="flex items-center justify-between">
-          <Label htmlFor="close-to-tray">关闭窗口时最小化到托盘</Label>
-          <Switch
-            id="close-to-tray"
-            checked={config.closeToTray}
-            onCheckedChange={(checked) => void apply({ closeToTray: checked })}
-          />
+        <CardContent className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <Label htmlFor="close-to-tray">关闭窗口时最小化到托盘</Label>
+            <Switch
+              id="close-to-tray"
+              checked={config.closeToTray}
+              onCheckedChange={(checked) => void apply({ closeToTray: checked })}
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-0.5">
+              <Label htmlFor="auto-start">开机时自动启动</Label>
+              <span className="text-xs text-muted-foreground">
+                {import.meta.env.DEV
+                  ? "开发模式下不注册系统启动项，只有发布版才生效。"
+                  : "登录系统后自动在后台运行。"}
+              </span>
+            </div>
+            <Switch
+              id="auto-start"
+              checked={config.autoStart}
+              onCheckedChange={(checked) => void apply({ autoStart: checked })}
+            />
+          </div>
         </CardContent>
       </Card>
 
@@ -184,7 +202,8 @@ export function SettingsPanel() {
           <CardTitle>剪贴板历史</CardTitle>
           <CardDescription>
             记录复制过的文本与图片，点击一条记录即可回到上一个窗口并粘贴；数据只保存在本机，
-            不联网。列表、搜索与编辑在「剪贴板」页。
+            不联网。列表、搜索与编辑在「剪贴板」页；收藏的记录不会被自动清理（按保留天数裁剪 /
+            清空历史都不会删掉它，只有对这条记录手动删除才会移除）。
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">

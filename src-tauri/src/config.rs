@@ -51,6 +51,8 @@ pub struct AppConfig {
     pub language: String,
     /// 关闭主窗口时隐藏到托盘而不是退出。
     pub close_to_tray: bool,
+    /// 开机时自动启动（**默认开启**；开发模式不注册，见 `autostart.rs`）。
+    pub auto_start: bool,
     pub last_opened: Option<String>,
     /// 是否启用屏幕边缘的快捷小窗。
     pub quick_panel: bool,
@@ -85,6 +87,7 @@ impl Default for AppConfig {
             theme: Theme::default(),
             language: "zh-CN".to_string(),
             close_to_tray: true,
+            auto_start: true,
             last_opened: None,
             quick_panel: false,
             quick_panel_edge: DockEdge::default(),
