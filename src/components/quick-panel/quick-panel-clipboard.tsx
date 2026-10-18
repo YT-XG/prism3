@@ -228,9 +228,11 @@ export function QuickPanelClipboard({
           <ClipboardStatus state={state} compact />
 
           {feedback && (
+            // 两行而不是单行截断：失败原因（尤其后端带上来的具体错误）单行会被切掉一半，
+            // 只剩「粘贴失败：剪贴板错误: Unknown error while intera…」这种没法用的信息。
             <p
               className={cn(
-                "truncate text-[11px]",
+                "line-clamp-2 break-words text-[11px] leading-snug",
                 feedback.tone === "error" ? "text-destructive" : "text-muted-foreground",
               )}
             >

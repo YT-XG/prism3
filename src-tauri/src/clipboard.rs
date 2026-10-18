@@ -1500,6 +1500,67 @@ mod capture {
                 "系统会把 CF_DIB 合成为 CF_DIBV5，arboard 因此也能读"
             );
         }
+
+        /// 真机探针：**会覆盖当前剪贴板内容**。
+        ///
+        /// 「点一条图片记录」的链路是 `paste::copy`（写剪贴板）→ 发 Ctrl+V。写入原先走
+        /// `arboard::set_image`，真机上一律报
+        /// `Unknown error while interacting with the clipboard: SetClipboard`——用户看到的就是
+        /// 「粘贴图片失败」。这里做一次完整往返：写入 → 用采集侧同一条解码路径读回来 →
+        /// 像素逐字节对上，才算写入真的可用（半透明像素也必须在往返里活下来）。
+        #[test]
+        #[ignore = "真机探针：会覆盖当前剪贴板内容"]
+        fn probe_image_write_round_trip() {
+            // 3×2，含不透明白、半透明红、全透明、以及一个「alpha=0 但 RGB 非 0」的像素。
+            let rgba = vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 128, //
+                10, 20, 30, 255, 40, 50, 60, 1, 70, 80, 90, 255,
+            ];
+
+            crate::paste::copy(&crate::paste::PasteContent::Image {
+                width: 3,
+                height: 2,
+                rgba: rgba.clone(),
+            })
+            .expect("写入剪贴板图片不应失败");
+
+            println!(
+                "写入后可用: CF_DIB={} CF_DIBV5={} CF_BITMAP={}",
+                available(CF_DIB),
+                available(CF_DIBV5),
+                available(CF_BITMAP)
+            );
+            assert!(available(CF_DIBV5), "应当写入 CF_DIBV5（现代程序认它）");
+            assert!(available(CF_DIB), "应当写入 CF_DIB（画图 / 记事本只认它）");
+            // 系统能按需从我们写的 DIB 合成 `CF_BITMAP`，说明位图头与像素排布是合法的
+            // （只放自有格式 / 头写坏的剪贴板合不出来）。
+            assert!(
+                available(CF_BITMAP),
+                "系统应当能由 CF_DIB 合成 CF_BITMAP，否则位图头可能不合法"
+            );
+
+            let Some(Captured::Image {
+                width,
+                height,
+                rgba: read_back,
+            }) = read(true)
+            else {
+                panic!("刚写进去的图片应当能读回来");
+            };
+            assert_eq!((width, height), (3, 2), "往返后的尺寸不对");
+            assert_eq!(read_back, rgba, "往返后像素应完全一致（含 alpha）");
+
+            // arboard 能不能读只作为参考打印：它是「别的程序」的视角，不作为断言——
+            // 本仓库的读取路径本来就是为了绕开它的限制才自己解 DIB 的。
+            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                match clipboard.get_image() {
+                    Ok(image) => println!("  arboard 视角 = Ok {}x{}", image.width, image.height),
+                    Err(err) => {
+                        println!("  arboard 视角 = Err {err:?}（不代表别的程序粘不上）");
+                    }
+                }
+            }
+        }
     }
 }
 
