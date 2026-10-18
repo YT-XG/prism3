@@ -26,6 +26,23 @@ pub enum DockEdge {
     Top,
 }
 
+/// 一台已知的蓝牙 LE 耳机。
+///
+/// `name` 是从设备读回来的**缓存**友好名（耳机不广播名字，真名只在连接后的 GATT
+/// Device Name 特征里，见 `ble.rs`）；`last_connected_at` 是最近一次成功建立的秒级
+/// 时间戳，用于「连接上次已连接的」；`adaptive_anc` 是**本地记忆**的自适应降噪开关
+/// —— 设备从不上报这一位（见 `ble.rs::adaptive_anc_request`），所以它只能存在这里。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BleDeviceEntry {
+    pub address: String,
+    pub name: Option<String>,
+    pub last_connected_at: Option<u64>,
+    /// 自适应降噪开关的本地记忆；缺省 `false`，因此老配置文件照常可读
+    /// （容器级 `serde(default)` 与 `AppConfig` 的写法一致）。
+    pub adaptive_anc: bool,
+}
+
 /// 应用配置，持久化为 `%APPDATA%\<identifier>\config.json`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -42,6 +59,16 @@ pub struct AppConfig {
     /// 快捷小窗沿吸附边缘的偏移（逻辑像素）：`left`/`right` 时为纵向 y，`top` 时为横向 x。
     /// 由面板窗口独占写入。
     pub quick_panel_y: Option<i32>,
+    /// 是否启用本地文件搜索（自建文件名索引，见 `file_index.rs`）。
+    pub file_search: bool,
+    /// 文件搜索的索引根目录；为空表示使用桌面 / 文档 / 下载 / 图片四个常用目录。
+    pub file_search_roots: Vec<String>,
+    /// 是否监视耳机并自动连接（取出耳机即连上「上次已连接的」，见 `ble.rs`）。
+    pub ble_auto_connect: bool,
+    /// 当前 / 上次已连接的耳机地址；为空表示还不知道要连谁（此时看门狗不起）。
+    pub ble_active_address: Option<String>,
+    /// 已知的耳机设备列表（缓存的名字 + 最近连接时间）。
+    pub ble_devices: Vec<BleDeviceEntry>,
 }
 
 impl Default for AppConfig {
@@ -54,6 +81,11 @@ impl Default for AppConfig {
             quick_panel: false,
             quick_panel_edge: DockEdge::default(),
             quick_panel_y: None,
+            file_search: false,
+            file_search_roots: Vec::new(),
+            ble_auto_connect: false,
+            ble_active_address: None,
+            ble_devices: Vec::new(),
         }
     }
 }
@@ -91,4 +123,86 @@ pub fn save(app: &AppHandle, config: &AppConfig) -> AppResult<()> {
 
     log::debug!(target: "prism3_lib::config", "配置已保存 path={}", path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ble_keys_are_camel_case_in_the_config_file() {
+        // 前端按这些键名读写配置（与 `AppConfig` 既有的 camelCase 约定一致），改名即破坏契约。
+        let config = AppConfig {
+            ble_auto_connect: true,
+            ble_active_address: Some("12:02:03:04:7C:0F".into()),
+            ble_devices: vec![BleDeviceEntry {
+                address: "12:02:03:04:7C:0F".into(),
+                name: Some("StarRing Ultra_BLE".into()),
+                last_connected_at: Some(1_700_000_000),
+                adaptive_anc: true,
+            }],
+            ..AppConfig::default()
+        };
+        let value = serde_json::to_value(&config).expect("配置应当可序列化");
+        assert_eq!(value["bleAutoConnect"], true);
+        assert_eq!(value["bleActiveAddress"], "12:02:03:04:7C:0F");
+
+        let device = &value["bleDevices"][0];
+        let mut keys: Vec<&str> = device
+            .as_object()
+            .expect("设备项应当是对象")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec!["adaptiveAnc", "address", "lastConnectedAt", "name"]
+        );
+        assert_eq!(device["lastConnectedAt"], 1_700_000_000u64);
+        assert_eq!(device["adaptiveAnc"], true);
+    }
+
+    #[test]
+    fn old_config_files_without_ble_keys_stay_valid() {
+        // 老配置文件里没有这些键：必须回落到默认值，而不是整个配置反序列化失败
+        // （`load()` 一旦失败就整份退回默认，用户的主题 / 快捷小窗设置会一起丢）。
+        let config: AppConfig =
+            serde_json::from_str(r#"{"theme":"dark","fileSearch":true}"#).expect("老配置应当可读");
+        assert_eq!(config.theme, Theme::Dark);
+        assert!(config.file_search);
+        assert!(!config.ble_auto_connect, "缺省 = 不自动连接");
+        assert_eq!(config.ble_active_address, None);
+        assert!(config.ble_devices.is_empty());
+        assert_eq!(
+            config,
+            AppConfig {
+                theme: Theme::Dark,
+                file_search: true,
+                ..AppConfig::default()
+            }
+        );
+
+        // 设备项自身缺字段时同样回落（`BleDeviceEntry` 也是 `serde(default)`）：
+        // 尤其是后加的 `adaptiveAnc` —— 老配置里必然没有它，必须读成 `false`
+        // 而不是让整份配置报废。
+        let entry: BleDeviceEntry = serde_json::from_str(r#"{"address":"12:02:03:04:7C:0F"}"#)
+            .expect("缺少可选项的设备项应当可读");
+        assert_eq!(entry.name, None);
+        assert_eq!(entry.last_connected_at, None);
+        assert!(!entry.adaptive_anc, "缺省 = 自适应降噪关");
+
+        // 老配置里已经有设备条目、但没有 `adaptiveAnc` 时同样成立。
+        let config: AppConfig = serde_json::from_str(
+            r#"{"bleDevices":[{"address":"12:02:03:04:7C:0F","name":"StarRing Ultra_BLE","lastConnectedAt":7}]}"#,
+        )
+        .expect("带老设备条目的配置应当可读");
+        assert_eq!(config.ble_devices.len(), 1);
+        assert_eq!(
+            config.ble_devices[0].name.as_deref(),
+            Some("StarRing Ultra_BLE")
+        );
+        assert_eq!(config.ble_devices[0].last_connected_at, Some(7));
+        assert!(!config.ble_devices[0].adaptive_anc);
+    }
 }

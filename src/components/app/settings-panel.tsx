@@ -1,7 +1,8 @@
 import { info } from "@tauri-apps/plugin-log";
-import { Monitor, Moon, RotateCcw, Sun } from "lucide-react";
+import { FolderSearch, Monitor, Moon, RotateCcw, Sun } from "lucide-react";
 import { toast } from "sonner";
 
+import { SearchIndexStatus } from "@/components/search/search-status";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -14,7 +15,8 @@ import {
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { AppConfig, Theme } from "@/lib/ipc";
+import { useFileIndexState } from "@/hooks/use-file-index-state";
+import { ipc, type AppConfig, type Theme } from "@/lib/ipc";
 import { useAppStore } from "@/stores/app-store";
 
 const themes: { value: Theme; label: string; icon: typeof Sun }[] = [
@@ -28,6 +30,8 @@ export function SettingsPanel() {
   const config = useAppStore((state) => state.config);
   const saveConfig = useAppStore((state) => state.saveConfig);
   const resetConfig = useAppStore((state) => state.resetConfig);
+  const indexState = useFileIndexState(true);
+  const setActiveView = useAppStore((state) => state.setActiveView);
 
   if (!config) {
     return <p className="text-sm text-muted-foreground">正在读取配置…</p>;
@@ -50,6 +54,23 @@ export function SettingsPanel() {
       toast.success("已恢复默认设置");
     } catch (cause) {
       toast.error(`恢复失败：${String(cause)}`);
+    }
+  };
+
+  const rebuildIndex = async () => {
+    try {
+      await ipc.rebuildFileIndex();
+      toast.success("已开始重建索引");
+    } catch (cause) {
+      toast.error(`重建失败：${String(cause)}`);
+    }
+  };
+
+  const cancelIndex = async () => {
+    try {
+      await ipc.cancelFileIndex();
+    } catch (cause) {
+      toast.error(`取消失败：${String(cause)}`);
     }
   };
 
@@ -111,6 +132,41 @@ export function SettingsPanel() {
             checked={config.quickPanel}
             onCheckedChange={(checked) => void apply({ quickPanel: checked })}
           />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>文件搜索</CardTitle>
+          <CardDescription>
+            为常用目录建立文件名索引，实现本机毫秒级搜索；不联网、不读取文件内容。
+            索引范围在「搜索」页里调整。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <Label htmlFor="file-search">启用本地文件搜索</Label>
+            <Switch
+              id="file-search"
+              checked={config.fileSearch}
+              onCheckedChange={(checked) => void apply({ fileSearch: checked })}
+            />
+          </div>
+
+          <SearchIndexStatus
+            state={indexState}
+            onRebuild={() => void rebuildIndex()}
+            onCancel={() => void cancelIndex()}
+          />
+
+          {config.fileSearch && (
+            <div>
+              <Button variant="outline" size="sm" onClick={() => setActiveView("search")}>
+                <FolderSearch data-icon="inline-start" />
+                管理索引范围
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 

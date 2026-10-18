@@ -29,3 +29,31 @@ export function formatUptime(totalSeconds: number): string {
 export function formatPercent(value: number): string {
   return `${value.toFixed(1)}%`;
 }
+
+/**
+ * 秒级时间戳格式化为「刚刚 / 14:03 / 昨天 14:03 / 3 天前 / 2025-03-02」。
+ *
+ * 文件搜索结果里大量出现近期修改的文件，相对时间比完整日期更好扫读。
+ */
+export function formatTimeAgo(modifiedSecs: number): string {
+  if (!Number.isFinite(modifiedSecs) || modifiedSecs <= 0) return "—";
+
+  const then = new Date(modifiedSecs * 1000);
+  const now = new Date();
+  const clock = `${String(then.getHours()).padStart(2, "0")}:${String(then.getMinutes()).padStart(2, "0")}`;
+
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const elapsedMs = now.getTime() - then.getTime();
+  if (elapsedMs < 60_000) return "刚刚";
+  if (elapsedMs < 3_600_000) return `${Math.floor(elapsedMs / 60_000)} 分钟前`;
+  if (then.getTime() >= startOfToday) return clock;
+  if (then.getTime() >= startOfToday - 86_400_000) return `昨天 ${clock}`;
+
+  const days = Math.floor((startOfToday - then.getTime()) / 86_400_000) + 1;
+  if (days <= 30) return `${days} 天前`;
+
+  const month = String(then.getMonth() + 1).padStart(2, "0");
+  const day = String(then.getDate()).padStart(2, "0");
+  if (then.getFullYear() === now.getFullYear()) return `${month}-${day}`;
+  return `${then.getFullYear()}-${month}-${day}`;
+}

@@ -7,7 +7,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { BluetoothPanel } from "@/components/bluetooth/bluetooth-panel";
 import { MonitorPanel } from "@/components/monitor/monitor-panel";
+import { SearchPanel } from "@/components/search/search-panel";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/stores/app-store";
 
@@ -22,11 +24,13 @@ import { TitleBar } from "./title-bar";
 export function AppShell() {
   const activeView = useAppStore((state) => state.activeView);
 
-  // 数据型页面（监控）充分利用窗口宽度，表单型页面保持窄栏更易读。
+  // 数据型页面（监控 / 搜索）充分利用窗口宽度，表单型页面保持窄栏更易读。
   const contentWidth = {
     home: "max-w-3xl",
     settings: "max-w-3xl",
     monitor: "max-w-6xl",
+    search: "max-w-4xl",
+    bluetooth: "max-w-4xl",
   }[activeView];
 
   return (
@@ -40,8 +44,10 @@ export function AppShell() {
           <ScrollArea className="h-full">
             <div className={cn("mx-auto w-full p-6", contentWidth)}>
               {activeView === "home" && <HomeView />}
+              {activeView === "search" && <SearchPanel />}
               {activeView === "settings" && <SettingsPanel />}
               {activeView === "monitor" && <MonitorPanel />}
+              {activeView === "bluetooth" && <BluetoothPanel />}
             </div>
           </ScrollArea>
         </main>

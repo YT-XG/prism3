@@ -19,6 +19,145 @@ export interface AppConfig {
   quickPanelEdge: DockEdge;
   /** 快捷小窗沿吸附边缘的偏移（left/right 为纵向 y，top 为横向 x），由灰条窗口独占写入。 */
   quickPanelY: number | null;
+  /** 是否启用本地文件搜索（自建文件名索引）。 */
+  fileSearch: boolean;
+  /** 文件搜索的索引根目录；空数组表示使用桌面 / 文档 / 下载 / 图片。 */
+  fileSearchRoots: string[];
+  /** 是否在耳机出现时自动连接（开仓取出耳机即连上）。 */
+  bleAutoConnect: boolean;
+  /** 自动连接的耳机地址（`bleDevices` 中选中的那一台）；null 表示未选中。 */
+  bleActiveAddress: string | null;
+  /** 已记住的耳机列表；增删与选中都整份写回配置，由 Rust 侧检测变化后重同步会话。 */
+  bleDevices: BleDeviceEntry[];
+}
+
+/** 打开搜索结果的动作。 */
+export type OpenAction = "open" | "reveal";
+
+/** 文件索引所处阶段（与 Rust 侧 `IndexPhase` 一一对应）。 */
+export type IndexPhase = "idle" | "loading" | "scanning" | "ready" | "error";
+
+/** 与 Rust 侧 `IndexState` 一一对应：命令返回值与 `search:index-state` 事件载荷同构。 */
+export interface FileIndexState {
+  enabled: boolean;
+  phase: IndexPhase;
+  /** 本轮扫描已遍历的条目数。 */
+  scanned: number;
+  /** 索引中的条目数。 */
+  indexed: number;
+  /** 索引建成时间（秒），从未建成时为 null。 */
+  builtAtSecs: number | null;
+  /** 是否有一次刷新正在进行（结果可能略旧）。 */
+  stale: boolean;
+  /** 是否因达到条目上限提前停止。 */
+  truncated: boolean;
+  error: string | null;
+  roots: string[];
+  missingRoots: string[];
+}
+
+/** 与 Rust 侧 `SearchHit` 一一对应。 */
+export interface SearchHit {
+  path: string;
+  name: string;
+  /** 所在目录。 */
+  parent: string;
+  isDir: boolean;
+  size: number;
+  modifiedSecs: number;
+}
+
+/** 与 Rust 侧 `NoiseMode` 一一对应。 */
+export type NoiseMode = "anc" | "normal" | "wind" | "transparency";
+
+/** 与 Rust 侧 `AncGradient` 一一对应：降噪深度分档。 */
+export type AncGradient = "light" | "medium" | "deep";
+
+/** 与 Rust 侧 `EqPreset` 一一对应。 */
+export type EqPreset = "hifi" | "pop" | "rock";
+
+/**
+ * 与 Rust 侧 `BatteryReading` 一一对应；设备报告不可用（0xFF）的字段为 null。
+ *
+ * 充电标志只覆盖左右耳（数据字节 5 / 6）；字节 8 的含义尚未确认，因此没有充电仓字段。
+ */
+export interface BatteryReading {
+  left: number | null;
+  right: number | null;
+  case: number | null;
+  /** 左耳是否正在充电；null 表示未知。 */
+  leftCharging: boolean | null;
+  /** 右耳是否正在充电；null 表示未知。 */
+  rightCharging: boolean | null;
+  /** 读取时间（秒级时间戳）。 */
+  readAtSecs: number;
+}
+
+/**
+ * `ble:state.devices` 的一项——对应 Rust 的 `BleDeviceEntrySerialized`。
+ *
+ * 注意它**不含** `adaptiveAnc`：自适应降噪是**本地记忆**，只存在于配置里，
+ * 快照只在顶层给出「当前设备」的那一份（见 `BleState.adaptiveAnc`）。
+ *
+ * 耳机广播不带名字，`name` 为 null 是正常现象——展示统一交给 `displayDeviceName`。
+ */
+export interface BleDeviceSnapshotEntry {
+  address: string;
+  name: string | null;
+  /** 最后一次连上它的时间（秒级时间戳）；从未连上为 null。 */
+  lastConnectedAt: number | null;
+}
+
+/** 配置项 `bleDevices` 的一项——对应 Rust 的 `BleDeviceEntry`：比快照项多一个本地记忆。 */
+export interface BleDeviceEntry extends BleDeviceSnapshotEntry {
+  /**
+   * 「自适应降噪」的**本地记忆**（每台设备各一份）。
+   *
+   * 设备从不上报这一位（`06/02` 永远读回「固定降噪」，且写后必补读），所以它只能是
+   * 本机记住的偏好——官方 App 同样如此。界面请显示 `BleState.adaptiveAnc`，不要逐条读它。
+   */
+  adaptiveAnc: boolean;
+}
+
+/** 与 Rust 侧扫描结果一一对应：`scan_ble_devices` 的返回项。 */
+export interface BleCandidate {
+  address: string;
+  name: string | null;
+  /** 信号强度（dBm，越接近 0 越强）。 */
+  rssi: number;
+  /**
+   * 厂商数据的十六进制字符串（原样字节，如 `00030001000b016400…`）；用于展示与厂商过滤。
+   *
+   * **不要拿它的尾部当地址**：早年以为末 6 字节等于设备地址，已被真机否证（同一副耳机、
+   * 广播地址不变，而该尾部在 `120203047c0f` 与 `a1020306cafd` 之间跨会话变过）。
+   * 身份只认 `address`。
+   */
+  manufacturerPayload: string;
+  /** 是否已在本机记住的设备列表里。 */
+  known: boolean;
+}
+
+/** 与 Rust 侧 `BleState` 一一对应：命令返回值与 `ble:state` 事件载荷同构。 */
+export interface BleState {
+  phase: "idle" | "scanning" | "connecting" | "ready" | "error";
+  address: string | null;
+  name: string | null;
+  battery: BatteryReading | null;
+  noiseMode: NoiseMode | null;
+  adaptiveAnc: boolean | null;
+  ancGradient: AncGradient | null;
+  eqPreset: EqPreset | null;
+  gameMode: boolean | null;
+  dualDevice: boolean | null;
+  error: string | null;
+  /** 已记住的耳机（配置项 `bleDevices` 的镜像；不含各条的本地记忆，见 `BleDeviceSnapshotEntry`）。 */
+  devices: BleDeviceSnapshotEntry[];
+  /** 自动连接的目标地址（配置项 `bleActiveAddress`）。 */
+  activeAddress: string | null;
+  /** 是否开着「开仓自动连接」（配置项 `bleAutoConnect`）。 */
+  autoConnect: boolean;
+  /** 监听器正在周期性探测耳机是否出现（此时「开仓自动连接」才真正生效）。 */
+  watching: boolean;
 }
 
 export const ipc = {
@@ -49,6 +188,55 @@ export const ipc = {
   getSystemSnapshot: () => invoke<DynamicSnapshot>("get_system_snapshot"),
   /** 不随时间变化的静态信息（硬件型号/OS/主机名），进程启动时采集一次。 */
   getSystemStatics: () => invoke<SystemStatics>("get_system_statics"),
+  /** 查询文件名索引；空关键词返回最近修改的文件。 */
+  searchFiles: (query: string, limit?: number) =>
+    invoke<SearchHit[]>("search_files", { query, limit }),
+  /** 读取索引状态（窗口挂载后兜底拉取；变化由 `search:index-state` 事件广播）。 */
+  getFileIndexState: () => invoke<FileIndexState>("get_file_index_state"),
+  /** 重建索引（立即返回，进度由事件广播）。 */
+  rebuildFileIndex: () => invoke<void>("rebuild_file_index"),
+  /** 取消在途扫描（已建好的索引保留可用）。 */
+  cancelFileIndex: () => invoke<void>("cancel_file_index"),
+  /** 打开 / 在资源管理器中定位一条搜索结果（由 Rust 侧 opener 执行）。 */
+  openSearchResult: (path: string, action: OpenAction) =>
+    invoke<void>("open_search_result", { path, action }),
+  /** 让快捷小窗面板进入「输入聚焦」模式；返回是否真的聚焦成功。 */
+  focusQuickPanelBody: () => invoke<boolean>("focus_quick_panel_body"),
+  /** 退出「输入聚焦」模式并把焦点还给用户原来的应用。 */
+  blurQuickPanelBody: () => invoke<void>("blur_quick_panel_body"),
+  /** 读取耳机状态（窗口挂载后兜底拉取；变化由 `ble:state` 事件广播）。 */
+  getBleState: () => invoke<BleState>("get_ble_state"),
+  /** 扫描一次附近的 BLE 设备（无过滤扫描 + 按地址识别：耳机广播既无名字也无服务 UUID）。 */
+  scanBleDevices: () => invoke<BleCandidate[]>("scan_ble_devices"),
+  /** 连接耳机：设备同一时刻只接受一个 LE 中心，厂商手机 App 占线时失败属正常结果。 */
+  connectEarbuds: () => invoke<void>("connect_earbuds"),
+  /** 断开耳机连接。 */
+  disconnectEarbuds: () => invoke<void>("disconnect_earbuds"),
+  /** 重新读取一轮设备状态（电量与各开关）。 */
+  refreshEarbudState: () => invoke<void>("refresh_earbud_state"),
+  /** 只读取一次电量（比整轮刷新更轻）。 */
+  readEarbudBattery: () => invoke<BatteryReading>("read_earbud_battery"),
+  /** 切换降噪模式。 */
+  setNoiseMode: (mode: NoiseMode) => invoke<void>("set_noise_mode", { mode }),
+  /** 设置降噪梯度；设备侧会顺带重新选中降噪，前端只按推送的 `ble:state` 重绘。 */
+  setAncGradient: (level: AncGradient) => invoke<void>("set_anc_gradient", { level }),
+  /** 开关自适应降噪（降噪段下的子项）。 */
+  setAdaptiveAnc: (enabled: boolean) => invoke<void>("set_adaptive_anc", { enabled }),
+  /** 切换音效预设。 */
+  setEqPreset: (preset: EqPreset) => invoke<void>("set_eq_preset", { preset }),
+  /** 开关游戏模式（低延迟）。 */
+  setGameMode: (enabled: boolean) => invoke<void>("set_game_mode", { enabled }),
+  /** 开关双设备连接。 */
+  setDualDevice: (enabled: boolean) => invoke<void>("set_dual_device", { enabled }),
+  /** 开关「开仓取出耳机时自动连上」；后端权威读改写，不走整份 `set_config`。 */
+  setBleAutoConnect: (enabled: boolean) => invoke<void>("set_ble_auto_connect", { enabled }),
+  /** 把某台设备设为「当前设备」（自动连接的目标）。 */
+  setBleActiveDevice: (address: string) => invoke<void>("set_ble_active_device", { address }),
+  /** 把一台设备加进已记住的列表（后端按地址去重；`name` 允许为 null）。 */
+  addBleDevice: (address: string, name: string | null) =>
+    invoke<void>("add_ble_device", { address, name }),
+  /** 从已记住的列表里移除一台设备。 */
+  removeBleDevice: (address: string) => invoke<void>("remove_ble_device", { address }),
 };
 
 /** 与 Rust 侧 `DiskInfo` 一一对应。 */

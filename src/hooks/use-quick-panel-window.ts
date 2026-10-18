@@ -41,6 +41,10 @@ const SNAP_RADIUS = 72;
 const BODY_HOVER_EVENT = "quick-panel:body-hover";
 /** 面板窗口就绪（挂载 / 热重载后）事件名，与 `use-quick-panel-body.ts` 一致。 */
 const BODY_READY_EVENT = "quick-panel:body-ready";
+/** 面板进入/退出「输入聚焦」模式的事件名：聚焦期间不自动收起。 */
+const BODY_PIN_EVENT = "quick-panel:body-pinned";
+/** 面板主动请求收起（Esc）的事件名：收起动作仍由灰条窗口执行。 */
+const BODY_DISMISS_EVENT = "quick-panel:body-dismiss";
 
 const win = getCurrentWindow();
 
@@ -232,6 +236,11 @@ export function useQuickPanelWindow() {
   /** 灰条 / 面板盒子的悬停状态：两者都不悬停才允许自动收起。 */
   const barHoverRef = useRef(false);
   const bodyHoverRef = useRef(false);
+  /**
+   * 面板是否处于「输入聚焦」模式（用户在搜索框里打字）。
+   * 打字期间鼠标很容易移出面板，此时**必须**暂停自动收起，否则面板会在输入中途消失。
+   */
+  const bodyPinnedRef = useRef(false);
   /** 拖动中待刷新的几何（raf 节流）。 */
   const rafRef = useRef<number | null>(null);
   const pendingRef = useRef<{ bar: Geometry; body: Geometry | null } | null>(null);
@@ -304,6 +313,8 @@ export function useQuickPanelWindow() {
 
     // 先置位再 await：鼠标在灰条上抖动时不会重复展开。
     openRef.current = true;
+    // 新展开的面板一定处于非聚焦态（上一次的 pin 不能带过来）。
+    bodyPinnedRef.current = false;
     try {
       await placeAndShowBody();
     } catch (cause) {
@@ -328,7 +339,11 @@ export function useQuickPanelWindow() {
   const closeBody = useCallback(() => {
     if (!openRef.current) return;
     openRef.current = false;
+    // 收起前先退出「输入聚焦」模式：Rust 侧会把焦点还给用户原来的应用，
+    // 并保证「面板不可见 ⇒ 不可聚焦」这条不变量在所有收起路径上都成立。
+    bodyPinnedRef.current = false;
     clearCollapseTimer();
+    reportFailure("退出面板输入聚焦模式", ipc.blurQuickPanelBody());
     reportFailure("收起快捷小窗面板", ipc.closeQuickPanelBody(edgeRef.current));
 
     // 兜底：窗口被挂起等导致动画事件丢失时强制隐藏，避免残留可点透明窗口。
@@ -340,11 +355,12 @@ export function useQuickPanelWindow() {
   }, [clearCollapseTimer, clearHideBodyTimer]);
 
   const scheduleCollapse = useCallback(() => {
-    if (draggingRef.current || !openRef.current) return;
+    // 输入聚焦期间不自动收起：用户正在打字，鼠标移到别处是常态。
+    if (draggingRef.current || !openRef.current || bodyPinnedRef.current) return;
     clearCollapseTimer();
     collapseTimerRef.current = window.setTimeout(() => {
       collapseTimerRef.current = null;
-      if (barHoverRef.current || bodyHoverRef.current) return;
+      if (barHoverRef.current || bodyHoverRef.current || bodyPinnedRef.current) return;
       closeBody();
     }, COLLAPSE_DELAY);
   }, [clearCollapseTimer, closeBody]);
@@ -426,6 +442,53 @@ export function useQuickPanelWindow() {
       unlisten?.();
     };
   }, [clearCollapseTimer, scheduleCollapse]);
+
+  // 面板的「输入聚焦」状态：聚焦期间暂停自动收起（用户正在打字）。
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+
+    void listen<boolean>(BODY_PIN_EVENT, (event) => {
+      if (!active) return;
+      bodyPinnedRef.current = event.payload;
+      if (event.payload) clearCollapseTimer();
+      else scheduleCollapse();
+    })
+      .then((off) => {
+        if (active) unlisten = off;
+        else off();
+      })
+      .catch((cause) => {
+        void logError(`订阅面板聚焦状态事件失败：${String(cause)}`);
+      });
+
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [clearCollapseTimer, scheduleCollapse]);
+
+  // 面板主动请求收起（Esc）：收起逻辑与兜底定时器仍由灰条窗口统一执行。
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+
+    void listen(BODY_DISMISS_EVENT, () => {
+      if (active) closeBody();
+    })
+      .then((off) => {
+        if (active) unlisten = off;
+        else off();
+      })
+      .catch((cause) => {
+        void logError(`订阅面板收起请求失败：${String(cause)}`);
+      });
+
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [closeBody]);
 
   // 面板窗口就绪（首帧 / 热重载）：把灰条侧的真实状态重推一次，避免状态事件被错过。
   useEffect(() => {

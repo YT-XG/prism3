@@ -30,6 +30,14 @@ serde_json = "1"
 sysinfo = { version = "0.39", default-features = false, features = ["system", "disk", "network"] }
 thiserror = "2"
 log = "0.4"
+# 蓝牙 LE（StarRing Ultra 耳机）：跨平台 BLE 客户端。会话线程自带 current-thread 运行时，
+# 因此 tokio 只需 rt/sync/time/macros，不需要 net / 多线程调度器；tokio-stream 只用来
+# 轮询 btleplug 的通知流（`StreamExt::next`），uuid 用来表达特征 UUID 常量。
+# 三者都落在 btleplug 已有的依赖上，不引入新的 crate。
+btleplug = "0.13.5"
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
+tokio-stream = "0.1"
+uuid = "1"
 
 # Windows 专用：DXGI 枚举显卡（型号 + 专用显存），WMI 查询主板/整机/内存条；
 # WindowsAndMessaging 用于把窗口位置与尺寸合并成一次 SetWindowPos（见 commands.rs）。

@@ -1,7 +1,9 @@
-import { useCallback, useMemo, type CSSProperties } from "react";
+import { useCallback, useMemo, useState, type CSSProperties } from "react";
 
 import type { PanelPage } from "@/components/quick-panel/panel-pager";
 import { PanelPager } from "@/components/quick-panel/panel-pager";
+import { QuickPanelBluetooth } from "@/components/quick-panel/quick-panel-bluetooth";
+import { QuickPanelSearch } from "@/components/quick-panel/quick-panel-search";
 import { useQuickPanelBody, CLIP_BY_EDGE } from "@/hooks/use-quick-panel-body";
 import {
   PANEL_WIDTH,
@@ -13,9 +15,13 @@ import { formatBytes, formatPercent, formatRate, formatUptime } from "@/lib/form
 import type { SystemSnapshot } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
-import { Gauge, Info, MousePointerClick } from "lucide-react";
+import { Bluetooth, Gauge, Info, MousePointerClick, Search } from "lucide-react";
 
 const APP_VERSION = "0.1.0";
+/** 搜索页的页面 id（分页器按 id 记忆停留页，改名会丢记忆）。 */
+const SEARCH_PAGE_ID = "search";
+/** 蓝牙页的页面 id（同上：改名会丢停留页记忆）。 */
+const BLUETOOTH_PAGE_ID = "bluetooth";
 
 /**
  * 快捷小窗面板本体：跑在独立窗口 `quick-panel-body` 中，高度恒为 `PANEL_HEIGHT`。
@@ -33,9 +39,23 @@ const APP_VERSION = "0.1.0";
  * 避免收起后继续轮询。
  */
 export function QuickPanelBody() {
-  const { phase, edge, contentWidth, requestWidth, rootProps, bodyProps } = useQuickPanelBody();
+  const {
+    phase,
+    edge,
+    contentWidth,
+    focusMode,
+    requestFocus,
+    releaseFocus,
+    dismiss,
+    requestWidth,
+    rootProps,
+    bodyProps,
+  } = useQuickPanelBody();
   // 面板只展示当前值、不画趋势图，故关闭历史缓冲，省去每秒的数组克隆。
   const { snapshot } = useSystemMonitor({ enabled: phase === "open", trackHistory: false });
+
+  /** 当前停留的页面 id：搜索页只在被选中且面板展开时才发起查询。 */
+  const [activePageId, setActivePageId] = useState("overview");
 
   const pages: PanelPage[] = useMemo(
     () => [
@@ -46,6 +66,31 @@ export function QuickPanelBody() {
         content: <OverviewPage snapshot={snapshot} />,
       },
       {
+        id: BLUETOOTH_PAGE_ID,
+        label: "蓝牙",
+        icon: Bluetooth,
+        // 用默认页宽：设备列表 + 设备设置两级都在一页内，窄页足够；面板窗口恒为
+        // PANEL_WINDOW_WIDTH 且可见期间不缩放，页宽差异只是盒子自身的 CSS 宽度。
+        content: (
+          <QuickPanelBluetooth active={phase === "open" && activePageId === BLUETOOTH_PAGE_ID} />
+        ),
+      },
+      {
+        id: SEARCH_PAGE_ID,
+        label: "搜索",
+        icon: Search,
+        // 与帮助页同为最大页宽：面板窗口恒为 PANEL_WINDOW_WIDTH，不越界也不会被裁。
+        panelWidth: PANEL_WIDTH_WIDE,
+        content: (
+          <QuickPanelSearch
+            active={phase === "open" && activePageId === SEARCH_PAGE_ID}
+            focused={focusMode}
+            onRequestFocus={requestFocus}
+            onDismiss={dismiss}
+          />
+        ),
+      },
+      {
         id: "help",
         label: "帮助",
         icon: MousePointerClick,
@@ -54,12 +99,17 @@ export function QuickPanelBody() {
       },
       { id: "about", label: "关于", icon: Info, content: <AboutPage /> },
     ],
-    [snapshot],
+    [activePageId, dismiss, focusMode, phase, requestFocus, snapshot],
   );
 
   const handleActiveChange = useCallback(
-    (page: PanelPage) => requestWidth(page.panelWidth ?? PANEL_WIDTH),
-    [requestWidth],
+    (page: PanelPage) => {
+      setActivePageId(page.id);
+      // 离开搜索页就退出输入聚焦模式：否则键盘焦点会留在看不见的输入框上。
+      if (page.id !== SEARCH_PAGE_ID) void releaseFocus();
+      requestWidth(page.panelWidth ?? PANEL_WIDTH);
+    },
+    [releaseFocus, requestWidth],
   );
 
   // 面板盒子自身以宽度过渡加宽 / 收窄，始终贴住灰条一侧：远侧边缘移出或收回，
@@ -256,6 +306,10 @@ const HELP_ITEMS: { keys: string; desc: string }[] = [
   { keys: "底部宫格按钮", desc: "展开全部页面，一键跳转" },
   { keys: "触控板左右滑 / 滚轮", desc: "逐页切换；内容滚到边缘后继续滚也能翻页" },
   { keys: "移开鼠标 1 秒", desc: "展开面板自动收起，只剩小灰条" },
+  {
+    keys: "搜索页点击输入框",
+    desc: "临时接管键盘焦点（面板平时不抢焦点）；打字期间不会自动收起，Esc 退出并把焦点还给原应用",
+  },
 ];
 
 function HelpPage() {
