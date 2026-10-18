@@ -49,7 +49,8 @@ interface QuickPanelBluetoothProps {
 /**
  * 快捷小窗的「蓝牙」页，分两级：
  *
- * - 一级 = 已知设备列表：当前设备标记 + 该设备的实时电量、自动连接开关、逐行移除，
+ * - 一级 = 已知设备列表：已连接标记（绿勾，仅 `phase === "ready"` 时出现）+ 自动连接的目标设备
+ *   （「当前设备」小标，与是否连上无关）+ 该设备的实时电量、自动连接开关、逐行移除，
  *   点击行内正文即可连接 / 切换；点已连接的那一行进入二级。
  * - 二级 = 该设备的功能设置（噪声控制 + ANC 子块 / 音效 / 游戏模式 / 双设备 / 断开），
  *   与主窗口「蓝牙」页同一套控件与取值域，只是排得更紧凑，靠页容器滚动。
@@ -249,10 +250,17 @@ function DeviceRow({
         <span className="flex min-w-0 flex-col gap-0.5">
           <span className="flex min-w-0 items-center gap-1.5 text-xs font-medium">
             <span className="truncate">{name}</span>
-            {isActive && (
+            {/* 绿勾只表示「此刻就连着」（`connected`），不能拿「自动连接的目标」顶替：
+                未连上的目标若也画勾，界面会与标题的「未连接」自相矛盾。目标本身另用文字标出。 */}
+            {connected && (
               <span className="flex shrink-0 items-center text-emerald-600 dark:text-emerald-500">
                 <Check className="size-3" aria-hidden />
-                <span className="sr-only">当前设备</span>
+                <span className="sr-only">已连接</span>
+              </span>
+            )}
+            {isActive && !connected && (
+              <span className="shrink-0 rounded bg-muted-foreground/15 px-1 text-[10px] font-normal text-muted-foreground">
+                当前设备
               </span>
             )}
           </span>
