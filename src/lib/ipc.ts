@@ -221,6 +221,45 @@ export interface PasteOutcome {
   reason: string | null;
 }
 
+/** 自动更新状态（与 Rust 侧 `UpdateStatus` 一一对应）。 */
+export type UpdateStatus =
+  | "idle"
+  | "checking"
+  | "upToDate"
+  | "available"
+  | "downloading"
+  | "paused"
+  | "downloaded"
+  | "error";
+
+/**
+ * 与 Rust 侧 `UpdateSnapshot` 一一对应：命令返回值与 `update:state` 事件载荷同构。
+ *
+ * 更新源是构建期常量（Gitee 锚点 → 第三方服务器 → GitHub 兜底），不读配置；
+ * 开发模式默认不检查、也不安装，联调用 `PRISM3_UPDATE_ANCHOR`（见 `src-tauri/src/updater.rs`）。
+ */
+export interface UpdateState {
+  status: UpdateStatus;
+  /** 当前应用版本（`tauri.conf.json` 的 version）。 */
+  currentVersion: string;
+  /** 目标版本（发现新版本之后才有值）。 */
+  version: string | null;
+  /** 发布说明（清单里的 `notes`）。 */
+  notes: string | null;
+  /** 下载进度 0-100；总长度未知时为 null。 */
+  progress: number | null;
+  downloadedBytes: number;
+  totalBytes: number | null;
+  /** 失败原因（`error` 状态）。 */
+  error: string | null;
+  /** 补充说明（开发模式提示 / 已取消 / 已是最新）。 */
+  message: string | null;
+  /** 已下载安装包的本地路径（供「打开安装包」兜底）。 */
+  installerPath: string | null;
+  /** 安装包下载链接（下载失败时供「下载安装包」兜底）。 */
+  downloadUrl: string | null;
+}
+
 export const ipc = {
   getConfig: () => invoke<AppConfig>("get_config"),
   setConfig: (config: AppConfig) => invoke<void>("set_config", { config }),
@@ -324,6 +363,24 @@ export const ipc = {
   clearClipboardHistory: () => invoke<void>("clear_clipboard_history"),
   /** 立即按保留策略清理过期条目。 */
   pruneClipboardHistory: () => invoke<void>("prune_clipboard_history"),
+  /** 读取自动更新状态（窗口挂载后兜底拉取；变化由 `update:state` 事件广播）。 */
+  getUpdateState: () => invoke<UpdateState>("get_update_state"),
+  /** 检查更新：立即返回当前快照，结果与进度经 `update:state` 广播。 */
+  checkUpdate: () => invoke<UpdateState>("check_update"),
+  /** 重新安装最新版本：跳过版本比较、强制重新下载。 */
+  reinstallLatest: () => invoke<UpdateState>("reinstall_latest"),
+  /** 暂停下载（保留已下载字节，可继续）。 */
+  pauseUpdate: () => invoke<UpdateState>("pause_update"),
+  /** 恢复暂停的下载（Range 续传）。 */
+  resumeUpdate: () => invoke<UpdateState>("resume_update"),
+  /** 取消检查 / 下载。 */
+  cancelUpdate: () => invoke<UpdateState>("cancel_update"),
+  /** 安装已下载的更新并退出应用（安装器静默覆盖安装后自动拉起新版）。 */
+  installUpdate: () => invoke<void>("install_update"),
+  /** 在资源管理器中定位已下载的安装包。 */
+  openUpdateInstaller: () => invoke<void>("open_update_installer"),
+  /** 用系统浏览器打开安装包下载地址。 */
+  openUpdateDownloadUrl: () => invoke<void>("open_update_download_url"),
 };
 
 /** 与 Rust 侧 `DiskInfo` 一一对应。 */

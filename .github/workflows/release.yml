@@ -1,0 +1,286 @@
+# 自动打包发版：打 `v*` tag 时构建 Windows NSIS 安装包，并完成三件事：
+#   1. 发布到 GitHub Release（自包含 latest.json，作客户端兜底）；
+#   2. 上传安装包 + R2 版 latest.json 到第三方服务器（Cloudflare R2）；
+#   3. 把「跳板指针」latest.json 推到 Gitee 锚点仓库，并校验 raw 上的 version。
+#
+# 发版前必须把三处版本号改成与 tag 一致（CI 会校验）：
+#   package.json / src-tauri/Cargo.toml / src-tauri/tauri.conf.json
+#
+# 外部前置（缺配置时对应步骤只跳过、不失败，客户端自动走 GitHub 兜底）：
+#   - Gitee 空仓库（master 分支）+ secrets：GITEE_TOKEN / GITEE_USER / GITEE_ANCHOR_REPO
+#     （GITEE_ANCHOR_REPO 必须与 src-tauri/src/updater.rs 的 GITEE_ANCHOR_REPO 一致）
+#   - R2 + secrets：R2_ACCESS_KEY_ID / R2_ACCESS_KEY_SECRET
+#   - R2 vars：R2_ACCOUNT_ID / R2_BUCKET / R2_KEY_PREFIX / PRISM3_UPDATE_BASE
+#   - Actions 权限：Settings → Actions → General → Workflow permissions = Read and write
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare-release:
+    name: Prepare fresh GitHub release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete existing release for tag (if re-run)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete --repo "${GITHUB_REPOSITORY}" "$GITHUB_REF_NAME" --yes || echo "no existing release (fresh run)"
+      - name: Create fresh release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create --repo "${GITHUB_REPOSITORY}" "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" --notes "Prism3 ${GITHUB_REF_NAME}"
+
+  build:
+    name: Build Windows installer
+    needs: prepare-release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify version matches tag
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          conf="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          cargo="$(grep -m1 '^version = ' src-tauri/Cargo.toml | cut -d'"' -f2)"
+          echo "tag=${version} package.json=${pkg} tauri.conf.json=${conf} Cargo.toml=${cargo}"
+          if [ "$version" != "$pkg" ] || [ "$version" != "$conf" ] || [ "$version" != "$cargo" ]; then
+            echo "::error::版本号不一致：请同时修改 package.json / src-tauri/Cargo.toml / src-tauri/tauri.conf.json 后再打 tag"
+            exit 1
+          fi
+
+      - name: Build (tauri)
+        run: pnpm tauri build
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prism3-windows
+          path: src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+
+  publish:
+    name: Publish release + manifests
+    needs: [prepare-release, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Download installer
+        uses: actions/download-artifact@v4
+        with:
+          name: prism3-windows
+          path: dist-all
+
+      - name: Locate installer
+        id: installer
+        shell: bash
+        run: |
+          exe="$(find dist-all -maxdepth 2 -name '*-setup.exe' | head -n 1)"
+          if [ -z "$exe" ]; then
+            echo "::error::未找到 NSIS 安装包"
+            exit 1
+          fi
+          echo "exe=${exe}" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$exe")" >> "$GITHUB_OUTPUT"
+
+      - name: Generate GitHub manifest (self-contained)
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          node scripts/make-update-manifest.mjs \
+            --base "$base" --version "$version" \
+            --exe "${{ steps.installer.outputs.exe }}" --out latest.json
+
+      - name: Upload installer + manifest to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" \
+            "${{ steps.installer.outputs.exe }}" latest.json --clobber
+
+      # R2 是客户端的主下载通道；清单最后上传，保证客户端不会在二进制到位前看到它。
+      - name: Upload to Cloudflare R2
+        id: r2
+        env:
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_ACCESS_KEY_SECRET: ${{ secrets.R2_ACCESS_KEY_SECRET }}
+          R2_BUCKET: ${{ vars.R2_BUCKET || 'prism3' }}
+          R2_KEY_PREFIX: ${{ vars.R2_KEY_PREFIX || 'prism3' }}
+          PRISM3_UPDATE_BASE: ${{ vars.PRISM3_UPDATE_BASE }}
+        shell: bash
+        run: |
+          if [ -z "$R2_ACCOUNT_ID" ] || [ -z "$R2_ACCESS_KEY_ID" ] || [ -z "$R2_ACCESS_KEY_SECRET" ] || [ -z "$PRISM3_UPDATE_BASE" ]; then
+            echo "R2 / PRISM3_UPDATE_BASE 未配置，跳过 R2 上传（客户端走 Gitee→GitHub 兜底）。"
+            echo "uploaded=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          version="${GITHUB_REF_NAME#v}"
+          node scripts/make-update-manifest.mjs \
+            --base "$PRISM3_UPDATE_BASE" --version "$version" \
+            --exe "${{ steps.installer.outputs.exe }}" --out r2-latest.json
+
+          python3 -m pip install --quiet --break-system-packages boto3 2>/dev/null || python3 -m pip install --quiet boto3
+          python3 - <<'PY'
+          import glob
+          import os
+          import re
+
+          import boto3
+          from botocore.config import Config
+
+          account_id = os.environ["R2_ACCOUNT_ID"]
+          bucket = os.environ["R2_BUCKET"]
+          prefix = os.environ.get("R2_KEY_PREFIX", "prism3").strip("/")
+          current = os.environ["GITHUB_REF_NAME"].lstrip("v")
+
+          endpoint = f"https://{account_id}.r2.cloudflarestorage.com"
+          s3 = boto3.client(
+              "s3",
+              endpoint_url=endpoint,
+              aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+              aws_secret_access_key=os.environ["R2_ACCESS_KEY_SECRET"],
+              region_name="auto",
+              config=Config(signature_version="s3v4"),
+          )
+
+          installers = sorted(glob.glob("dist-all/*-setup.exe"))
+          if not installers:
+              raise SystemExit("no installer found in dist-all")
+          installer = installers[0]
+          name = os.path.basename(installer)
+
+          s3.upload_file(installer, bucket, f"{prefix}/{name}")
+          print(f"uploaded {prefix}/{name}")
+          # 清单最后上传：保证客户端看到清单时二进制一定已经在了。
+          s3.upload_file("r2-latest.json", bucket, f"{prefix}/latest.json")
+          print(f"uploaded {prefix}/latest.json")
+
+          # 只保留当前版本：删掉其它版本号的安装包（latest.json 不参与版本清理）。
+          if re.fullmatch(r"\d+\.\d+\.\d+", current):
+              version_re = re.compile(r"^Prism3[_-](\d+\.\d+\.\d+).*?\.(exe|blockmap|dmg|zip)$")
+              deleted = 0
+              paginator = s3.get_paginator("list_objects_v2")
+              for page in paginator.paginate(Bucket=bucket, Prefix=f"{prefix}/"):
+                  for obj in page.get("Contents", []):
+                      key = obj["Key"]
+                      match = version_re.match(key.rsplit("/", 1)[-1])
+                      if match and match.group(1) != current:
+                          s3.delete_object(Bucket=bucket, Key=key)
+                          deleted += 1
+                          print(f"deleted {key}")
+              print(f"R2 cleanup: keep v{current}, deleted {deleted} old object(s)")
+          else:
+              print("非 semver tag，跳过 R2 旧版本清理")
+          PY
+          echo "uploaded=true" >> "$GITHUB_OUTPUT"
+
+      # Gitee 只放「指针」：redirect 指向 R2 清单；R2 没配时回落 GitHub 自包含清单。
+      - name: Push Gitee anchor (redirect pointer)
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_USER: ${{ secrets.GITEE_USER }}
+          GITEE_ANCHOR_REPO: ${{ secrets.GITEE_ANCHOR_REPO }}
+          PRISM3_UPDATE_BASE: ${{ vars.PRISM3_UPDATE_BASE }}
+          R2_UPLOADED: ${{ steps.r2.outputs.uploaded }}
+        shell: bash
+        run: |
+          if [ -z "$GITEE_TOKEN" ] || [ -z "$GITEE_USER" ] || [ -z "$GITEE_ANCHOR_REPO" ]; then
+            echo "Gitee anchor secrets 未配置，跳过 Gitee 推送。"
+            exit 0
+          fi
+
+          version="${GITHUB_REF_NAME#v}"
+          if [ "$R2_UPLOADED" = "true" ] && [ -n "$PRISM3_UPDATE_BASE" ]; then
+            redirect="$PRISM3_UPDATE_BASE/latest.json"
+          else
+            redirect="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json"
+          fi
+          echo "Gitee redirect -> ${redirect}"
+
+          node scripts/make-update-manifest.mjs \
+            --version "$version" --redirect "$redirect" --out gitee-latest.json
+
+          mkdir -p gitee-anchor
+          cp gitee-latest.json gitee-anchor/latest.json
+          cd gitee-anchor
+          git init -q
+          git config user.email "action@users.noreply.github.com"
+          git config user.name "GitHub Actions"
+          git add latest.json
+          git commit -qm "release ${GITHUB_REF_NAME}"
+          git branch -M master
+          git push -f "https://${GITEE_USER}:${GITEE_TOKEN}@gitee.com/${GITEE_ANCHOR_REPO}.git" master
+
+      - name: Verify Gitee anchor reachable
+        env:
+          GITEE_ANCHOR_REPO: ${{ secrets.GITEE_ANCHOR_REPO }}
+        shell: bash
+        run: |
+          if [ -z "$GITEE_ANCHOR_REPO" ]; then
+            echo "GITEE_ANCHOR_REPO 未配置，跳过校验。"
+            exit 0
+          fi
+
+          version="${GITHUB_REF_NAME#v}"
+          url="https://gitee.com/${GITEE_ANCHOR_REPO}/raw/master/latest.json"
+          for attempt in 1 2 3 4 5; do
+            body="$(curl -fsSL --max-time 30 "$url" || true)"
+            remote="$(printf '%s' "$body" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("version",""))' 2>/dev/null || true)"
+            echo "attempt ${attempt}: Gitee version=${remote}, expected=${version}"
+            if [ "$remote" = "$version" ]; then
+              echo "Gitee 锚点校验通过。"
+              exit 0
+            fi
+            sleep 10
+          done
+
+          echo "::error::Gitee 锚点版本不匹配（检查 GITEE_TOKEN/GITEE_USER/GITEE_ANCHOR_REPO，或 raw 缓存尚未刷新）"
+          exit 1

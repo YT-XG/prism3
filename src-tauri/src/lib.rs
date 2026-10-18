@@ -10,6 +10,7 @@ mod monitor;
 mod paste;
 mod status;
 mod tray;
+mod updater;
 
 use std::sync::RwLock;
 
@@ -104,6 +105,11 @@ pub fn run() {
 
             // 开机自启：默认配置即开，这里把系统启动项对齐到配置（开发模式跳过）。
             autostart::sync(&handle, &initial_config);
+
+            // 自动更新：托管状态 + 发布版启动 3s 后静默检查一次。
+            // 开发模式默认不检查、也不执行安装；联调时设 PRISM3_UPDATE_ANCHOR（见 updater.rs）。
+            updater::init(&handle);
+            updater::schedule_startup_check(&handle);
 
             tray::init(app)?;
 
@@ -230,7 +236,16 @@ pub fn run() {
             commands::delete_clipboard_entry,
             commands::set_clipboard_pinned,
             commands::clear_clipboard_history,
-            commands::prune_clipboard_history
+            commands::prune_clipboard_history,
+            commands::get_update_state,
+            commands::check_update,
+            commands::reinstall_latest,
+            commands::pause_update,
+            commands::resume_update,
+            commands::cancel_update,
+            commands::install_update,
+            commands::open_update_installer,
+            commands::open_update_download_url
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

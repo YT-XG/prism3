@@ -55,6 +55,7 @@ cargo fmt / cargo clippy
 | --- | --- |
 | 配置文件 | `%APPDATA%\com.prism3.desktop\config.json` |
 | 日志文件 | `%LOCALAPPDATA%\com.prism3.desktop\logs\prism3.log` |
+| 更新暂存 | `%LOCALAPPDATA%\com.prism3.desktop\cache\update-staging\<version>\`（下载中的 `.part` 与校验通过的 `*-setup.exe`） |
 
 日志超过 5 MB 会轮转，历史文件带日期后缀保留（`RotationStrategy::KeepAll`）。
 默认级别在 [lib.rs](src-tauri/src/lib.rs) 的 `tauri_plugin_log::Builder` 里配置：全局 `Info`，本应用模块 `prism3_lib` 为 `Debug`。
@@ -73,6 +74,7 @@ src-tauri/src/          Rust 后端
   error.rs              统一错误类型 AppError
   config.rs             AppConfig 持久化
   tray.rs               系统托盘
+  updater.rs            自动更新：清单 / 下载 / SHA-256 / NSIS 静默安装
   commands.rs           暴露给前端的 #[tauri::command]
 ```
 
@@ -92,6 +94,28 @@ src-tauri/src/          Rust 后端
 - **系统托盘**：显示主窗口 / 退出，左键单击唤起窗口。
 - **窗口状态记忆**：`tauri-plugin-window-state` 记住位置与尺寸。
 - **单实例保护**：重复启动时唤起已有窗口。
+- **自动更新**：发布版启动 3s 后静默检查；Gitee 锚点只放「跳板指针」，真正的清单与安装包在第三方服务器（Cloudflare R2），下载后经 SHA-256 校验，用 NSIS `/S /UPDATE /R` 静默覆盖安装并自动重启；GitHub Release 的同名清单作兜底。开发模式不检查、也不安装（联调设 `PRISM3_UPDATE_ANCHOR`）。原理、清单格式、发版与排错见 [docs/自动更新.md](../docs/自动更新.md)。
+
+## 发版（自动更新）
+
+1. 三处版本号一起改：`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`。
+2. 提交后打 tag：
+
+   ```powershell
+   git add -A
+   git commit -m "chore: v0.2.0"
+   git tag v0.2.0
+   git push origin main --tags
+   ```
+
+3. GitHub Actions（[.github/workflows/release.yml](.github/workflows/release.yml)）会构建 NSIS 安装包，
+   发布到 GitHub Release，上传到 R2，并把跳板指针推到 Gitee；详细的前置配置（secrets / variables）、
+   清单格式与验收步骤见 [docs/自动更新.md](../docs/自动更新.md)。
+4. 本地生成清单（自托管 / 联调）：
+
+   ```powershell
+   pnpm manifest -- --base https://cdn.example.com/prism3 --version 0.2.0
+   ```
 
 ## 替换应用图标
 

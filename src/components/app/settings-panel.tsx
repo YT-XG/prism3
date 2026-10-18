@@ -4,6 +4,7 @@ import { info } from "@tauri-apps/plugin-log";
 import { ClipboardList, FolderSearch, Monitor, Moon, RotateCcw, Sun } from "lucide-react";
 import { toast } from "sonner";
 
+import { UpdateCard } from "@/components/app/update-card";
 import { ClipboardStatus } from "@/components/clipboard/clipboard-status";
 import { SearchIndexStatus } from "@/components/search/search-status";
 import { Button } from "@/components/ui/button";
@@ -265,6 +266,8 @@ export function SettingsPanel() {
           )}
         </CardContent>
       </Card>
+
+      <UpdateCard />
 
       <Card>
         <CardHeader>

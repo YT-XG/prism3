@@ -23,7 +23,10 @@ fn is_dev() -> bool {
 /// 依配置同步系统开机自启项（幂等；开发模式下除日志外什么都不做）。
 pub fn sync(app: &AppHandle, config: &AppConfig) {
     if is_dev() {
-        log::debug!("开发模式：跳过开机自启同步（期望 enabled={}）", config.auto_start);
+        log::debug!(
+            "开发模式：跳过开机自启同步（期望 enabled={}）",
+            config.auto_start
+        );
         return;
     }
 

@@ -46,6 +46,17 @@ uuid = "1"
 arboard = "3.7"
 image = "0.25"
 
+# 自动更新（见 updater.rs）：阻塞式 HTTP 下载安装包，Windows 上 native-tls 走系统
+# schannel（不引入 OpenSSL；也不启用 reqwest 默认的 rustls/aws-lc-rs，避免 NASM/CMake）。
+# `sha2` 校验安装包，`semver` 比较版本（semver 本来就是 tauri-utils 的传递依赖）。
+reqwest = { version = "0.13", default-features = false, features = [
+    "native-tls",
+    "blocking",
+    "system-proxy",
+] }
+sha2 = "0.10"
+semver = "1"
+
 # Windows 专用：DXGI 枚举显卡（型号 + 专用显存），WMI 查询主板/整机/内存条；
 # WindowsAndMessaging 用于把窗口位置与尺寸合并成一次 SetWindowPos（见 commands.rs）；
 # DataExchange 读剪贴板序列号/格式/数据块、开合剪贴板，Memory 锁住那块 HGLOBAL

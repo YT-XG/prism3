@@ -81,6 +81,7 @@ function HomeView() {
             <li>统一错误处理：thiserror + IPC 可序列化</li>
             <li>自定义标题栏与系统托盘</li>
             <li>窗口状态记忆与单实例保护</li>
+            <li>自动更新：Gitee 跳板 + 第三方服务器 + SHA-256</li>
           </ul>
         </CardContent>
       </Card>

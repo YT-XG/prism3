@@ -14,6 +14,7 @@ use crate::error::{AppError, AppResult};
 use crate::file_index::{self, FileIndexState, IndexState, SearchHit};
 use crate::paste::{self, PasteOutcome};
 use crate::status::{self, AppStatus, AppStatusState};
+use crate::updater::{self, UpdateSnapshot};
 
 /// 快捷小窗**灰条**窗口标签。灰条独占交互与状态。
 const QUICK_PANEL_LABEL: &str = "quick-panel";
@@ -897,6 +898,63 @@ pub fn clear_clipboard_history(app: AppHandle, state: State<'_, ClipboardState>)
 #[tauri::command]
 pub fn prune_clipboard_history(app: AppHandle, state: State<'_, ClipboardState>) -> AppResult<()> {
     state.prune(&app)
+}
+
+// ------------------------------ 自动更新 ------------------------------
+
+/// 读取更新状态（窗口挂载时兜底拉取：事件不缓存）。
+#[tauri::command]
+pub fn get_update_state(app: AppHandle) -> UpdateSnapshot {
+    updater::snapshot(&app)
+}
+
+/// 检查更新：立即返回「当前快照」，真正的网络请求与下载在后台线程里，
+/// 结果经 `update:state` 事件广播（与 `ble:state` / `clipboard:state` 同一模式）。
+#[tauri::command]
+pub fn check_update(app: AppHandle) -> UpdateSnapshot {
+    updater::check(&app, false)
+}
+
+/// 重新安装最新版本：跳过版本比较、强制删除已下载的包后重新下载。
+#[tauri::command]
+pub fn reinstall_latest(app: AppHandle) -> UpdateSnapshot {
+    updater::check(&app, true)
+}
+
+/// 暂停下载（保留 `.part` 与已下载字节，可 `resume_update` 续传）。
+#[tauri::command]
+pub fn pause_update(app: AppHandle) -> UpdateSnapshot {
+    updater::pause(&app)
+}
+
+/// 恢复暂停的下载（Range 续传；服务器不支持 Range 时从头下）。
+#[tauri::command]
+pub fn resume_update(app: AppHandle) -> UpdateSnapshot {
+    updater::resume(&app)
+}
+
+/// 取消在途检查/下载：作废本次结果、删除 `.part`，回到可重试状态。
+#[tauri::command]
+pub fn cancel_update(app: AppHandle) -> UpdateSnapshot {
+    updater::cancel(&app)
+}
+
+/// 安装已下载的更新并退出应用（NSIS `/S /UPDATE /R`，成功后安装器自动拉起新版）。
+#[tauri::command]
+pub fn install_update(app: AppHandle) -> AppResult<()> {
+    updater::install(&app)
+}
+
+/// 在资源管理器中定位已下载的安装包（安装失败兜底）。
+#[tauri::command]
+pub fn open_update_installer(app: AppHandle) -> AppResult<()> {
+    updater::open_installer_folder(&app)
+}
+
+/// 用系统浏览器打开安装包下载地址（下载失败兜底）。
+#[tauri::command]
+pub fn open_update_download_url(app: AppHandle) -> AppResult<()> {
+    updater::open_download_url(&app)
 }
 
 fn emit_quick_panel_state(app: &AppHandle, config: &AppConfig) {
