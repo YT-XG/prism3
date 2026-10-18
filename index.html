@@ -4,10 +4,131 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Prism3</title>
+    <script>
+      // 主题必须在任何样式和模块之前定下来：配置是异步读的，这里用上次写入的偏好
+      // （"system" | "light" | "dark"，由 ThemeProvider 维护）先选对底色，
+      // 否则暗色主题下会先闪一帧白。
+      try {
+        var preference = localStorage.getItem("prism3:theme");
+        var dark =
+          preference === "dark" ||
+          (preference !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+        if (dark) document.documentElement.classList.add("dark");
+        document.documentElement.style.colorScheme = dark ? "dark" : "light";
+      } catch (error) {
+        // localStorage / matchMedia 不可用时按亮色走，不影响应用本身。
+      }
+    </script>
+    <style>
+      /* 启动占位：页面首帧之前先画出与主题一致的底色和骨架。
+         开发模式下 Vite 要现场编译十几个模块（本机实测 3 秒以上），
+         生产模式下窗口也在 HTML 到达前是空白的 —— 两种场景都靠它遮住。 */
+      :root {
+        --boot-bg: #ffffff;
+        --boot-fg: #18181b;
+        --boot-muted: #71717a;
+        --boot-track: rgba(24, 24, 27, 0.08);
+      }
+      html.dark {
+        --boot-bg: #09090b;
+        --boot-fg: #fafafa;
+        --boot-muted: #a1a1aa;
+        --boot-track: rgba(250, 250, 250, 0.14);
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--boot-bg);
+      }
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        background: var(--boot-bg);
+        color: var(--boot-fg);
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        pointer-events: none;
+        transition: opacity 180ms ease-out;
+      }
+      #boot-splash.is-hidden {
+        opacity: 0;
+      }
+      #boot-splash .boot-mark {
+        display: flex;
+        color: var(--boot-fg);
+        opacity: 0.9;
+      }
+      #boot-splash .boot-name {
+        font-size: 13px;
+        font-weight: 500;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--boot-muted);
+      }
+      #boot-splash .boot-bar {
+        position: relative;
+        width: 92px;
+        height: 2px;
+        margin-top: 2px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: var(--boot-track);
+      }
+      #boot-splash .boot-bar > i {
+        display: block;
+        width: 38%;
+        height: 100%;
+        border-radius: 999px;
+        background: var(--boot-fg);
+        animation: boot-slide 1.15s ease-in-out infinite;
+      }
+      @keyframes boot-slide {
+        from {
+          transform: translateX(-110%);
+        }
+        to {
+          transform: translateX(260%);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #boot-splash .boot-bar > i {
+          width: 100%;
+          opacity: 0.45;
+          animation: none;
+        }
+      }
+    </style>
   </head>
 
   <body>
     <div id="root"></div>
+
+    <div id="boot-splash" role="presentation" aria-hidden="true">
+      <span class="boot-mark">
+        <svg
+          width="30"
+          height="30"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.4"
+          stroke-linejoin="round"
+        >
+          <path d="M12 3.2 21 20.2H3L12 3.2Z" />
+          <path d="M12 3.2v17" opacity="0.45" />
+          <path d="m7.6 12.6 8.8 0" opacity="0.45" />
+        </svg>
+      </span>
+      <span class="boot-name">Prism3</span>
+      <span class="boot-bar"><i></i></span>
+    </div>
+
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

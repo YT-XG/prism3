@@ -12,8 +12,8 @@ use std::collections::BinaryHeap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::RwLock;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -38,6 +38,17 @@ const MAX_LOAD_ENTRIES: u32 = 4_000_000;
 pub const MAX_ENTRIES: usize = 600_000;
 /// 遍历深度上限：与「跳过重解析点」一起杜绝联接点成环。
 const MAX_DEPTH: u32 = 32;
+
+/// 落盘索引的有效期：未过期就**不重扫**，直接复用。
+///
+/// 索引只用来「按文件名找东西」，几分钟的延迟没有影响；而全量重扫（36 万条目
+/// 实测 1–4 秒）每次启动都跑一遍纯属浪费，还会和 WebView2 的首帧抢磁盘。
+/// 过期后由启动流程重建，用户也可以在搜索页 / 设置里手动重建。
+pub const INDEX_TTL_SECS: u64 = 6 * 60 * 60;
+
+/// 扫描线程数：目录枚举是同步 I/O，实测 4 线程约为单线程的 3 倍
+/// （36 万条目：3.8s → 1.2s），再加线程收益就很小了。
+const SCAN_THREADS: usize = 4;
 
 /// 扫描时跳过的目录名（按最后一段名字匹配，不分大小写）。
 ///
@@ -693,16 +704,23 @@ pub fn rebuild_blocking(
     emit_state(app, &state.snapshot());
 
     let started = Instant::now();
-    let mut last_emit = Instant::now();
-    let outcome = walk(&roots, MAX_ENTRIES, &mut |scanned, indexed| {
+    let last_emit = Mutex::new(Instant::now());
+    let outcome = walk(&roots, MAX_ENTRIES, SCAN_THREADS, &|scanned, indexed| {
         if state.is_stale(generation) {
             return false;
         }
-        let due = last_emit.elapsed() >= PROGRESS_INTERVAL
-            || indexed % PROGRESS_EVERY_ENTRIES == 0
+        // 多个扫描线程会并发调用：只用一次短暂的锁读「上次广播时间」，绝不在锁内广播。
+        let due = {
+            let last = last_emit
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            last.elapsed() >= PROGRESS_INTERVAL
+        } || indexed % PROGRESS_EVERY_ENTRIES == 0
             || scanned % PROGRESS_EVERY_ENTRIES == 0;
         if due {
-            last_emit = Instant::now();
+            *last_emit
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Instant::now();
             if let Some(next) = state.report_progress(generation, scanned, indexed) {
                 emit_state(app, &next);
             }
@@ -756,83 +774,221 @@ struct WalkOutcome {
     truncated: bool,
 }
 
-/// 遍历若干根目录收集条目。
+/// 并行遍历的共享状态：待扫目录栈 + 正在处理目录的线程数 + 全局计数。
+///
+/// 「目录」是天然的任务粒度：一个目录一次 `read_dir`，互相独立，
+/// 不需要把单个目录的条目再切分（那样反而要合并更多小 Vec）。
+struct WalkShared {
+    queue: Mutex<Vec<(PathBuf, u32)>>,
+    wake: Condvar,
+    /// 正在处理目录的线程数：归零且队列为空 ⇒ 扫描结束。
+    busy: AtomicUsize,
+    scanned: AtomicU64,
+    /// 已分配的条目槽位（并发下可能略超上限，只有 `slot < max_entries` 的会入索引）。
+    indexed: AtomicUsize,
+    truncated: AtomicBool,
+    /// 被 `tick` 主动中止（取消 / 代号过期）。
+    cancelled: AtomicBool,
+    /// 任一原因要求所有线程尽快收工。
+    stop: AtomicBool,
+}
+
+/// 遍历若干根目录收集条目（`threads` 个工作线程）。
 ///
 /// `tick(已遍历, 已索引)` 返回 `false` 表示中止（取消 / 过期），此时整体返回 `None`。
+/// `tick` 必须是 `Sync` 的：它会被多个扫描线程并发调用。
 fn walk(
     roots: &[PathBuf],
     max_entries: usize,
-    tick: &mut dyn FnMut(u64, u64) -> bool,
+    threads: usize,
+    tick: &(dyn Fn(u64, u64) -> bool + Sync),
 ) -> Option<WalkOutcome> {
-    let mut entries: Vec<Entry> = Vec::new();
-    let mut scanned: u64 = 0;
-    let mut truncated = false;
-    let mut stack: Vec<(PathBuf, u32)> = roots.iter().rev().map(|root| (root.clone(), 0)).collect();
+    let shared = Arc::new(WalkShared {
+        queue: Mutex::new(roots.iter().rev().map(|root| (root.clone(), 0)).collect()),
+        wake: Condvar::new(),
+        busy: AtomicUsize::new(0),
+        scanned: AtomicU64::new(0),
+        indexed: AtomicUsize::new(0),
+        truncated: AtomicBool::new(false),
+        cancelled: AtomicBool::new(false),
+        stop: AtomicBool::new(false),
+    });
 
-    while let Some((dir, depth)) = stack.pop() {
-        let reader = match std::fs::read_dir(&dir) {
-            Ok(reader) => reader,
+    let mut locals: Vec<Vec<Entry>> = Vec::with_capacity(threads.max(1));
+    std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(threads.max(1));
+        for _ in 0..threads.max(1) {
+            let shared = Arc::clone(&shared);
+            handles.push(scope.spawn(move || {
+                let mut local = Vec::new();
+                // 工作线程 panic 时（release 下是 abort，dev 下会 unwind）要主动唤醒
+                // 其他等待目录的线程，否则它们会在空队列上一直等下去。
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    scan_worker(&shared, max_entries, tick, &mut local);
+                }));
+                if result.is_err() {
+                    shared.stop.store(true, Ordering::SeqCst);
+                    shared.wake.notify_all();
+                }
+                local
+            }));
+        }
+        for handle in handles {
+            match handle.join() {
+                Ok(local) => locals.push(local),
+                // 某个工作线程 panic：让其他线程收工，避免在空队列上等到超时。
+                Err(_) => shared.stop.store(true, Ordering::SeqCst),
+            }
+        }
+    });
+
+    if shared.cancelled.load(Ordering::SeqCst) {
+        return None;
+    }
+
+    let mut entries = Vec::with_capacity(shared.indexed.load(Ordering::SeqCst).min(max_entries));
+    for local in locals {
+        entries.extend(local);
+    }
+    Some(WalkOutcome {
+        entries,
+        scanned: shared.scanned.load(Ordering::SeqCst),
+        truncated: shared.truncated.load(Ordering::SeqCst),
+    })
+}
+
+/// 一个工作线程：不断领取目录，扫完再领，直到队列空且没有别的线程还在处理目录。
+fn scan_worker(
+    shared: &WalkShared,
+    max_entries: usize,
+    tick: &(dyn Fn(u64, u64) -> bool + Sync),
+    local: &mut Vec<Entry>,
+) {
+    lower_thread_priority();
+
+    while !shared.stop.load(Ordering::SeqCst) {
+        let Some((dir, depth)) = take_dir(shared) else {
+            break;
+        };
+
+        match std::fs::read_dir(&dir) {
+            Ok(reader) => {
+                for item in reader {
+                    if shared.stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let Ok(item) = item else { continue };
+                    let Ok(file_type) = item.file_type() else {
+                        continue;
+                    };
+                    // 符号链接直接跳过（重解析点另有属性判断，两者都覆盖才稳）。
+                    if file_type.is_symlink() {
+                        continue;
+                    }
+                    let Ok(metadata) = item.metadata() else {
+                        continue;
+                    };
+                    if is_reparse_point(&metadata) {
+                        continue;
+                    }
+
+                    let path = item.path();
+                    let is_dir = file_type.is_dir();
+                    if is_dir {
+                        let name = path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        if is_skipped_dir(&name) {
+                            continue;
+                        }
+                        if depth + 1 < MAX_DEPTH {
+                            push_dir(shared, path.clone(), depth + 1);
+                        }
+                    }
+
+                    let scanned = shared.scanned.fetch_add(1, Ordering::SeqCst) + 1;
+                    let slot = shared.indexed.fetch_add(1, Ordering::SeqCst);
+                    if slot >= max_entries {
+                        shared.truncated.store(true, Ordering::SeqCst);
+                        shared.stop.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                    local.push(Entry::from_path(path, &metadata, is_dir));
+
+                    if !tick(scanned, (slot + 1) as u64) {
+                        shared.cancelled.store(true, Ordering::SeqCst);
+                        shared.stop.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                }
+            }
             Err(err) => {
                 // 无权限 / 目录被删：跳过而不是中断整轮扫描。
                 log::debug!("读取目录失败，已跳过：{}（{err}）", dir.display());
-                continue;
-            }
-        };
-
-        for item in reader {
-            let Ok(item) = item else { continue };
-            let Ok(file_type) = item.file_type() else {
-                continue;
-            };
-            // 符号链接直接跳过（重解析点另有属性判断，两者都覆盖才稳）。
-            if file_type.is_symlink() {
-                continue;
-            }
-            let Ok(metadata) = item.metadata() else {
-                continue;
-            };
-            if is_reparse_point(&metadata) {
-                continue;
-            }
-
-            let path = item.path();
-            let is_dir = file_type.is_dir();
-            if is_dir {
-                let name = path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                if is_skipped_dir(&name) {
-                    continue;
-                }
-                if depth + 1 < MAX_DEPTH {
-                    stack.push((path.clone(), depth + 1));
-                }
-            }
-
-            scanned += 1;
-            if entries.len() >= max_entries {
-                truncated = true;
-                break;
-            }
-            entries.push(Entry::from_path(path, &metadata, is_dir));
-
-            if !tick(scanned, entries.len() as u64) {
-                return None;
             }
         }
 
-        if truncated {
-            break;
+        finish_dir(shared);
+    }
+}
+
+/// 领取一个待扫目录；`None` 表示队列空且没有线程还在处理目录。
+fn take_dir(shared: &WalkShared) -> Option<(PathBuf, u32)> {
+    let mut queue = shared
+        .queue
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    loop {
+        if shared.stop.load(Ordering::SeqCst) {
+            return None;
+        }
+        if let Some(task) = queue.pop() {
+            shared.busy.fetch_add(1, Ordering::SeqCst);
+            return Some(task);
+        }
+        if shared.busy.load(Ordering::SeqCst) == 0 {
+            return None;
+        }
+        // 还有线程在扫目录：它可能马上压入子目录，短暂等一下再检查。
+        let (next, _) = shared
+            .wake
+            .wait_timeout(queue, Duration::from_millis(2))
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        queue = next;
+    }
+}
+
+fn push_dir(shared: &WalkShared, dir: PathBuf, depth: u32) {
+    shared
+        .queue
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push((dir, depth));
+    shared.wake.notify_one();
+}
+
+fn finish_dir(shared: &WalkShared) {
+    shared.busy.fetch_sub(1, Ordering::SeqCst);
+    shared.wake.notify_all();
+}
+
+/// 扫描线程降到「低于正常」优先级：索引晚几百毫秒无所谓，首帧更重要。
+#[cfg(windows)]
+fn lower_thread_priority() {
+    use windows::Win32::System::Threading::{
+        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+    };
+    // SAFETY: 只调整当前线程的优先级，不传递指针或所有权。
+    unsafe {
+        if let Err(err) = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL) {
+            log::debug!("降低索引扫描线程优先级失败：{err}");
         }
     }
-
-    Some(WalkOutcome {
-        entries,
-        scanned,
-        truncated,
-    })
 }
+
+#[cfg(not(windows))]
+fn lower_thread_priority() {}
 
 /// 目录名是否在跳过名单里（不分大小写）。
 fn is_skipped_dir(name: &str) -> bool {
@@ -925,9 +1081,8 @@ fn read_text(reader: &mut impl Read) -> AppResult<String> {
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-fn read_index_file(path: &Path) -> AppResult<(Vec<PathBuf>, Vec<Entry>)> {
-    let mut reader = BufReader::new(File::open(path)?);
-
+/// 只读索引文件的头部（魔数 + 索引根 + 条目数），不碰条目正文。
+fn read_index_header(reader: &mut impl Read) -> AppResult<(Vec<PathBuf>, u32)> {
     let mut magic = [0u8; 6];
     reader.read_exact(&mut magic)?;
     if &magic != INDEX_MAGIC {
@@ -942,7 +1097,7 @@ fn read_index_file(path: &Path) -> AppResult<(Vec<PathBuf>, Vec<Entry>)> {
     }
     let mut roots = Vec::with_capacity(root_count as usize);
     for _ in 0..root_count {
-        roots.push(PathBuf::from(read_text(&mut reader)?));
+        roots.push(PathBuf::from(read_text(reader)?));
     }
 
     reader.read_exact(&mut buffer)?;
@@ -950,6 +1105,76 @@ fn read_index_file(path: &Path) -> AppResult<(Vec<PathBuf>, Vec<Entry>)> {
     if entry_count > MAX_LOAD_ENTRIES {
         return Err(AppError::Other(format!("索引条目数量异常：{entry_count}")));
     }
+    Ok((roots, entry_count))
+}
+
+/// 落盘索引的头部信息（不含条目），用来判断「能不能直接复用」。
+#[derive(Debug, Clone)]
+pub struct DiskIndexMeta {
+    pub roots: Vec<PathBuf>,
+    pub entry_count: u32,
+    /// 索引文件的修改时间，即上一轮构建完成的时间（秒）。
+    pub built_at_secs: Option<u64>,
+}
+
+/// 读取落盘索引的头部；文件不存在或损坏返回 `None`。
+pub fn read_disk_meta(app: &AppHandle) -> Option<DiskIndexMeta> {
+    let path = index_path(app).ok()?;
+    if !path.is_file() {
+        return None;
+    }
+    let mut reader = BufReader::new(File::open(&path).ok()?);
+    let (roots, entry_count) = read_index_header(&mut reader).ok()?;
+    let built_at_secs = std::fs::metadata(&path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|since| since.as_secs());
+    Some(DiskIndexMeta {
+        roots,
+        entry_count,
+        built_at_secs,
+    })
+}
+
+/// 落盘索引是否可以直接复用（未过期且索引根没变）。
+pub fn disk_index_is_reusable(app: &AppHandle, roots: &[PathBuf]) -> bool {
+    read_disk_meta(app)
+        .map(|meta| is_reusable(&meta, roots, now_secs()))
+        .unwrap_or(false)
+}
+
+/// 复用策略：有内容、未超过 `INDEX_TTL_SECS`、且索引根与本次解析结果一致。
+fn is_reusable(meta: &DiskIndexMeta, roots: &[PathBuf], now_secs: u64) -> bool {
+    if meta.entry_count == 0 {
+        return false;
+    }
+    let Some(built_at) = meta.built_at_secs else {
+        return false;
+    };
+    if now_secs.saturating_sub(built_at) > INDEX_TTL_SECS {
+        return false;
+    }
+    same_roots(&meta.roots, roots)
+}
+
+/// 索引根是否等价（Windows 上路径大小写不敏感）。
+fn same_roots(left: &[PathBuf], right: &[PathBuf]) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(left, right)| {
+            let left = left.to_string_lossy();
+            let right = right.to_string_lossy();
+            if cfg!(windows) {
+                left.eq_ignore_ascii_case(&right)
+            } else {
+                left == right
+            }
+        })
+}
+
+fn read_index_file(path: &Path) -> AppResult<(Vec<PathBuf>, Vec<Entry>)> {
+    let mut reader = BufReader::new(File::open(path)?);
+    let (roots, entry_count) = read_index_header(&mut reader)?;
 
     let mut entries = Vec::with_capacity(entry_count as usize);
     for _ in 0..entry_count {
@@ -1228,11 +1453,16 @@ mod tests {
         std::fs::write(root.join("sub").join("b.txt"), b"b").expect("写文件失败");
         std::fs::write(root.join("node_modules").join("c.txt"), b"c").expect("写文件失败");
 
-        let mut ticks = 0u64;
-        let outcome = walk(std::slice::from_ref(&root), MAX_ENTRIES, &mut |_, _| {
-            ticks += 1;
-            true
-        })
+        let ticks = AtomicU64::new(0);
+        let outcome = walk(
+            std::slice::from_ref(&root),
+            MAX_ENTRIES,
+            SCAN_THREADS,
+            &|_, _| {
+                ticks.fetch_add(1, Ordering::SeqCst);
+                true
+            },
+        )
         .expect("遍历不应被中止");
 
         let names: Vec<String> = outcome
@@ -1247,7 +1477,7 @@ mod tests {
             !names.contains(&"c.txt".to_string()),
             "跳过名单内的目录不入索引"
         );
-        assert_eq!(ticks, outcome.entries.len() as u64);
+        assert_eq!(ticks.load(Ordering::SeqCst), outcome.entries.len() as u64);
         assert!(!outcome.truncated);
 
         let _ = std::fs::remove_dir_all(&root);
@@ -1258,7 +1488,12 @@ mod tests {
         let root = temp_dir("abort");
         std::fs::write(root.join("a.txt"), b"a").expect("写文件失败");
 
-        let outcome = walk(std::slice::from_ref(&root), MAX_ENTRIES, &mut |_, _| false);
+        let outcome = walk(
+            std::slice::from_ref(&root),
+            MAX_ENTRIES,
+            SCAN_THREADS,
+            &|_, _| false,
+        );
         assert!(outcome.is_none());
 
         let _ = std::fs::remove_dir_all(&root);
@@ -1271,12 +1506,92 @@ mod tests {
             std::fs::write(root.join(format!("f{index}.txt")), b"x").expect("写文件失败");
         }
 
-        let outcome =
-            walk(std::slice::from_ref(&root), 4, &mut |_, _| true).expect("遍历不应被中止");
+        let outcome = walk(std::slice::from_ref(&root), 4, SCAN_THREADS, &|_, _| true)
+            .expect("遍历不应被中止");
         assert_eq!(outcome.entries.len(), 4);
         assert!(outcome.truncated);
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn parallel_walk_collects_the_same_entries_as_one_thread() {
+        // 并行只改变顺序，不改变集合：这是多线程改造的安全底线。
+        let root = temp_dir("parallel");
+        for dir in 0..4 {
+            let sub = root.join(format!("dir{dir}"));
+            std::fs::create_dir_all(&sub).expect("创建子目录失败");
+            for file in 0..8 {
+                std::fs::write(sub.join(format!("f{dir}-{file}.txt")), b"x").expect("写文件失败");
+            }
+        }
+
+        let collect = |threads: usize| {
+            let outcome = walk(
+                std::slice::from_ref(&root),
+                MAX_ENTRIES,
+                threads,
+                &|_, _| true,
+            )
+            .expect("遍历不应被中止");
+            let mut names: Vec<String> = outcome
+                .entries
+                .iter()
+                .map(|item| item.path.to_string_lossy().into_owned())
+                .collect();
+            names.sort_unstable();
+            (names, outcome.scanned)
+        };
+
+        let (single, single_scanned) = collect(1);
+        let (quad, quad_scanned) = collect(SCAN_THREADS);
+        assert_eq!(single, quad);
+        assert_eq!(single_scanned, quad_scanned);
+        assert_eq!(single.len(), 4 * 8 + 4, "32 个文件 + 4 个子目录");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn disk_index_is_reused_only_when_fresh_and_same_roots() {
+        let roots = vec![PathBuf::from("C:\\Users\\me\\Desktop")];
+        let meta = DiskIndexMeta {
+            roots: roots.clone(),
+            entry_count: 10,
+            built_at_secs: Some(1_000),
+        };
+
+        assert!(
+            is_reusable(&meta, &roots, 1_000 + INDEX_TTL_SECS),
+            "刚过期前一刻"
+        );
+        assert!(
+            !is_reusable(&meta, &roots, 1_001 + INDEX_TTL_SECS),
+            "超过有效期就要重扫"
+        );
+        assert!(
+            !is_reusable(&meta, &[PathBuf::from("D:\\")], 1_000),
+            "索引根变了要重扫"
+        );
+        assert!(
+            is_reusable(&meta, &[PathBuf::from("c:\\users\\me\\desktop")], 1_000),
+            "Windows 路径大小写不敏感"
+        );
+
+        let empty = DiskIndexMeta {
+            entry_count: 0,
+            ..meta.clone()
+        };
+        assert!(!is_reusable(&empty, &roots, 1_000), "空索引要重扫");
+
+        let unknown_age = DiskIndexMeta {
+            built_at_secs: None,
+            ..meta
+        };
+        assert!(
+            !is_reusable(&unknown_age, &roots, 1_000),
+            "读不到时间要重扫"
+        );
     }
 
     #[test]

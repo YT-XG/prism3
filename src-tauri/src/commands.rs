@@ -213,6 +213,7 @@ pub fn set_config(
     let panel_toggled = guard.quick_panel != config.quick_panel;
     let search_toggled = guard.file_search != config.file_search;
     let search_roots_changed = guard.file_search_roots != config.file_search_roots;
+    let theme_changed = guard.theme != config.theme;
     let clipboard_toggled = guard.clipboard_history != config.clipboard_history;
     let clipboard_settings_changed = guard.clipboard_retention_days
         != config.clipboard_retention_days
@@ -226,6 +227,9 @@ pub fn set_config(
 
     if panel_toggled {
         sync_quick_panel_windows(&app, &config);
+    }
+    if theme_changed {
+        crate::sync_window_background(&app, config.theme);
     }
     if search_toggled || search_roots_changed {
         sync_file_index(&app, &config);
@@ -252,6 +256,7 @@ pub fn reset_config(app: AppHandle, state: State<'_, AppState>) -> AppResult<App
     crate::config::save(&app, &default)?;
 
     sync_quick_panel_windows(&app, &default);
+    crate::sync_window_background(&app, default.theme);
     sync_file_index(&app, &default);
     clipboard::sync(&app, &default);
     // 恢复默认是**显式**动作（不是过期副本回写）：BLE 键也要跟着回默认并停掉看门狗。

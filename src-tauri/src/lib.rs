@@ -12,7 +12,7 @@ mod tray;
 
 use std::sync::RwLock;
 
-use tauri::{Emitter, Manager, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -99,7 +99,9 @@ pub fn run() {
             tray::init(app)?;
 
             // 窗口以 visible: false 启动，避免白屏闪烁。
+            // 显示前先把底色设成当前主题：窗口比页面首帧早得多，默认白色在暗色主题下会闪。
             if let Some(webview) = app.get_webview_window("main") {
+                sync_window_background(&handle, initial_config.theme);
                 webview.show()?;
             }
 
@@ -110,15 +112,23 @@ pub fn run() {
                 }
             }
 
-            // 文件搜索：先把上次落盘的索引读进来（秒开），再在后台重扫一遍。
+            // 文件搜索：落盘索引新鲜就直接复用（不重扫），过期或索引根变了才在后台重建。
             if file_search_enabled {
                 let state = app.state::<file_index::FileIndexState>();
                 state.set_enabled(true);
                 std::thread::spawn(move || {
                     let state = handle.state::<file_index::FileIndexState>();
-                    file_index::load_from_disk(&handle, &state);
                     let (roots, missing_roots) =
                         file_index::resolve_roots(&handle, &file_search_roots);
+                    let reused = file_index::disk_index_is_reusable(&handle, &roots)
+                        && file_index::load_from_disk(&handle, &state);
+                    if reused {
+                        log::info!(
+                            "落盘文件索引在有效期内（{} 小时），跳过重扫",
+                            file_index::INDEX_TTL_SECS / 3600
+                        );
+                        return;
+                    }
                     if let Err(err) =
                         file_index::rebuild_blocking(&handle, &state, roots, missing_roots)
                     {
@@ -215,4 +225,29 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app, _event| {});
+}
+
+/// 把主窗口底色同步成主题的背景色。
+///
+/// 窗口比页面首帧早得多（前端在 dev 下要几百毫秒到几秒），默认的纯白底色在暗色主题下
+/// 会明显闪一下。这里按主题设置窗口与 WebView 的底色：亮色 `#ffffff`、暗色 `#09090b`
+/// （与 `index.css` 里 `--background` 的两个取值一致）。
+pub(crate) fn sync_window_background(app: &AppHandle, theme: config::Theme) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let dark = match theme {
+        config::Theme::Dark => true,
+        config::Theme::Light => false,
+        // 「跟随系统」时窗口主题就是系统主题（WebView2 跟着系统走）。
+        config::Theme::System => matches!(window.theme(), Ok(tauri::Theme::Dark)),
+    };
+    let color = if dark {
+        tauri::window::Color(9, 9, 11, 255)
+    } else {
+        tauri::window::Color(255, 255, 255, 255)
+    };
+    if let Err(err) = window.set_background_color(Some(color)) {
+        log::warn!("同步窗口底色失败：{err}");
+    }
 }

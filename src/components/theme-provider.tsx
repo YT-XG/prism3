@@ -24,6 +24,14 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     const apply = () => {
       const dark = theme === "dark" || (theme === "system" && media.matches);
       root.classList.toggle("dark", dark);
+      root.style.colorScheme = dark ? "dark" : "light";
+      // 启动占位（index.html 的内联脚本）要在配置异步读回来之前就知道主题，
+      // 这里是唯一的同步来源：把偏好原样存下来，下次启动先用它。
+      try {
+        window.localStorage.setItem("prism3:theme", theme);
+      } catch {
+        // 存储不可用（隐私模式等）时按系统主题走，不影响应用。
+      }
     };
 
     apply();
