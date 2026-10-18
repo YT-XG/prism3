@@ -7,6 +7,10 @@
 //! - **查询是纯内存线性扫描**：历史条数在百量级，不需要数据库。
 //! - **落盘**：元数据写 `clipboard-v1.json`（原子写），图片写 `clipboard-images\<id>.png`
 //!   （另有 `<id>.thumb.png` 缩略图，列表只加载缩略图）。
+//! - **图片自己解 DIB**：`arboard` 在 Windows 上只认 `CF_DIBV5` / 注册格式 "PNG"，而多数
+//!   程序只放 `CF_DIB`，所以图片这一路自己读、自己解（见 `capture` 模块）。
+//! - **文本优先于图片**：Excel / Word 复制单元格会同时带文本与位图，先看文本才不会把
+//!   复制单元格记成一张「表格截图」；真正的「复制图片」没有文本，仍走图片分支。
 //! - 采集线程只做「读剪贴板 → 入库 → 落盘 → 广播」，不阻塞 UI 线程。
 
 use std::path::PathBuf;
@@ -615,6 +619,12 @@ fn spawn_monitor(app: &AppHandle) {
 
             let allow_images = state.read().capture_images;
             let Some(captured) = capture::read(allow_images) else {
+                // 剪贴板变了却没采到东西：把格式清单写进日志，一眼看出是哪种内容
+                // （例如「复制文件」只有 CF_HDROP、某些应用只放自有格式）。
+                log::debug!(
+                    "剪贴板内容变了但没有可采集的内容（格式：{}）",
+                    capture::describe_formats()
+                );
                 continue;
             };
             if seq.is_none() {
@@ -938,15 +948,32 @@ fn base64_encode(bytes: &[u8]) -> String {
 
 #[cfg(windows)]
 mod capture {
-    use windows::Win32::System::DataExchange::{
-        GetClipboardSequenceNumber, IsClipboardFormatAvailable,
+    use std::time::Duration;
+
+    use windows::core::w;
+    use windows::Win32::Foundation::{HANDLE, HGLOBAL};
+    use windows::Win32::Graphics::Gdi::{
+        GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+        DIB_RGB_COLORS, HBITMAP, HGDIOBJ,
     };
+    use windows::Win32::System::DataExchange::{
+        CloseClipboard, EnumClipboardFormats, GetClipboardData, GetClipboardFormatNameW,
+        GetClipboardSequenceNumber, IsClipboardFormatAvailable, OpenClipboard,
+        RegisterClipboardFormatW,
+    };
+    use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
 
     use super::Captured;
 
-    /// DIB / DIBV5 格式号（`CF_BITMAP` 等其它图片格式交给 arboard 自行处理）。
+    /// 标准图片格式号（`CF_BITMAP` 是 GDI 位图句柄，另两个是 DIB 内存块）。
+    const CF_BITMAP: u32 = 2;
     const CF_DIB: u32 = 8;
     const CF_DIBV5: u32 = 17;
+    /// `BITMAPV4HEADER` 的长度：只有 V4 / V5 头里才有掩码字段（`bV4RedMask` 起）。
+    const V4_HEADER_LEN: usize = 108;
+    /// 打开剪贴板的重试次数与间隔（别的进程可能正占着它）。
+    const OPEN_ATTEMPTS: u32 = 5;
+    const OPEN_RETRY_DELAY: Duration = Duration::from_millis(20);
 
     /// 剪贴板序列号：内容变化即自增。读不到时返回 `None`。
     pub fn sequence_number() -> Option<u32> {
@@ -955,31 +982,523 @@ mod capture {
         (seq != 0).then_some(seq)
     }
 
-    fn has_image() -> bool {
-        // SAFETY: 只读查询剪贴板格式是否可用。
-        unsafe {
-            IsClipboardFormatAvailable(CF_DIB).is_ok()
-                || IsClipboardFormatAvailable(CF_DIBV5).is_ok()
+    /// 注册格式 "PNG" 的格式号（浏览器复制图片时会单独放一份 PNG，含 alpha）。
+    fn png_format_id() -> Option<u32> {
+        // SAFETY: 只传一个静态宽字符串，注册失败只会返回 0。
+        let id = unsafe { RegisterClipboardFormatW(w!("PNG")) };
+        (id != 0).then_some(id)
+    }
+
+    fn available(format: u32) -> bool {
+        // SAFETY: 只读查询格式是否存在。
+        unsafe { IsClipboardFormatAvailable(format) }.is_ok()
+    }
+
+    /// 剪贴板现有的格式清单（诊断用：采集不到东西时写日志，下次一眼看出是哪类内容）。
+    pub fn describe_formats() -> String {
+        let mut names = Vec::new();
+        if let Some(_guard) = open_clipboard() {
+            let mut format = 0;
+            loop {
+                // SAFETY: 枚举只在剪贴板已打开时进行，`format` 从 0 起逐个往后推。
+                format = unsafe { EnumClipboardFormats(format) };
+                if format == 0 || names.len() >= 32 {
+                    break;
+                }
+                names.push(format_name(format));
+            }
+        }
+        if names.is_empty() {
+            String::from("空 / 读不到")
+        } else {
+            names.join(" + ")
         }
     }
 
-    /// 读一次剪贴板内容：优先图片（截图 / 复制图片常常同时带文本），否则文本。
+    /// 格式名；标准格式（`CF_*`）没有名字，退回格式号。
+    fn format_name(format: u32) -> String {
+        let mut buffer = [0u16; 128];
+        // SAFETY: 只把名字读进我们自己的定长缓冲区，长度由返回值给出。
+        let length = unsafe { GetClipboardFormatNameW(format, &mut buffer) };
+        if length > 0 {
+            String::from_utf16_lossy(&buffer[..length as usize])
+        } else {
+            format!("CF_{format}")
+        }
+    }
+
+    /// 剪贴板里有没有图片可读（任何一种图片格式）。
+    fn has_image() -> bool {
+        png_format_id().is_some_and(available)
+            || available(CF_DIBV5)
+            || available(CF_DIB)
+            || available(CF_BITMAP)
+    }
+
+    /// 剪贴板打开期间的有效期守卫：离开作用域立刻关闭，绝不把它一直占着。
+    struct ClipboardGuard;
+
+    impl Drop for ClipboardGuard {
+        fn drop(&mut self) {
+            let _ = unsafe { CloseClipboard() };
+        }
+    }
+
+    /// 打开剪贴板。别的进程正占着时会短暂重试几次。
+    fn open_clipboard() -> Option<ClipboardGuard> {
+        for attempt in 0..OPEN_ATTEMPTS {
+            if unsafe { OpenClipboard(None) }.is_ok() {
+                return Some(ClipboardGuard);
+            }
+            if attempt + 1 < OPEN_ATTEMPTS {
+                std::thread::sleep(OPEN_RETRY_DELAY);
+            }
+        }
+        None
+    }
+
+    /// 取一次剪贴板数据块并拷进内存（**调用前剪贴板必须已打开**）。
+    fn clipboard_bytes(format: u32) -> Option<Vec<u8>> {
+        let handle = unsafe { GetClipboardData(format) }.ok()?;
+        let hglobal = HGLOBAL(handle.0);
+        let size = unsafe { GlobalSize(hglobal) };
+        if size == 0 {
+            return None;
+        }
+        // SAFETY: `GlobalLock` 成功期间这块内存由系统持有、地址稳定；拷一份后立刻解锁。
+        let pointer = unsafe { GlobalLock(hglobal) } as *const u8;
+        if pointer.is_null() {
+            return None;
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(pointer, size) }.to_vec();
+        let _ = unsafe { GlobalUnlock(hglobal) };
+        Some(bytes)
+    }
+
+    /// 读一次剪贴板内容。
+    ///
+    /// **优先级：非空文本 > 图片**。反过来（图片优先）会把 Excel / Word 里复制单元格记成
+    /// 一张「表格截图」——它们的剪贴板同时带文本和位图。而截图工具 / 浏览器「复制图片」
+    /// 只放位图（粘进记事本什么都没有），所以图片这条分支依然覆盖真正的「复制图片」。
     pub fn read(allow_images: bool) -> Option<Captured> {
         let mut clipboard = arboard::Clipboard::new().ok()?;
+        let text = clipboard
+            .get_text()
+            .ok()
+            .filter(|text| !text.trim().is_empty());
 
-        if allow_images && has_image() {
-            if let Ok(image) = clipboard.get_image() {
-                return Some(Captured::Image {
-                    width: image.width as u32,
-                    height: image.height as u32,
-                    rgba: image.bytes.into_owned(),
-                });
+        if allow_images && text.is_none() {
+            if let Some(image) = read_image() {
+                return Some(image);
+            }
+        }
+        text.map(Captured::Text)
+    }
+
+    /// 把剪贴板里的图片读成 RGBA：PNG → `CF_DIBV5` → `CF_DIB` → `CF_BITMAP`。
+    ///
+    /// **不能只靠 arboard**：它在 Windows 上只认 `CF_DIBV5` 与注册格式 "PNG"，而大量程序
+    /// （浏览器 / 截图工具 / 画图 / Excel）只放 `CF_DIB`——那会读不到图片，用户看到的就是
+    /// 「复制图片没有进入剪贴板」。这里自己解 DIB：DIB 就是「去掉文件头的 BMP」，
+    /// `image` 的 BMP 解码器可以直接吃。
+    fn read_image() -> Option<Captured> {
+        if !has_image() {
+            return None;
+        }
+        let _guard = open_clipboard()?;
+
+        if let Some(png) = png_format_id() {
+            if let Some(captured) = clipboard_bytes(png).as_deref().and_then(decode_png) {
+                return Some(captured);
             }
         }
 
-        match clipboard.get_text() {
-            Ok(text) if !text.trim().is_empty() => Some(Captured::Text(text)),
-            _ => None,
+        for format in [CF_DIBV5, CF_DIB] {
+            let Some(bytes) = clipboard_bytes(format) else {
+                continue;
+            };
+            if let Some(captured) = decode_dib(&bytes) {
+                return Some(captured);
+            }
+        }
+
+        if let Ok(handle) = unsafe { GetClipboardData(CF_BITMAP) } {
+            if let Some(captured) = bitmap_to_captured(handle) {
+                return Some(captured);
+            }
+        }
+
+        log::warn!("剪贴板里有图片，但没有一种格式能解析出来");
+        None
+    }
+
+    fn decode_png(bytes: &[u8]) -> Option<Captured> {
+        let image = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
+            .ok()?
+            .to_rgba8();
+        Some(captured_from(image))
+    }
+
+    /// 解一块 DIB（`BITMAPINFOHEADER` / `BITMAPV4HEADER` / `BITMAPV5HEADER` + 像素）。
+    fn decode_dib(bytes: &[u8]) -> Option<Captured> {
+        let decoder =
+            image::codecs::bmp::BmpDecoder::new_without_file_header(std::io::Cursor::new(bytes))
+                .ok()?;
+        let mut image = image::DynamicImage::from_decoder(decoder).ok()?.to_rgba8();
+
+        patch_alpha_from_dib(bytes, &mut image);
+        // 有些程序在 32 bpp 的 DIB 里把 alpha 字节全填 0：那不是「整张图全透明」，而是
+        // 「没有 alpha」（截图最常见）。按不透明处理，否则图会看不见。
+        if image.pixels().all(|pixel| pixel.0[3] == 0) {
+            for pixel in image.pixels_mut() {
+                pixel.0[3] = 255;
+            }
+        }
+        Some(captured_from(image))
+    }
+
+    fn captured_from(image: image::RgbaImage) -> Captured {
+        Captured::Image {
+            width: image.width(),
+            height: image.height(),
+            rgba: image.into_raw(),
+        }
+    }
+
+    /// 把 32 bpp `BI_RGB` DIB 里「规范上未使用、现实中是 alpha」的那个字节搬进图像。
+    ///
+    /// 规范说 `BI_RGB` 下每个 DWORD 的高字节不使用，于是 BMP 解码器按 RGB32 解、把它丢掉；
+    /// 但 Chrome / Electron 就是靠这个字节带透明度的。与其改头去骗解码器（`BI_BITFIELDS`
+    /// 会让解码器以为头后面还有 12 字节掩码，反而错位），不如解完自己按行补 alpha。
+    fn patch_alpha_from_dib(bytes: &[u8], image: &mut image::RgbaImage) {
+        let header_len = u32_at(bytes, 0) as usize;
+        if bytes.len() < V4_HEADER_LEN
+            || header_len < V4_HEADER_LEN
+            // 只有 `BI_RGB` 需要补：`BI_BITFIELDS` 的 alpha 由解码器自己认掩码。
+            || u32_at(bytes, 16) != 0
+            || u16::from_le_bytes([bytes[14], bytes[15]]) != 32
+            || u32_at(bytes, 52) != 0xFF00_0000
+        {
+            return;
+        }
+
+        let height = i32_at(bytes, 8);
+        let width = i32_at(bytes, 4);
+        if width <= 0 || height == 0 || height == i32::MIN {
+            return;
+        }
+        let (width, rows) = (width as usize, height.unsigned_abs() as usize);
+        // 与解码结果对不上就一律不动（宁可少补 alpha，也不要把图改花）。
+        if image.width() as usize != width || image.height() as usize != rows {
+            return;
+        }
+
+        let stride = width * 4;
+        let Some(pixels) = bytes.get(header_len..) else {
+            return;
+        };
+        // 正高度 = 自下而上：文件里第一行是画面最下面那一行。
+        let bottom_up = height > 0;
+        let raw = &mut **image;
+        for row in 0..rows {
+            let source_row = if bottom_up { rows - 1 - row } else { row };
+            let Some(source) = pixels.get(source_row * stride..(source_row + 1) * stride) else {
+                return;
+            };
+            for column in 0..width {
+                raw[row * stride + column * 4 + 3] = source[column * 4 + 3];
+            }
+        }
+    }
+
+    fn u32_at(bytes: &[u8], offset: usize) -> u32 {
+        u32::from_le_bytes([
+            bytes[offset],
+            bytes[offset + 1],
+            bytes[offset + 2],
+            bytes[offset + 3],
+        ])
+    }
+
+    fn i32_at(bytes: &[u8], offset: usize) -> i32 {
+        u32_at(bytes, offset) as i32
+    }
+
+    /// 只有 `CF_BITMAP` 的老程序：让 GDI 把它转成 32 位 DIB，再取像素。
+    fn bitmap_to_captured(handle: HANDLE) -> Option<Captured> {
+        let bitmap = HBITMAP(handle.0);
+        let mut description = BITMAP::default();
+        // SAFETY: 句柄来自刚取到的剪贴板数据，`GetObjectW` 只读它的描述。
+        let copied = unsafe {
+            GetObjectW(
+                HGDIOBJ(bitmap.0),
+                std::mem::size_of::<BITMAP>() as i32,
+                Some(&mut description as *mut BITMAP as *mut core::ffi::c_void),
+            )
+        };
+        if copied == 0 || description.bmWidth <= 0 || description.bmHeight <= 0 {
+            return None;
+        }
+
+        let width = description.bmWidth as u32;
+        let height = description.bmHeight as u32;
+        let mut info = BITMAPINFO::default();
+        info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        info.bmiHeader.biWidth = description.bmWidth;
+        // 负高度 = 自上而下，省掉一次翻转。
+        info.bmiHeader.biHeight = -description.bmHeight;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB.0;
+
+        // SAFETY: `GetDC(None)` 取屏幕 DC；`GetDIBits` 往我们自己分配的缓冲区里写像素。
+        let mut pixels = vec![0u8; width as usize * height as usize * 4];
+        let hdc = unsafe { GetDC(None) };
+        if hdc.is_invalid() {
+            return None;
+        }
+        let lines = unsafe {
+            GetDIBits(
+                hdc,
+                bitmap,
+                0,
+                height,
+                Some(pixels.as_mut_ptr() as *mut core::ffi::c_void),
+                &mut info,
+                DIB_RGB_COLORS,
+            )
+        };
+        let _ = unsafe { ReleaseDC(None, hdc) };
+        if lines == 0 {
+            return None;
+        }
+
+        // `GetDIBits` 给的是 BGRA，且第 4 字节没有意义：换成 RGBA 并按不透明处理。
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            pixel.swap(0, 2);
+            pixel[3] = 255;
+        }
+        Some(Captured::Image {
+            width,
+            height,
+            rgba: pixels,
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// 拼一个 `BITMAPINFOHEADER`（40 字节）DIB；高度传负值即「自上而下」。
+        fn dib_info_header(width: i32, height: i32, bit_count: u16) -> Vec<u8> {
+            let mut header = Vec::with_capacity(40);
+            header.extend_from_slice(&40u32.to_le_bytes()); // biSize
+            header.extend_from_slice(&width.to_le_bytes());
+            header.extend_from_slice(&height.to_le_bytes());
+            header.extend_from_slice(&1u16.to_le_bytes()); // biPlanes
+            header.extend_from_slice(&bit_count.to_le_bytes());
+            header.extend_from_slice(&0u32.to_le_bytes()); // biCompression = BI_RGB
+            header.extend_from_slice(&0u32.to_le_bytes()); // biSizeImage
+            header.extend_from_slice(&0i32.to_le_bytes()); // biXPelsPerMeter
+            header.extend_from_slice(&0i32.to_le_bytes()); // biYPelsPerMeter
+            header.extend_from_slice(&0u32.to_le_bytes()); // biClrUsed
+            header.extend_from_slice(&0u32.to_le_bytes()); // biClrImportant
+            header
+        }
+
+        /// 拼一个 `BITMAPV5HEADER`（124 字节）DIB：32 bpp、`BI_RGB`、带 alpha 掩码。
+        fn dib_v5_header(width: i32, height: i32) -> Vec<u8> {
+            let mut header = vec![0u8; 124];
+            header[0..4].copy_from_slice(&124u32.to_le_bytes());
+            header[4..8].copy_from_slice(&width.to_le_bytes());
+            header[8..12].copy_from_slice(&height.to_le_bytes());
+            header[12..14].copy_from_slice(&1u16.to_le_bytes());
+            header[14..16].copy_from_slice(&32u16.to_le_bytes());
+            // 压缩方式保持 BI_RGB（0）：`fix_alpha_masks` 应当把它改成 BI_BITFIELDS。
+            header[52..56].copy_from_slice(&0xFF00_0000u32.to_le_bytes()); // bV5AlphaMask
+            header
+        }
+
+        /// 走与 `read_image` 相同的解码路径。
+        fn rgba_of(bytes: Vec<u8>) -> Vec<u8> {
+            let Some(Captured::Image { rgba, .. }) = decode_dib(&bytes) else {
+                panic!("应当能解出图片");
+            };
+            rgba
+        }
+
+        #[test]
+        fn dib_32bpp_bi_rgb_is_bgra_with_alpha_forced_opaque() {
+            // 截图最常见的形态：40 字节头 + 32 bpp `BI_RGB`，第 4 字节是无意义的 0。
+            let mut bytes = dib_info_header(2, -1, 32);
+            bytes.extend_from_slice(&[0, 0, 255, 0]); // BGRA：红
+            bytes.extend_from_slice(&[0, 255, 0, 0]); // BGRA：绿
+            assert_eq!(rgba_of(bytes), vec![255, 0, 0, 255, 0, 255, 0, 255]);
+        }
+
+        #[test]
+        fn dib_24bpp_is_read_without_padding_leaking_into_pixels() {
+            // 24 bpp 每行按 4 字节对齐：2 像素 = 6 字节 + 2 字节填充。
+            let mut bytes = dib_info_header(2, -1, 24);
+            bytes.extend_from_slice(&[0, 0, 255, 0, 255, 0, 0, 0]);
+            assert_eq!(rgba_of(bytes), vec![255, 0, 0, 255, 0, 255, 0, 255]);
+        }
+
+        #[test]
+        fn dib_v5_alpha_mask_keeps_transparency() {
+            // Chrome / Electron 的形态：`BI_RGB` + alpha 掩码，高字节是真 alpha。
+            let mut bytes = dib_v5_header(2, -1);
+            bytes.extend_from_slice(&[30, 20, 10, 255]); // BGRA：不透明
+            bytes.extend_from_slice(&[60, 50, 40, 0]); // BGRA：全透明
+            assert_eq!(rgba_of(bytes), vec![10, 20, 30, 255, 40, 50, 60, 0]);
+        }
+
+        #[test]
+        fn dib_bottom_up_rows_are_flipped() {
+            // 正高度 = 自下而上：文件里第一行是「最下面那一行」。
+            let mut bytes = dib_info_header(1, 2, 32);
+            bytes.extend_from_slice(&[0, 0, 255, 0]); // 红：最后一行（画面下方）
+            bytes.extend_from_slice(&[0, 255, 0, 0]); // 绿：第一行（画面上方）
+            assert_eq!(rgba_of(bytes), vec![0, 255, 0, 255, 255, 0, 0, 255]);
+        }
+
+        #[test]
+        fn dib_v5_without_alpha_mask_ignores_the_fourth_byte() {
+            // 掩码为 0 = 这份 DIB 没声明 alpha：第 4 字节是垃圾，不能当透明度用。
+            let mut bytes = dib_v5_header(1, -1);
+            bytes[52..56].copy_from_slice(&0u32.to_le_bytes());
+            bytes.extend_from_slice(&[10, 20, 30, 0x77]);
+            assert_eq!(rgba_of(bytes), vec![30, 20, 10, 255]);
+        }
+
+        #[test]
+        fn dib_with_all_zero_alpha_bytes_is_treated_as_opaque() {
+            // 有些程序声明了 alpha 掩码却把字节全填 0：按不透明处理，不然整张图会看不见。
+            let mut bytes = dib_v5_header(1, -1);
+            bytes.extend_from_slice(&[10, 20, 30, 0]);
+            assert_eq!(rgba_of(bytes), vec![30, 20, 10, 255]);
+        }
+
+        /// 把一块 DIB **只以 `CF_DIB`** 放进剪贴板（别的格式一个都不放）。
+        fn set_clipboard_dib_only(bytes: &[u8]) {
+            use windows::Win32::System::DataExchange::{EmptyClipboard, SetClipboardData};
+            use windows::Win32::System::Memory::{GlobalAlloc, GMEM_MOVEABLE};
+
+            let _guard = open_clipboard().expect("应当能打开剪贴板");
+            // SAFETY: 只在本测试里用；句柄一交给 `SetClipboardData` 就归系统所有，不能自己释放。
+            unsafe {
+                EmptyClipboard().expect("清空剪贴板");
+                let hglobal = GlobalAlloc(GMEM_MOVEABLE, bytes.len()).expect("分配剪贴板内存");
+                let pointer = GlobalLock(hglobal);
+                assert!(!pointer.is_null(), "锁定剪贴板内存");
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), pointer as *mut u8, bytes.len());
+                let _ = GlobalUnlock(hglobal);
+                SetClipboardData(CF_DIB, Some(HANDLE(hglobal.0))).expect("写入 CF_DIB");
+            }
+        }
+
+        /// 真机探针：**会覆盖当前剪贴板内容**。
+        ///
+        /// 把几种「图片剪贴板」形态逐个放进剪贴板，断言本仓库都能读出来；同时把 `arboard`
+        /// （旧实现）的结果打出来对照 —— 它只认 `CF_DIBV5`（且得是它能解析的那种）与注册格式
+        /// "PNG"，这正是当初「复制图片没有进入剪贴板」的根因。**只放 `CF_DIB`** 是浏览器 /
+        /// 截图工具 / 画图「复制图片」的常态。
+        ///
+        /// 形态合并在一个测试里是刻意的：两条剪贴板探针并发跑会互相抢系统剪贴板
+        /// （`cargo test -- --ignored` 默认多线程），`EmptyClipboard` 会报「线程没有打开的剪贴板」。
+        #[test]
+        #[ignore = "真机探针：会覆盖当前剪贴板内容"]
+        fn probe_reads_every_clipboard_image_shape() {
+            let variants: Vec<(&str, Vec<u8>)> = vec![
+                ("32bpp 40B BI_RGB（自上而下）", {
+                    let mut dib = dib_info_header(2, -1, 32);
+                    dib.extend_from_slice(&[0, 0, 255, 0, 0, 255, 0, 0]);
+                    dib
+                }),
+                ("32bpp 40B BI_RGB（自下而上）", {
+                    let mut dib = dib_info_header(2, 1, 32);
+                    dib.extend_from_slice(&[0, 0, 255, 0, 0, 255, 0, 0]);
+                    dib
+                }),
+                ("24bpp 40B", {
+                    let mut dib = dib_info_header(2, -1, 24);
+                    dib.extend_from_slice(&[0, 0, 255, 0, 255, 0, 0, 0]);
+                    dib
+                }),
+                ("8bpp 40B + 调色板", {
+                    let mut dib = dib_info_header(2, -1, 8);
+                    for index in 0..256u32 {
+                        dib.extend_from_slice(&[(index % 256) as u8, 0x40, 0x80, 0]);
+                    }
+                    dib.extend_from_slice(&[1, 2, 0, 0]);
+                    dib
+                }),
+                ("32bpp V5 BI_RGB + alpha 掩码", {
+                    let mut dib = dib_v5_header(2, -1);
+                    dib.extend_from_slice(&[30, 20, 10, 255, 60, 50, 40, 0]);
+                    dib
+                }),
+                ("32bpp V5 BI_BITFIELDS", {
+                    let mut dib = dib_v5_header(2, -1);
+                    dib[16..20].copy_from_slice(&3u32.to_le_bytes());
+                    dib[40..44].copy_from_slice(&0x00FF_0000u32.to_le_bytes());
+                    dib[44..48].copy_from_slice(&0x0000_FF00u32.to_le_bytes());
+                    dib[48..52].copy_from_slice(&0x0000_00FFu32.to_le_bytes());
+                    dib.extend_from_slice(&[0u8; 12]); // 掩码重复区（解码器会跳过）
+                    dib.extend_from_slice(&[10, 20, 30, 255, 40, 50, 60, 0]);
+                    dib
+                }),
+            ];
+
+            for (name, dib) in variants {
+                set_clipboard_dib_only(&dib);
+                let png = png_format_id();
+                println!("--- {name} ---");
+                println!(
+                    "  可用: CF_BITMAP={} CF_DIB={} CF_DIBV5={} PNG={}",
+                    available(CF_BITMAP),
+                    available(CF_DIB),
+                    available(CF_DIBV5),
+                    png.is_some_and(available)
+                );
+                let mut clipboard = arboard::Clipboard::new().expect("剪贴板可打开");
+                match clipboard.get_image() {
+                    Ok(image) => println!("  arboard = Ok {}x{}", image.width, image.height),
+                    Err(err) => println!("  arboard = Err {err:?}"),
+                }
+                match read_image() {
+                    Some(Captured::Image { width, height, .. }) => {
+                        println!("  本仓库  = Ok {width}x{height}");
+                        assert_eq!((width, height), (2, 1), "{name} 的尺寸不对");
+                    }
+                    _ => panic!("{name}：本仓库也读不出来"),
+                }
+            }
+
+            // 完整链路（文本优先 > 图片）也要能读出只放 `CF_DIB` 的剪贴板，并给出正确像素。
+            let mut dib = dib_info_header(2, -1, 32);
+            dib.extend_from_slice(&[0, 0, 255, 0]); // 红
+            dib.extend_from_slice(&[0, 255, 0, 0]); // 绿
+            set_clipboard_dib_only(&dib);
+            let Some(Captured::Image {
+                width,
+                height,
+                rgba,
+            }) = read(true)
+            else {
+                panic!("只放 CF_DIB 的剪贴板也应当能读出图片");
+            };
+            assert_eq!((width, height), (2, 1));
+            assert_eq!(rgba, vec![255, 0, 0, 255, 0, 255, 0, 255]);
+
+            // `arboard` 也能读只放 `CF_DIB` 的剪贴板（系统会把它合成为 `CF_DIBV5`），留着
+            // 这条断言是为了记住这个事实：那条合成**不是**我们能依赖的唯一保障（`CF_DIBV5`
+            // 里的掩码它也会解析失败、只放自有格式的剪贴板它根本不看），所以图片改为自己解。
+            let mut clipboard = arboard::Clipboard::new().expect("剪贴板应当能打开");
+            assert!(
+                clipboard.get_image().is_ok(),
+                "系统会把 CF_DIB 合成为 CF_DIBV5，arboard 因此也能读"
+            );
         }
     }
 }
@@ -993,9 +1512,20 @@ mod capture {
         None
     }
 
+    /// 非 Windows 没有格式枚举这回事（诊断日志里给个占位）。
+    pub fn describe_formats() -> String {
+        String::from("（非 Windows）")
+    }
+
+    /// 非 Windows 也照同样的优先级（非空文本 > 图片），与 Windows 侧保持一致。
     pub fn read(allow_images: bool) -> Option<Captured> {
         let mut clipboard = arboard::Clipboard::new().ok()?;
-        if allow_images {
+        let text = clipboard
+            .get_text()
+            .ok()
+            .filter(|text| !text.trim().is_empty());
+
+        if allow_images && text.is_none() {
             if let Ok(image) = clipboard.get_image() {
                 return Some(Captured::Image {
                     width: image.width as u32,
@@ -1004,10 +1534,7 @@ mod capture {
                 });
             }
         }
-        match clipboard.get_text() {
-            Ok(text) if !text.trim().is_empty() => Some(Captured::Text(text)),
-            _ => None,
-        }
+        text.map(Captured::Text)
     }
 }
 

@@ -45,14 +45,18 @@ image = "0.25"
 
 # Windows 专用：DXGI 枚举显卡（型号 + 专用显存），WMI 查询主板/整机/内存条；
 # WindowsAndMessaging 用于把窗口位置与尺寸合并成一次 SetWindowPos（见 commands.rs）；
-# DataExchange 读剪贴板序列号/格式（剪贴板历史采集），Input_KeyboardAndMouse 发 Ctrl+V，
+# DataExchange 读剪贴板序列号/格式/数据块、开合剪贴板，Memory 锁住那块 HGLOBAL
+# （剪贴板历史自己解 CF_DIB —— arboard 只认 CF_DIBV5，见 clipboard.rs 的 capture 模块），
+# Gdi 把只有 CF_BITMAP 的图片经 GetDIBits 转成像素，Input_KeyboardAndMouse 发 Ctrl+V，
 # Threading 取当前线程 id（焦点归还时的 AttachThreadInput）。
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
     "Win32_System_DataExchange",
+    "Win32_System_Memory",
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
