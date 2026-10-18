@@ -67,11 +67,18 @@ export function PanelPager({
   const ids = pages.map((page) => page.id);
   const { index, goTo, handleWheel } = usePanelPager({ ids, storageKey });
 
-  // 当前页变化（含首次恢复）时上报，宿主据此调整面板窗口宽度。
+  /** 上一次上报的页面 id：`pages` 数组会因宿主重渲染重建，据此去重，避免同页重复上报。 */
+  const reportedIdRef = useRef<string | null>(null);
+
+  // 当前页变化（含首次恢复）时上报，宿主据此调整面板宽度并收回输入聚焦模式。
   // 用 layout effect：在浏览器绘制前完成宽度变更，避免新页以旧宽度闪一帧。
+  // 按 id 去重：`pages` 会随宿主状态重建（如聚焦状态变化、系统监控每秒刷新），
+  // 若按数组身份触发，同一页也会被反复上报，宿主会误判为「换了页」。
   useLayoutEffect(() => {
     const page = pages[index];
-    if (page) onActiveChange?.(page);
+    if (!page || reportedIdRef.current === page.id) return;
+    reportedIdRef.current = page.id;
+    onActiveChange?.(page);
   }, [index, pages, onActiveChange]);
 
   const [indicator, setIndicator] = useState({ top: 0, height: 0, ready: false });
@@ -118,8 +125,17 @@ export function PanelPager({
   );
 
   return (
-    <div className={cn("flex min-h-0 flex-1 flex-col", className)}>
-      <div className="flex min-h-0 flex-1">
+    <div className={cn("flex w-full min-h-0 min-w-0 flex-1 flex-col", className)}>
+      {/*
+       * `min-w-0` 这三层缺一不可——面板「窄页内容整体右移 + 右边被切掉」就是缺了它：
+       * 各页内容按**自己**的页宽定宽（宽页 474），于是页轨的 min-content 宽度是 474；
+       * flex 子项在交叉轴上默认不会收缩到内容宽度以下，面板盒子收窄到 360 后，
+       * 分页器仍被撑到 44 + 474 = 518，内容又按 `self-end` 贴着这条「假想的宽边」排，
+       * 结果整块内容右移一个页宽差（520 - 360 = 160），远侧还被面板盒子裁掉。
+       * 显式给「分页器 / 行 / 内容视口」三层 `min-w-0`（分页器再加 `w-full`）后，
+       * 宽度只由面板盒子决定，宽页多出来的部分交给视口的 `overflow-clip`。
+       */}
+      <div className="flex min-h-0 min-w-0 flex-1">
         <div
           className="flex shrink-0 flex-col border-r border-border/60 bg-muted/30"
           style={{ width: RAIL_WIDTH }}
@@ -175,7 +191,14 @@ export function PanelPager({
           </button>
         </div>
 
-        <div className="relative min-h-0 flex-1 overflow-hidden">
+        {/*
+         * 内容视口用 `overflow-clip` 而非 `overflow-hidden`：hidden 仍是**可编程滚动的
+         * 滚动容器**，任何一次 `focus()` / `scrollIntoView()`（浏览器会把目标滚进视口）
+         * 落到当前看不见的那一页上，都会把整条页轨滚走；而 `clip` 完全不产生滚动容器，
+         * 页轨位置只由 `transform` 决定，从结构上杜绝「面板内容整体错位」。
+         * `min-w-0` 见上：不放行的话这一格也会被宽页的 474 顶住。
+         */}
+        <div className="relative min-h-0 min-w-0 flex-1 overflow-clip">
           <div
             className="flex h-full flex-col transition-transform duration-[360ms] ease-[cubic-bezier(0.32,0.72,0,1)]"
             style={{ transform: `translate3d(0, -${index * 100}%, 0)` }}

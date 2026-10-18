@@ -75,9 +75,12 @@ export function QuickPanelClipboard({
   const askedFocusRef = useRef(false);
 
   // 窗口拿到焦点后再把 DOM 焦点给输入框，否则键盘事件根本进不来。
+  // 且必须要求「本页可见」：所有页常驻挂载，若后台页也去 focus() 自己的输入框，
+  // 浏览器会把整条页轨滚到那个看不见的输入框上（面板内容整体错位），
+  // 键盘输入也会落进别的页的输入框。
   useEffect(() => {
-    if (focused) inputRef.current?.focus();
-  }, [focused]);
+    if (active && focused) inputRef.current?.focus();
+  }, [active, focused]);
 
   // 收起 / 翻到别页：关掉弹窗、清掉上一次的提示，免得下次展开看到残留。
   useEffect(() => {

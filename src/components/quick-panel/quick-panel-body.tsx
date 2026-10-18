@@ -124,8 +124,10 @@ export function QuickPanelBody() {
   const handleActiveChange = useCallback(
     (page: PanelPage) => {
       setActivePageId(page.id);
-      // 离开搜索页就退出输入聚焦模式：否则键盘焦点会留在看不见的输入框上。
-      if (page.id !== SEARCH_PAGE_ID) void releaseFocus();
+      // 真正换页就退出输入聚焦模式：否则键盘焦点会留在上一页看不见的输入框上，
+      // 而面板窗口仍保持可聚焦。搜索页与剪贴板页都要临时聚焦，故不区分新旧页。
+      // 分页器已按 id 去重，只有真实换页才会回调（见 `PanelPager`）。
+      void releaseFocus();
       requestWidth(page.panelWidth ?? PANEL_WIDTH);
     },
     [releaseFocus, requestWidth],

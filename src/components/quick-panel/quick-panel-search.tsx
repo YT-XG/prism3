@@ -54,9 +54,12 @@ export function QuickPanelSearch({
   const inputRef = useRef<HTMLInputElement>(null);
 
   // 窗口拿到焦点后再把 DOM 焦点给输入框，否则键盘事件根本进不来。
+  // 且必须要求「本页可见」：所有页常驻挂载，若后台页也去 focus() 自己的输入框，
+  // 浏览器会把整条页轨滚到那个看不见的输入框上（面板内容整体错位），
+  // 键盘输入也会落进别的页的输入框。
   useEffect(() => {
-    if (focused) inputRef.current?.focus();
-  }, [focused]);
+    if (active && focused) inputRef.current?.focus();
+  }, [active, focused]);
 
   const handleMouseDown = (event: MouseEvent<HTMLDivElement>) => {
     // 阻止默认的「点击即给输入框 DOM 焦点」：此时窗口还没拿到焦点，先让 Rust 切。
