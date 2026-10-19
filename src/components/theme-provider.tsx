@@ -89,12 +89,15 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const theme = useAppStore((state) => state.config?.theme ?? "system");
   const themePreset = useAppStore((state) => state.config?.themePreset);
   const accentColor = useAppStore((state) => state.config?.accentColor);
+  const glassOpacity = useAppStore((state) => state.config?.glassOpacity ?? 78);
 
   useEffect(() => {
     const root = document.documentElement;
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const preset = resolvePreset(themePreset);
     const accent = resolveAccent(accentColor);
+    // 78% 是基线（卡片基底 0.78 / 0.66 的不透明度）；滑块 40–100 映射成 0.51–1.28 的倍率。
+    const glassDim = Math.min(100, Math.max(30, glassOpacity)) / 78;
 
     const apply = () => {
       const dark = theme === "dark" || (theme === "system" && media.matches);
@@ -103,6 +106,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       root.dataset.theme = dark ? "dark" : "light";
       root.dataset.preset = preset;
       root.style.setProperty("--brand", accent);
+      root.style.setProperty("--glass-dim", String(glassDim));
 
       try {
         window.localStorage.setItem(STORAGE.theme, theme);
@@ -118,7 +122,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
     media.addEventListener("change", apply);
     return () => media.removeEventListener("change", apply);
-  }, [theme, themePreset, accentColor]);
+  }, [theme, themePreset, accentColor, glassOpacity]);
 
   return <>{children}</>;
 }

@@ -189,6 +189,89 @@ pub fn get_config(state: State<'_, AppState>) -> AppConfig {
         .clone()
 }
 
+/// 读取用户选中的壁纸并编码成 data URL（直接给 CSS `background-image`）。
+///
+/// 走 Rust 而不是前端 `fs` 插件：系统对话框返回的是任意路径，`fs:default` 的
+/// scope 覆盖不到；这里只读一次、按文件头判类型，再交给 WebView。
+/// 16 MiB 上限，避免一张超大图把 WebView 内存打满。
+#[tauri::command(async)]
+pub fn read_wallpaper(path: String) -> AppResult<String> {
+    const MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+    let file = std::path::PathBuf::from(&path);
+    let meta = std::fs::metadata(&file)?;
+    if !meta.is_file() {
+        return Err(AppError::Other("壁纸路径不是文件".into()));
+    }
+    if meta.len() > MAX_BYTES {
+        return Err(AppError::Other("壁纸图片超过 16 MiB".into()));
+    }
+
+    let bytes = std::fs::read(&file)?;
+    let mime = wallpaper_mime(&file, &bytes).ok_or_else(|| {
+        AppError::Other("不支持的图片格式（png / jpg / webp / bmp / gif）".into())
+    })?;
+    Ok(format!("data:{mime};base64,{}", base64_encode(&bytes)))
+}
+
+/// 先按文件头识别格式，扩展名只作兜底（用户可能把 png 存成 .jpg）。
+fn wallpaper_mime(path: &std::path::Path, bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some("image/png");
+    }
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Some("image/jpeg");
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("image/gif");
+    }
+    if bytes.len() > 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    if bytes.starts_with(b"BM") {
+        return Some("image/bmp");
+    }
+    match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("png") => Some("image/png"),
+        Some("jpg" | "jpeg") => Some("image/jpeg"),
+        Some("webp") => Some("image/webp"),
+        Some("bmp") => Some("image/bmp"),
+        Some("gif") => Some("image/gif"),
+        _ => None,
+    }
+}
+
+/// 标准 base64（带 `=` 填充）。只服务壁纸这一条路径，不引入额外 crate。
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[(triple >> 18) as usize & 0x3F] as char);
+        out.push(TABLE[(triple >> 12) as usize & 0x3F] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[(triple >> 6) as usize & 0x3F] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[triple as usize & 0x3F] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
 /// 保存配置，同时更新内存状态与磁盘文件。
 ///
 /// `quick_panel_edge` 与 `quick_panel_y` 由灰条窗口独占写入，这里以内存态为准，

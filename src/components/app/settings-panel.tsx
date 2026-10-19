@@ -1,7 +1,17 @@
 import { useEffect, useState } from "react";
 
 import { info } from "@tauri-apps/plugin-log";
-import { ClipboardList, FolderSearch, Monitor, Moon, RotateCcw, Sun } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
+import {
+  ClipboardList,
+  FolderSearch,
+  ImagePlus,
+  Monitor,
+  Moon,
+  RotateCcw,
+  Sun,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { UpdateCard } from "@/components/app/update-card";
@@ -89,6 +99,19 @@ export function SettingsPanel() {
       await ipc.cancelFileIndex();
     } catch (cause) {
       toast.error(`取消失败：${String(cause)}`);
+    }
+  };
+
+  const pickWallpaper = async () => {
+    try {
+      const picked = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] }],
+      });
+      if (typeof picked === "string") await apply({ wallpaper: picked });
+    } catch (cause) {
+      toast.error(`选择壁纸失败：${String(cause)}`);
     }
   };
 
@@ -207,6 +230,69 @@ export function SettingsPanel() {
               </label>
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>壁纸与玻璃</CardTitle>
+          <CardDescription>
+            选一张图片做底，卡片会透出模糊后的壁纸；不设壁纸时使用主题渐变。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <Label>当前壁纸</Label>
+              <span className="truncate text-xs text-muted-foreground" title={config.wallpaper}>
+                {config.wallpaper || "未设置（使用渐变底）"}
+              </span>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => void pickWallpaper()}>
+                <ImagePlus data-icon="inline-start" />
+                选择图片
+              </Button>
+              {config.wallpaper && (
+                <Button variant="ghost" size="sm" onClick={() => void apply({ wallpaper: "" })}>
+                  <Trash2 data-icon="inline-start" />
+                  清除
+                </Button>
+              )}
+            </div>
+          </div>
+
+          <RangeRow
+            label="背景模糊"
+            hint="整层壁纸一起模糊；卡片只做半透明，不逐张开 backdrop-filter"
+            value={config.wallpaperBlur}
+            min={0}
+            max={40}
+            suffix="px"
+            disabled={!config.wallpaper}
+            onCommit={(value) => void apply({ wallpaperBlur: value })}
+          />
+
+          <RangeRow
+            label="蒙版强度"
+            hint="压暗壁纸，保证文字对比度"
+            value={config.wallpaperVeil}
+            min={0}
+            max={90}
+            suffix="%"
+            disabled={!config.wallpaper}
+            onCommit={(value) => void apply({ wallpaperVeil: value })}
+          />
+
+          <RangeRow
+            label="玻璃不透明度"
+            hint="越低越透出背景；30% 以下文字会开始难读"
+            value={config.glassOpacity}
+            min={30}
+            max={100}
+            suffix="%"
+            onCommit={(value) => void apply({ glassOpacity: value })}
+          />
         </CardContent>
       </Card>
 
@@ -424,5 +510,65 @@ function RetentionInput({
       }}
       className="h-8 w-24 text-xs"
     />
+  );
+}
+
+/**
+ * 带本地草稿的滑杆：拖动期间只改 UI，**松手 / 键盘抬起 / 失焦才写配置**。
+ *
+ * 每移动一像素就 `set_config` 会拖着重写整份配置 + 落盘，既卡又没必要。
+ */
+function RangeRow({
+  label,
+  hint,
+  value,
+  min,
+  max,
+  suffix,
+  disabled = false,
+  onCommit,
+}: {
+  label: string;
+  hint?: string;
+  value: number;
+  min: number;
+  max: number;
+  suffix: string;
+  disabled?: boolean;
+  onCommit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => setDraft(value), [value]);
+
+  const commit = () => {
+    if (draft !== value) onCommit(draft);
+  };
+
+  return (
+    <div className={cn("flex flex-col gap-1", disabled && "opacity-50")}>
+      <div className="flex items-baseline justify-between gap-3">
+        <Label>{label}</Label>
+        <span className="text-xs tabular-nums text-muted-foreground">
+          {draft}
+          {suffix}
+        </span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={1}
+        value={draft}
+        disabled={disabled}
+        aria-label={label}
+        onChange={(event) => setDraft(Number(event.target.value))}
+        onPointerUp={commit}
+        onKeyUp={commit}
+        onBlur={commit}
+        className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-muted accent-[var(--brand)]"
+      />
+      {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
+    </div>
   );
 }

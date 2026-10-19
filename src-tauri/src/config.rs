@@ -52,6 +52,14 @@ pub struct AppConfig {
     pub theme_preset: String,
     /// 强调色 `#rrggbb`；空串表示用默认强调色。
     pub accent_color: String,
+    /// 壁纸图片的绝对路径；空串表示不用壁纸（只显示渐变底）。
+    pub wallpaper: String,
+    /// 壁纸模糊半径（px，0 = 不模糊）。
+    pub wallpaper_blur: u32,
+    /// 壁纸蒙版强度（百分比，0 = 不压暗，越大文字越清晰）。
+    pub wallpaper_veil: u32,
+    /// 卡片玻璃不透明度（百分比，越小越透出背景）。
+    pub glass_opacity: u32,
     pub language: String,
     /// 关闭主窗口时隐藏到托盘而不是退出。
     pub close_to_tray: bool,
@@ -91,6 +99,10 @@ impl Default for AppConfig {
             theme: Theme::default(),
             theme_preset: "aurora".to_string(),
             accent_color: String::new(),
+            wallpaper: String::new(),
+            wallpaper_blur: 18,
+            wallpaper_veil: 40,
+            glass_opacity: 78,
             language: "zh-CN".to_string(),
             close_to_tray: true,
             auto_start: true,

@@ -92,8 +92,8 @@
     --frost-tint-a: hsl(var(--hue-a) var(--tint-sat) 58% / 0.10);
     --frost-tint-b: hsl(var(--hue-b) var(--tint-sat) 62% / 0.07);
     --frost-tint-c: hsl(var(--hue-c) var(--tint-sat) 60% / 0.09);
-    --frost-base-a: rgba(255, 255, 255, 0.78);
-    --frost-base-b: rgba(255, 255, 255, 0.66);
+    --frost-base-a: rgba(255, 255, 255, calc(0.78 * var(--glass-dim, 1)));
+    --frost-base-b: rgba(255, 255, 255, calc(0.66 * var(--glass-dim, 1)));
     --frost-surface:
         radial-gradient(180% 130% at 0% -12%, var(--frost-tint-a), transparent 55%),
         radial-gradient(150% 120% at 105% 6%, var(--frost-tint-b), transparent 55%),
@@ -136,6 +136,8 @@
     --sidebar-accent-foreground: #26231d;
     --sidebar-border: rgba(40, 35, 60, 0.12);
     --sidebar-ring: var(--brand);
+    /* 壁纸蒙版颜色：亮色下用页面底色压暗照片，暗色下用近黑 */
+    --wallpaper-veil-color: #f4f1ea;
 }
 
 .dark {
@@ -148,8 +150,8 @@
     --frost-tint-a: hsl(var(--hue-a) var(--tint-sat) 62% / 0.14);
     --frost-tint-b: hsl(var(--hue-b) var(--tint-sat) 62% / 0.10);
     --frost-tint-c: hsl(var(--hue-c) var(--tint-sat) 62% / 0.12);
-    --frost-base-a: rgba(255, 255, 255, 0.10);
-    --frost-base-b: rgba(255, 255, 255, 0.07);
+    --frost-base-a: rgba(255, 255, 255, calc(0.10 * var(--glass-dim, 1)));
+    --frost-base-b: rgba(255, 255, 255, calc(0.07 * var(--glass-dim, 1)));
     --frost-edge: inset 0 1px 0 rgba(255, 255, 255, 0.10);
     --frost-border: rgba(255, 255, 255, 0.12);
     --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 14px 36px -18px rgba(0, 0, 0, 0.7);
@@ -180,6 +182,7 @@
     --sidebar-accent-foreground: #f2efe8;
     --sidebar-border: rgba(255, 255, 255, 0.10);
     --sidebar-ring: var(--brand);
+    --wallpaper-veil-color: #0b0c12;
 }
 
 /* ---- 10 套配色：只改色相与饱和度，其余全部派生 ---- */
@@ -227,5 +230,33 @@
     background-color: var(--popover);
     box-shadow: 0 24px 60px -24px rgba(0, 0, 0, 0.35);
     border: 1px solid var(--frost-border);
+    }
+
+  /*
+   * 壁纸层：整层图片先按配置模糊，再叠一层可调蒙版；
+   * 卡片只做半透明（不逐卡 backdrop-filter），所以常驻 GPU 成本仍是零。
+   * inset 负值 + scale 用来藏住高斯模糊在边缘的半透明毛刺。
+   */
+  .wallpaper-layer {
+    position: absolute;
+    inset: 0;
+    /* 必须负层级：绝对定位且 z-index:auto 会盖在标题栏/侧栏之上
+       （定位元素绘制在普通流内容之后），表现为整个外壳消失。
+       根节点有 isolate，所以 -1 只到本层背景之上、内容之下。 */
+    z-index: -1;
+    overflow: hidden;
+    pointer-events: none;
+    }
+  .wallpaper-image {
+    position: absolute;
+    inset: -64px;
+    background-position: center;
+    background-size: cover;
+    transform: scale(1.04);
+    }
+  .wallpaper-veil {
+    position: absolute;
+    inset: 0;
+    background: var(--wallpaper-veil-color);
     }
 }

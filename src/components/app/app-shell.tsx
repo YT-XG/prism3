@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -12,6 +14,7 @@ import { ClipboardPanel } from "@/components/clipboard/clipboard-panel";
 import { MonitorPanel } from "@/components/monitor/monitor-panel";
 import { SearchPanel } from "@/components/search/search-panel";
 import { cn } from "@/lib/utils";
+import { ipc } from "@/lib/ipc";
 import { useAppStore } from "@/stores/app-store";
 
 import { AppSidebar } from "./sidebar-nav";
@@ -36,7 +39,8 @@ export function AppShell() {
   }[activeView];
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden text-foreground">
+    <div className="relative isolate flex h-screen w-screen flex-col overflow-hidden text-foreground">
+      <WallpaperLayer />
       <TitleBar />
 
       <div className="flex min-h-0 flex-1">
@@ -55,6 +59,45 @@ export function AppShell() {
           </ScrollArea>
         </main>
       </div>
+    </div>
+  );
+}
+
+function WallpaperLayer() {
+  const path = useAppStore((state) => state.config?.wallpaper ?? "");
+  const blur = useAppStore((state) => state.config?.wallpaperBlur ?? 18);
+  const veil = useAppStore((state) => state.config?.wallpaperVeil ?? 35);
+  const [src, setSrc] = useState<string | null>(null);
+
+  // 只读一次：配置里存路径，字节由 Rust 读成 data URL（不经过 fs 插件 scope）。
+  useEffect(() => {
+    let active = true;
+    if (!path) {
+      setSrc(null);
+      return;
+    }
+    void ipc
+      .readWallpaper(path)
+      .then((data) => {
+        if (active) setSrc(data);
+      })
+      .catch(() => {
+        if (active) setSrc(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [path]);
+
+  if (!src) return null;
+
+  return (
+    <div className="wallpaper-layer" aria-hidden="true">
+      <div
+        className="wallpaper-image"
+        style={{ backgroundImage: `url("${src}")`, filter: `blur(${blur}px)` }}
+      />
+      <div className="wallpaper-veil" style={{ opacity: veil / 100 }} />
     </div>
   );
 }

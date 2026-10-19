@@ -211,6 +211,7 @@ pub fn run() {
             commands::get_config,
             commands::set_config,
             commands::reset_config,
+            commands::read_wallpaper,
             commands::set_quick_panel_dock,
             commands::set_quick_panel_geometry,
             commands::set_quick_panel_body_position,

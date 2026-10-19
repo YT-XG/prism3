@@ -15,6 +15,14 @@ export interface AppConfig {
   themePreset: string;
   /** 强调色 `#rrggbb`；空串表示用默认强调色。 */
   accentColor: string;
+  /** 壁纸图片绝对路径；空串 = 不用壁纸。 */
+  wallpaper: string;
+  /** 壁纸模糊半径（px）。 */
+  wallpaperBlur: number;
+  /** 壁纸蒙版强度（百分比）。 */
+  wallpaperVeil: number;
+  /** 卡片玻璃不透明度（百分比，越小越透）。 */
+  glassOpacity: number;
   language: string;
   closeToTray: boolean;
   /** 开机时自动启动（默认开启；开发模式下后端不注册，见 `src-tauri/src/autostart.rs`）。 */
@@ -266,6 +274,8 @@ export interface UpdateState {
 
 export const ipc = {
   getConfig: () => invoke<AppConfig>("get_config"),
+  /** 读取壁纸并编码为 data URL（Rust 侧读文件、按文件头判类型）。 */
+  readWallpaper: (path: string) => invoke<string>("read_wallpaper", { path }),
   setConfig: (config: AppConfig) => invoke<void>("set_config", { config }),
   resetConfig: () => invoke<AppConfig>("reset_config"),
   /** 更新快捷小窗吸附的边缘与沿边偏移（拖动结束时写入）。 */
