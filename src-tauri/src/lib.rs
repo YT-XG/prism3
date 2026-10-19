@@ -51,21 +51,33 @@ pub fn run() {
                 .build(),
         )
         // 排除快捷小窗（灰条 + 面板）：其尺寸/位置由灰条窗口自行管理，且不应被恢复为可见。
+        // 可见性也不交给插件恢复：默认旗标会在启动时按上次退出时的 `visible` 调
+        // `show() + set_focus()`，那会在 `setup` 决定「开机自启不弹窗」之前就把主窗口弹出来。
+        // 主窗口什么时候显示只由本文件（`setup`）与 `tray.rs`（点托盘）决定。
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_denylist(&["quick-panel", "quick-panel-body"])
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::all()
+                        & !tauri_plugin_window_state::StateFlags::VISIBLE,
+                )
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         // 开机自启（Windows 即 HKCU 的 Run 项）；真正的注册由 `autostart::sync` 按配置执行。
+        // 启动项带 `--autostart` 参数：`setup` 据此判断本次是开机拉起，只驻留托盘不弹主窗口。
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
+            Some(vec![autostart::LAUNCH_FLAG]),
         ))
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // 本次进程是不是开机自启项拉起的（命令行里的 `--autostart`，见 autostart.rs）。
+            // 早算一次，后面决定主窗口要不要显示。
+            let launched_by_autostart = autostart::launched_by_autostart();
 
             let initial_config = config::load(&handle);
             let quick_panel_enabled = initial_config.quick_panel;
@@ -117,7 +129,13 @@ pub fn run() {
             // 显示前先把底色设成当前主题：窗口比页面首帧早得多，默认白色在暗色主题下会闪。
             if let Some(webview) = app.get_webview_window("main") {
                 sync_window_background(&handle, initial_config.theme);
-                webview.show()?;
+                // 开机自启拉起的进程只驻留托盘：用户是按了开机，不是要打开应用。
+                // 需要主窗口时点托盘图标（`tray.rs`），或再启动一次（single-instance 会唤起）。
+                if launched_by_autostart {
+                    log::info!("由开机自启拉起：主窗口保持隐藏，仅驻留托盘");
+                } else {
+                    webview.show()?;
+                }
             }
 
             // 快捷小窗窗口按需创建：仅在配置启用时创建，功能关闭则不占用 WebView。
@@ -255,8 +273,8 @@ pub fn run() {
 /// 把主窗口底色同步成主题的背景色。
 ///
 /// 窗口比页面首帧早得多（前端在 dev 下要几百毫秒到几秒），默认的纯白底色在暗色主题下
-/// 会明显闪一下。这里按主题设置窗口与 WebView 的底色：亮色 `#ffffff`、暗色 `#09090b`
-/// （与 `index.css` 里 `--background` 的两个取值一致）。
+/// 会明显闪一下。这里按主题设置窗口与 WebView 的底色：亮色 `#f4f1ea`、暗色 `#12131b`
+/// （与 `index.css` 里 `--bg-page` 的两个取值一致）。
 pub(crate) fn sync_window_background(app: &AppHandle, theme: config::Theme) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -268,9 +286,9 @@ pub(crate) fn sync_window_background(app: &AppHandle, theme: config::Theme) {
         config::Theme::System => matches!(window.theme(), Ok(tauri::Theme::Dark)),
     };
     let color = if dark {
-        tauri::window::Color(9, 9, 11, 255)
+        tauri::window::Color(18, 19, 27, 255)
     } else {
-        tauri::window::Color(255, 255, 255, 255)
+        tauri::window::Color(244, 241, 234, 255)
     };
     if let Err(err) = window.set_background_color(Some(color)) {
         log::warn!("同步窗口底色失败：{err}");

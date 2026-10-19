@@ -136,7 +136,7 @@ export function SettingsPanel() {
               <span className="text-xs text-muted-foreground">
                 {import.meta.env.DEV
                   ? "开发模式下不注册系统启动项，只有发布版才生效。"
-                  : "登录系统后自动在后台运行。"}
+                  : "登录系统后在托盘静默运行，不弹主窗口；点托盘图标可打开。"}
               </span>
             </div>
             <Switch
