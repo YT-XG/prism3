@@ -237,7 +237,7 @@ export function SettingsPanel() {
         <CardHeader>
           <CardTitle>壁纸与玻璃</CardTitle>
           <CardDescription>
-            选一张图片做底，卡片会透出模糊后的壁纸；不设壁纸时使用主题渐变。
+            选一张图片做底；毛玻璃仅暗色主题生效，亮色下卡片是实心白。
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
@@ -286,11 +286,16 @@ export function SettingsPanel() {
 
           <RangeRow
             label="玻璃不透明度"
-            hint="越低越透出背景；30% 以下文字会开始难读"
+            hint={
+              config.theme === "light"
+                ? "仅暗色主题生效；亮色下卡片保持实心白"
+                : "越低越透出背景；30% 以下文字会开始难读"
+            }
             value={config.glassOpacity}
             min={30}
             max={100}
             suffix="%"
+            disabled={config.theme === "light"}
             onCommit={(value) => void apply({ glassOpacity: value })}
           />
         </CardContent>

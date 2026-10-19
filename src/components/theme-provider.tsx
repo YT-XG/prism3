@@ -17,6 +17,7 @@ export interface ThemePreset {
 }
 
 export const THEME_PRESETS: ThemePreset[] = [
+  { id: "plain", label: "纯白", hues: [220, 210, 230], sat: 12 },
   { id: "aurora", label: "极光", hues: [245, 330, 217], sat: 82 },
   { id: "slate", label: "石墨", hues: [220, 210, 232], sat: 18 },
   { id: "ocean", label: "深海", hues: [205, 190, 228], sat: 70 },
@@ -26,7 +27,6 @@ export const THEME_PRESETS: ThemePreset[] = [
   { id: "rose", label: "玫瑰", hues: [335, 350, 300], sat: 78 },
   { id: "violet", label: "紫罗兰", hues: [265, 290, 240], sat: 76 },
   { id: "amber", label: "琥珀", hues: [38, 24, 55], sat: 78 },
-  { id: "candy", label: "糖果", hues: [318, 200, 280], sat: 86 },
 ];
 
 export const DEFAULT_PRESET = THEME_PRESETS[0].id;
@@ -89,14 +89,14 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const theme = useAppStore((state) => state.config?.theme ?? "system");
   const themePreset = useAppStore((state) => state.config?.themePreset);
   const accentColor = useAppStore((state) => state.config?.accentColor);
-  const glassOpacity = useAppStore((state) => state.config?.glassOpacity ?? 78);
+  const glassOpacity = useAppStore((state) => state.config?.glassOpacity ?? 60);
 
   useEffect(() => {
     const root = document.documentElement;
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const preset = resolvePreset(themePreset);
     const accent = resolveAccent(accentColor);
-    // 78% 是基线（卡片基底 0.78 / 0.66 的不透明度）；滑块 40–100 映射成 0.51–1.28 的倍率。
+    // 78% 是卡片基底（0.78 / 0.66）的设计基线；滑块 30–100 映射成 0.38–1.28 的倍率。
     const glassDim = Math.min(100, Math.max(30, glassOpacity)) / 78;
 
     const apply = () => {

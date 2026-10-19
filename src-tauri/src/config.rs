@@ -97,12 +97,12 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             theme: Theme::default(),
-            theme_preset: "aurora".to_string(),
+            theme_preset: "plain".to_string(),
             accent_color: String::new(),
             wallpaper: String::new(),
             wallpaper_blur: 18,
             wallpaper_veil: 40,
-            glass_opacity: 78,
+            glass_opacity: 60,
             language: "zh-CN".to_string(),
             close_to_tray: true,
             auto_start: true,

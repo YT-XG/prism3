@@ -274,8 +274,8 @@ pub fn run() {
 /// 把主窗口底色同步成主题的背景色。
 ///
 /// 窗口比页面首帧早得多（前端在 dev 下要几百毫秒到几秒），默认的纯白底色在暗色主题下
-/// 会明显闪一下。这里按主题设置窗口与 WebView 的底色：亮色 `#f4f1ea`、暗色 `#12131b`
-/// （与 `index.css` 里 `--bg-page` 的两个取值一致）。
+/// 会明显闪一下。这里按主题设置窗口与 WebView 的底色：亮色 `#f7f8fa`、暗色 `#12131b`
+/// （与 `index.css` 里 `--bg-page` 的默认取值一致）。
 pub(crate) fn sync_window_background(app: &AppHandle, theme: config::Theme) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -289,7 +289,7 @@ pub(crate) fn sync_window_background(app: &AppHandle, theme: config::Theme) {
     let color = if dark {
         tauri::window::Color(18, 19, 27, 255)
     } else {
-        tauri::window::Color(244, 241, 234, 255)
+        tauri::window::Color(247, 248, 250, 255)
     };
     if let Err(err) = window.set_background_color(Some(color)) {
         log::warn!("同步窗口底色失败：{err}");
