@@ -7,6 +7,13 @@ import { toast } from "sonner";
 import { UpdateCard } from "@/components/app/update-card";
 import { ClipboardStatus } from "@/components/clipboard/clipboard-status";
 import { SearchIndexStatus } from "@/components/search/search-status";
+import {
+  ACCENT_COLORS,
+  presetGradient,
+  resolveAccent,
+  resolvePreset,
+  THEME_PRESETS,
+} from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -23,6 +30,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useClipboardState } from "@/hooks/use-clipboard-state";
 import { useFileIndexState } from "@/hooks/use-file-index-state";
 import { ipc, type AppConfig, type Theme } from "@/lib/ipc";
+import { cn } from "@/lib/utils";
 import { useAppStore } from "@/stores/app-store";
 
 /** 保留天数的可填范围（0 = 永久保留）。 */
@@ -96,9 +104,11 @@ export function SettingsPanel() {
       <Card>
         <CardHeader>
           <CardTitle>外观</CardTitle>
-          <CardDescription>主题偏好写入配置文件，重启后保持。</CardDescription>
+          <CardDescription>
+            三轴可调：模式（亮 / 暗 / 跟随系统）、配色（背景与玻璃染色）、强调色（按钮与焦点环）。
+          </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-5">
           <Tabs
             value={config.theme}
             onValueChange={(value) => void apply({ theme: value as Theme })}
@@ -112,6 +122,91 @@ export function SettingsPanel() {
               ))}
             </TabsList>
           </Tabs>
+
+          <div className="flex flex-col gap-2">
+            <div className="flex items-baseline justify-between">
+              <Label>配色</Label>
+              <span className="text-xs text-muted-foreground">只影响背景光晕与玻璃染色</span>
+            </div>
+            <div className="grid grid-cols-5 gap-2">
+              {THEME_PRESETS.map((preset) => {
+                const selected = resolvePreset(config.themePreset) === preset.id;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => void apply({ themePreset: preset.id })}
+                    className={cn(
+                      "group flex flex-col items-center gap-1.5 rounded-lg p-1.5 transition-colors",
+                      selected ? "bg-brand-soft" : "hover:bg-muted",
+                    )}
+                  >
+                    <span
+                      className="h-8 w-full rounded-md ring-1 ring-black/5 dark:ring-white/10"
+                      style={{ backgroundImage: presetGradient(preset) }}
+                    />
+                    <span
+                      className={cn(
+                        "text-[11px]",
+                        selected ? "font-medium text-foreground" : "text-muted-foreground",
+                      )}
+                    >
+                      {preset.label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <div className="flex items-baseline justify-between">
+              <Label>强调色</Label>
+              <span className="text-xs text-muted-foreground">按钮、焦点环与选中态</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {ACCENT_COLORS.map(({ value, label }) => {
+                const selected = resolveAccent(config.accentColor) === value;
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-label={label}
+                    aria-pressed={selected}
+                    title={label}
+                    onClick={() => void apply({ accentColor: value })}
+                    className={cn(
+                      "size-7 rounded-full ring-2 ring-offset-2 ring-offset-background transition",
+                      selected ? "ring-foreground/60" : "ring-transparent hover:ring-border",
+                    )}
+                    style={{ backgroundColor: value }}
+                  />
+                );
+              })}
+
+              <label
+                className="relative flex size-7 cursor-pointer items-center justify-center rounded-full ring-1 ring-border transition hover:ring-foreground/40"
+                title="自定义强调色"
+              >
+                <span
+                  aria-hidden="true"
+                  className="size-5 rounded-full"
+                  style={{
+                    background:
+                      "conic-gradient(#f43f5e, #f59e0b, #10b981, #06b6d4, #5b5bf5, #8b5cf6, #f43f5e)",
+                  }}
+                />
+                <input
+                  type="color"
+                  aria-label="自定义强调色"
+                  value={resolveAccent(config.accentColor)}
+                  onChange={(event) => void apply({ accentColor: event.target.value })}
+                  className="absolute inset-0 size-full cursor-pointer opacity-0"
+                />
+              </label>
+            </div>
+          </div>
         </CardContent>
       </Card>
 

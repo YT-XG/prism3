@@ -15,6 +15,14 @@
           (preference !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
         if (dark) document.documentElement.classList.add("dark");
         document.documentElement.style.colorScheme = dark ? "dark" : "light";
+
+        // 配色与强调色也要抢在样式之前定下来，否则换色后会先闪一帧默认靛蓝。
+        var preset = localStorage.getItem("prism3:preset");
+        if (preset) document.documentElement.dataset.preset = preset;
+        var accent = localStorage.getItem("prism3:accent");
+        if (accent && /^#[0-9a-f]{6}$/i.test(accent)) {
+          document.documentElement.style.setProperty("--brand", accent);
+        }
       } catch (error) {
         // localStorage / matchMedia 不可用时按亮色走，不影响应用本身。
       }
@@ -24,16 +32,16 @@
          开发模式下 Vite 要现场编译十几个模块（本机实测 3 秒以上），
          生产模式下窗口也在 HTML 到达前是空白的 —— 两种场景都靠它遮住。 */
       :root {
-        --boot-bg: #ffffff;
-        --boot-fg: #18181b;
-        --boot-muted: #71717a;
-        --boot-track: rgba(24, 24, 27, 0.08);
+        --boot-bg: #f4f1ea;
+        --boot-fg: #26231d;
+        --boot-muted: #8d877d;
+        --boot-track: rgba(38, 35, 29, 0.1);
       }
       html.dark {
-        --boot-bg: #09090b;
-        --boot-fg: #fafafa;
-        --boot-muted: #a1a1aa;
-        --boot-track: rgba(250, 250, 250, 0.14);
+        --boot-bg: #12131b;
+        --boot-fg: #f2efe8;
+        --boot-muted: #a8a39a;
+        --boot-track: rgba(242, 239, 232, 0.14);
       }
       html,
       body {

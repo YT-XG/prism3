@@ -8,6 +8,9 @@
 @theme inline {
     --font-heading: var(--font-sans);
     --font-sans: 'Geist Variable', sans-serif;
+    --color-brand: var(--brand);
+    --color-brand-soft: var(--brand-soft);
+    --color-brand-glow: var(--brand-glow);
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -48,83 +51,181 @@
     --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/*
+ * 外观基线（参照 x-hub 的「玻璃卡片 + 极简侧轨 + 轻微纸张层次」）。
+ *
+ * 三轴可调：
+ *   1. 模式：.dark → 暗色 token
+ *   2. 配色：html[data-preset] → 只改三个色相 + 饱和度，页面渐变与玻璃染色自动派生
+ *   3. 强调色：ThemeProvider 往 :root 内联写 --brand（8 预设 + 自定义 hex）
+ *
+ * 性能约定：常驻卡片**不用 backdrop-filter**，毛玻璃由烘焙好的多层渐变
+ * （--frost-surface）模拟；真 backdrop-filter 只留给弹窗/下拉等瞬态表面。
+ */
 :root {
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
-    --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
+    /* ---- 强调色（由 JS 内联覆盖）与派生色 ---- */
+    --brand: #5b5bf5;
+    --brand-600: color-mix(in srgb, var(--brand) 78%, #000);
+    --brand-soft: color-mix(in srgb, var(--brand) 12%, transparent);
+    --brand-glow: color-mix(in srgb, var(--brand) 22%, transparent);
+
+    /* ---- 配色预设：色相 / 饱和度（预设只覆盖这三项 + 饱和度） ---- */
+    --hue-a: 245;
+    --hue-b: 330;
+    --hue-c: 217;
+    --tint-sat: 82%;
+
+    /* ---- 页面底色与光晕 ---- */
+    --bg-page: #f4f1ea;
+    --base-a: #eef1f8;
+    --base-b: #f7f3ea;
+    --glow-a: hsl(var(--hue-a) var(--tint-sat) 58% / 0.16);
+    --glow-b: hsl(var(--hue-b) var(--tint-sat) 60% / 0.11);
+    --glow-c: hsl(var(--hue-c) var(--tint-sat) 60% / 0.14);
+    --app-bg:
+        radial-gradient(1200px 800px at 10% -10%, var(--glow-a), transparent 55%),
+        radial-gradient(1000px 700px at 102% 2%, var(--glow-b), transparent 55%),
+        radial-gradient(1200px 900px at 52% 118%, var(--glow-c), transparent 55%),
+        linear-gradient(150deg, var(--base-a) 0%, var(--base-b) 100%);
+
+    /* ---- 伪毛玻璃：把「背景被模糊后的晕染」烘焙进卡片自身 ---- */
+    --frost-tint-a: hsl(var(--hue-a) var(--tint-sat) 58% / 0.10);
+    --frost-tint-b: hsl(var(--hue-b) var(--tint-sat) 62% / 0.07);
+    --frost-tint-c: hsl(var(--hue-c) var(--tint-sat) 60% / 0.09);
+    --frost-base-a: rgba(255, 255, 255, 0.78);
+    --frost-base-b: rgba(255, 255, 255, 0.66);
+    --frost-surface:
+        radial-gradient(180% 130% at 0% -12%, var(--frost-tint-a), transparent 55%),
+        radial-gradient(150% 120% at 105% 6%, var(--frost-tint-b), transparent 55%),
+        radial-gradient(170% 130% at 50% 116%, var(--frost-tint-c), transparent 55%),
+        linear-gradient(150deg, var(--frost-base-a) 0%, var(--frost-base-b) 100%);
+    --frost-edge: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+    --frost-border: rgba(255, 255, 255, 0.55);
+    --shadow-card: 0 1px 2px rgba(38, 35, 29, 0.04), 0 10px 28px -16px rgba(38, 35, 29, 0.22);
+
+    /* ---- shadcn 语义 token 映射到上述基线 ---- */
+    --background: var(--bg-page);
+    --foreground: #26231d;
+    --card: rgba(255, 255, 255, 0.74);
+    --card-foreground: #26231d;
+    --popover: #fbf8f2;
+    --popover-foreground: #26231d;
+    --primary: var(--brand);
+    --primary-foreground: #ffffff;
+    --secondary: rgba(38, 35, 29, 0.06);
+    --secondary-foreground: #26231d;
+    --muted: rgba(38, 35, 29, 0.05);
+    --muted-foreground: #6f6a63;
+    --accent: rgba(38, 35, 29, 0.06);
+    --accent-foreground: #26231d;
+    --destructive: #dc2626;
+    --border: rgba(40, 35, 60, 0.14);
+    --input: rgba(255, 255, 255, 0.86);
+    --ring: var(--brand);
     --chart-1: oklch(0.87 0 0);
     --chart-2: oklch(0.556 0 0);
     --chart-3: oklch(0.439 0 0);
     --chart-4: oklch(0.371 0 0);
     --chart-5: oklch(0.269 0 0);
-    --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
+    --radius: 0.75rem;
+    --sidebar: rgba(255, 255, 255, 0.62);
+    --sidebar-foreground: #26231d;
+    --sidebar-primary: var(--brand);
+    --sidebar-primary-foreground: #ffffff;
+    --sidebar-accent: rgba(38, 35, 29, 0.06);
+    --sidebar-accent-foreground: #26231d;
+    --sidebar-border: rgba(40, 35, 60, 0.12);
+    --sidebar-ring: var(--brand);
 }
 
 .dark {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
+    --bg-page: #12131b;
+    --base-a: #10111a;
+    --base-b: #171420;
+    --glow-a: hsl(var(--hue-a) var(--tint-sat) 62% / 0.22);
+    --glow-b: hsl(var(--hue-b) var(--tint-sat) 62% / 0.16);
+    --glow-c: hsl(var(--hue-c) var(--tint-sat) 62% / 0.2);
+    --frost-tint-a: hsl(var(--hue-a) var(--tint-sat) 62% / 0.14);
+    --frost-tint-b: hsl(var(--hue-b) var(--tint-sat) 62% / 0.10);
+    --frost-tint-c: hsl(var(--hue-c) var(--tint-sat) 62% / 0.12);
+    --frost-base-a: rgba(255, 255, 255, 0.10);
+    --frost-base-b: rgba(255, 255, 255, 0.07);
+    --frost-edge: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+    --frost-border: rgba(255, 255, 255, 0.12);
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 14px 36px -18px rgba(0, 0, 0, 0.7);
+
+    --background: var(--bg-page);
+    --foreground: #f2efe8;
+    --card: rgba(255, 255, 255, 0.10);
+    --card-foreground: #f2efe8;
+    --popover: #1c1d28;
+    --popover-foreground: #f2efe8;
+    --primary: var(--brand);
+    --primary-foreground: #ffffff;
+    --secondary: rgba(255, 255, 255, 0.08);
+    --secondary-foreground: #f2efe8;
+    --muted: rgba(255, 255, 255, 0.07);
+    --muted-foreground: #a8a39a;
+    --accent: rgba(255, 255, 255, 0.09);
+    --accent-foreground: #f2efe8;
+    --destructive: #f87171;
+    --border: rgba(255, 255, 255, 0.14);
+    --input: rgba(255, 255, 255, 0.08);
+    --ring: var(--brand);
+    --sidebar: rgba(255, 255, 255, 0.06);
+    --sidebar-foreground: #f2efe8;
+    --sidebar-primary: var(--brand);
+    --sidebar-primary-foreground: #ffffff;
+    --sidebar-accent: rgba(255, 255, 255, 0.08);
+    --sidebar-accent-foreground: #f2efe8;
+    --sidebar-border: rgba(255, 255, 255, 0.10);
+    --sidebar-ring: var(--brand);
 }
+
+/* ---- 10 套配色：只改色相与饱和度，其余全部派生 ---- */
+[data-preset="aurora"] { --hue-a: 245; --hue-b: 330; --hue-c: 217; --tint-sat: 82%; }
+[data-preset="slate"]  { --hue-a: 220; --hue-b: 210; --hue-c: 232; --tint-sat: 18%; }
+[data-preset="ocean"]  { --hue-a: 205; --hue-b: 190; --hue-c: 228; --tint-sat: 70%; }
+[data-preset="sage"]   { --hue-a: 150; --hue-b: 170; --hue-c: 105; --tint-sat: 48%; }
+[data-preset="forest"] { --hue-a: 135; --hue-b: 160; --hue-c: 95;  --tint-sat: 58%; }
+[data-preset="sunset"] { --hue-a: 22;  --hue-b: 340; --hue-c: 45;  --tint-sat: 80%; }
+[data-preset="rose"]   { --hue-a: 335; --hue-b: 350; --hue-c: 300; --tint-sat: 78%; }
+[data-preset="violet"] { --hue-a: 265; --hue-b: 290; --hue-c: 240; --tint-sat: 76%; }
+[data-preset="amber"]  { --hue-a: 38;  --hue-b: 24;  --hue-c: 55;  --tint-sat: 78%; }
+[data-preset="candy"]  { --hue-a: 318; --hue-b: 200; --hue-c: 280; --tint-sat: 86%; }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
     }
-  body {
-    @apply bg-background text-foreground;
-    }
   html {
     @apply font-sans;
+    }
+  body {
+    /* 页面底色是固定的柔和渐变：常驻卡片据此烘焙伪毛玻璃，滚动时不重绘。 */
+    @apply text-foreground antialiased;
+    background-color: var(--bg-page);
+    background-image: var(--app-bg);
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+    background-size: cover;
+    }
+  ::selection {
+    background: var(--brand-soft);
+    }
+}
+
+@layer components {
+  /* 玻璃卡片：常驻表面统一用这一层（烘焙渐变 + 顶部高光 + 分层阴影） */
+  .glass-card {
+    background-image: var(--frost-surface);
+    box-shadow: var(--shadow-card);
+    border: 1px solid var(--frost-border);
+    }
+  /* 瞬态表面（弹窗/下拉）才允许真模糊，一次性成本 */
+  .glass-overlay {
+    background-color: var(--popover);
+    box-shadow: 0 24px 60px -24px rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--frost-border);
     }
 }

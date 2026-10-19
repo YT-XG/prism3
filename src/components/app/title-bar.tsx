@@ -17,6 +17,7 @@ export function TitleBar() {
   const activeView = useAppStore((state) => state.activeView);
   const setActiveView = useAppStore((state) => state.setActiveView);
   const theme = useAppStore((state) => state.config?.theme);
+  const sidebarCollapsed = useAppStore((state) => state.sidebarCollapsed);
   const saveConfig = useAppStore((state) => state.saveConfig);
   const [maximized, setMaximized] = useState(false);
 
@@ -47,10 +48,15 @@ export function TitleBar() {
   return (
     <header
       data-tauri-drag-region="deep"
-      className="flex h-10 shrink-0 items-center select-none"
+      className="flex h-12 shrink-0 items-center select-none"
     >
-      <div className="w-56 shrink-0 px-3 font-heading text-xs font-medium tracking-wide">
-        Prism3
+      <div
+        className={cn(
+          "shrink-0 font-heading text-xs font-semibold tracking-[0.14em] uppercase transition-[width] duration-200 ease-out",
+          sidebarCollapsed ? "w-14 text-center" : "w-56 px-3",
+        )}
+      >
+        {!sidebarCollapsed && "Prism3"}
       </div>
 
       <div className="flex flex-1 items-center justify-end gap-0.5 pr-1">

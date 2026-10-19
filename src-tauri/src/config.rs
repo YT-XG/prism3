@@ -48,6 +48,10 @@ pub struct BleDeviceEntry {
 #[serde(rename_all = "camelCase", default)]
 pub struct AppConfig {
     pub theme: Theme,
+    /// 配色预设 id（前端 `THEME_PRESETS` 的 id）；未知值由前端回退到默认。
+    pub theme_preset: String,
+    /// 强调色 `#rrggbb`；空串表示用默认强调色。
+    pub accent_color: String,
     pub language: String,
     /// 关闭主窗口时隐藏到托盘而不是退出。
     pub close_to_tray: bool,
@@ -85,6 +89,8 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             theme: Theme::default(),
+            theme_preset: "aurora".to_string(),
+            accent_color: String::new(),
             language: "zh-CN".to_string(),
             close_to_tray: true,
             auto_start: true,

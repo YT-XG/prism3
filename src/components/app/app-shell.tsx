@@ -19,8 +19,8 @@ import { SettingsPanel } from "./settings-panel";
 import { TitleBar } from "./title-bar";
 
 /**
- * 一体式外壳：标题栏与左侧导航共用 `bg-sidebar` 连成 L 形，
- * 内容区是独立的 `bg-background` 面板，左上角圆角露出底层底色。
+ * 一体式外壳（参照 x-hub）：页面底色是固定的柔和渐变（`body`），
+ * 标题栏与侧栏保持透明，工作区不再铺一层实色面板 —— 内容以玻璃卡片直接浮在渐变上。
  */
 export function AppShell() {
   const activeView = useAppStore((state) => state.activeView);
@@ -36,15 +36,15 @@ export function AppShell() {
   }[activeView];
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-sidebar text-sidebar-foreground">
+    <div className="flex h-screen w-screen flex-col overflow-hidden text-foreground">
       <TitleBar />
 
       <div className="flex min-h-0 flex-1">
         <AppSidebar />
 
-        <main className="min-w-0 flex-1 overflow-hidden rounded-tl-xl border-t border-l border-border/60 bg-background text-foreground">
+        <main className="min-w-0 flex-1 overflow-hidden">
           <ScrollArea className="h-full">
-            <div className={cn("mx-auto w-full p-6", contentWidth)}>
+            <div className={cn("mx-auto w-full px-6 py-5 pb-8", contentWidth)}>
               {activeView === "home" && <HomeView />}
               {activeView === "search" && <SearchPanel />}
               {activeView === "settings" && <SettingsPanel />}

@@ -11,6 +11,10 @@ export type AppStatus = "normal" | "busy" | "warn";
 /** 与 Rust 侧 `AppConfig` 一一对应。 */
 export interface AppConfig {
   theme: Theme;
+  /** 配色预设 id（见 `THEME_PRESETS`）；未知值由前端回退到默认。 */
+  themePreset: string;
+  /** 强调色 `#rrggbb`；空串表示用默认强调色。 */
+  accentColor: string;
   language: string;
   closeToTray: boolean;
   /** 开机时自动启动（默认开启；开发模式下后端不注册，见 `src-tauri/src/autostart.rs`）。 */
