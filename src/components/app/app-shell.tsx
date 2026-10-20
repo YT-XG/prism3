@@ -21,14 +21,14 @@ import { TitleBar } from "./title-bar";
 export function AppShell() {
   const activeView = useAppStore((state) => state.activeView);
 
-  // 数据型页面（监控 / 搜索）充分利用窗口宽度，表单型页面保持窄栏更易读。
+  // 数据型页面（监控 / 搜索 / 剪贴板 / 蓝牙）充分利用窗口宽度，表单型页面保持窄栏更易读。
   const contentWidth = {
     home: "max-w-3xl",
     settings: "max-w-3xl",
-    monitor: "max-w-6xl",
-    search: "max-w-4xl",
-    bluetooth: "max-w-4xl",
-    clipboard: "max-w-4xl",
+    monitor: "max-w-none",
+    search: "max-w-none",
+    bluetooth: "max-w-none",
+    clipboard: "max-w-none",
   }[activeView];
 
   return (
@@ -44,7 +44,14 @@ export function AppShell() {
             <HomeDashboard />
           ) : (
             <ScrollArea className="h-full">
-              <div className={cn("mx-auto w-full px-6 py-5 pb-8", contentWidth)}>
+              <div
+                className={cn(
+                  "mx-auto w-full px-6 py-5 pb-8",
+                  contentWidth,
+                  // 剪贴板是整页数据列表：撑满视口高度，让列表自己滚动，不把页面留空。
+                  activeView === "clipboard" && "flex h-full flex-col",
+                )}
+              >
                 {activeView === "search" && <SearchPanel />}
                 {activeView === "settings" && <SettingsPanel />}
                 {activeView === "monitor" && <MonitorPanel />}

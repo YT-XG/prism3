@@ -93,8 +93,8 @@ export function ClipboardPanel() {
   };
 
   return (
-    <div className="flex flex-col gap-4">
-      <div>
+    <div className="glass-card flex h-full min-h-0 flex-col gap-4 rounded-xl bg-card p-5">
+      <div className="shrink-0">
         <h1 className="font-heading text-lg font-medium">剪贴板</h1>
         <p className="text-sm text-muted-foreground">
           记录复制过的文本与图片。点击一条记录
@@ -103,7 +103,7 @@ export function ClipboardPanel() {
         </p>
       </div>
 
-      <div className="relative">
+      <div className="relative shrink-0">
         <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input
           ref={inputRef}
@@ -132,7 +132,7 @@ export function ClipboardPanel() {
         )}
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <Tabs value={kind} onValueChange={(value) => setKind(value as ClipKindFilter)}>
           <TabsList>
             <TabsTrigger value="all">全部</TabsTrigger>
@@ -161,7 +161,7 @@ export function ClipboardPanel() {
       ) : (
         <div
           ref={listRef}
-          className="max-h-[26rem] overflow-y-auto rounded-lg border border-border/60 p-1.5"
+          className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-border/60 p-1.5"
         >
           <ClipboardList
             entries={entries}

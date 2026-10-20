@@ -229,6 +229,22 @@ html[data-wallpaper].dark .home-heading-subtitle {
     color: #d8d4cb;
 }
 
+/* 其他页面的标题也直接浮在壁纸上（只有内容卡片托底），同样补轮廓光。 */
+html[data-wallpaper] main h1,
+html[data-wallpaper] main h1 + p {
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8);
+}
+html[data-wallpaper] main h1 + p {
+    color: #3d3932;
+}
+html[data-wallpaper].dark main h1,
+html[data-wallpaper].dark main h1 + p {
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+html[data-wallpaper].dark main h1 + p {
+    color: #d8d4cb;
+}
+
 /* 侧栏去掉了底色与边框，图标/文字直接浮在壁纸上：只补一层很淡的轮廓光，
    不重新加背景，避免又变成一条"实心菜单栏"。 */
 html[data-wallpaper] aside {
