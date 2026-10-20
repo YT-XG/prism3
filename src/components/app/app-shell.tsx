@@ -1,16 +1,9 @@
 import { useEffect, useState } from "react";
 
-import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { BluetoothPanel } from "@/components/bluetooth/bluetooth-panel";
 import { ClipboardPanel } from "@/components/clipboard/clipboard-panel";
+import { HomeDashboard } from "@/components/home/home-dashboard";
 import { MonitorPanel } from "@/components/monitor/monitor-panel";
 import { SearchPanel } from "@/components/search/search-panel";
 import { cn } from "@/lib/utils";
@@ -47,16 +40,19 @@ export function AppShell() {
         <AppSidebar />
 
         <main className="min-w-0 flex-1 overflow-hidden">
-          <ScrollArea className="h-full">
-            <div className={cn("mx-auto w-full px-6 py-5 pb-8", contentWidth)}>
-              {activeView === "home" && <HomeView />}
-              {activeView === "search" && <SearchPanel />}
-              {activeView === "settings" && <SettingsPanel />}
-              {activeView === "monitor" && <MonitorPanel />}
-              {activeView === "bluetooth" && <BluetoothPanel />}
-              {activeView === "clipboard" && <ClipboardPanel />}
-            </div>
-          </ScrollArea>
+          {activeView === "home" ? (
+            <HomeDashboard />
+          ) : (
+            <ScrollArea className="h-full">
+              <div className={cn("mx-auto w-full px-6 py-5 pb-8", contentWidth)}>
+                {activeView === "search" && <SearchPanel />}
+                {activeView === "settings" && <SettingsPanel />}
+                {activeView === "monitor" && <MonitorPanel />}
+                {activeView === "bluetooth" && <BluetoothPanel />}
+                {activeView === "clipboard" && <ClipboardPanel />}
+              </div>
+            </ScrollArea>
+          )}
         </main>
       </div>
     </div>
@@ -98,48 +94,6 @@ function WallpaperLayer() {
         style={{ backgroundImage: `url("${src}")`, filter: `blur(${blur}px)` }}
       />
       <div className="wallpaper-veil" style={{ opacity: veil / 100 }} />
-    </div>
-  );
-}
-
-function HomeView() {
-  const config = useAppStore((state) => state.config);
-
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-2">
-        <h1 className="font-heading text-lg font-medium">Prism3</h1>
-        <Badge variant="secondary">脚手架就绪</Badge>
-      </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>已接通的基础设施</CardTitle>
-          <CardDescription>空壳可直接开始写业务功能。</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ul className="list-inside list-disc space-y-1 text-sm text-muted-foreground">
-            <li>配置持久化：Rust 侧 AppConfig + 原子写盘</li>
-            <li>日志：tauri-plugin-log 单管道，前后端写入同一文件</li>
-            <li>统一错误处理：thiserror + IPC 可序列化</li>
-            <li>自定义标题栏与系统托盘</li>
-            <li>窗口状态记忆与单实例保护</li>
-            <li>自动更新：Gitee 跳板 + 第三方服务器 + SHA-256</li>
-          </ul>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>当前配置</CardTitle>
-          <CardDescription>来自 Rust 后端的 get_config 命令。</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <pre className="overflow-x-auto rounded-lg bg-muted p-3 text-xs">
-            {JSON.stringify(config, null, 2)}
-          </pre>
-        </CardContent>
-      </Card>
     </div>
   );
 }

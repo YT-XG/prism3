@@ -51,6 +51,11 @@ export interface AppConfig {
   clipboardCaptureImages: boolean;
   /** 点击一条记录时是否自动「回到上一个焦点并粘贴」；关闭后只复制到剪贴板。 */
   clipboardPasteOnClick: boolean;
+  /**
+   * 首页 Bento 布局（前端 `serializeHomeLayout` 生成的 JSON 字符串）。
+   * 空串 = 默认布局；后端只当不透明字符串存取，解析与校验都在前端。
+   */
+  homeLayout: string;
 }
 
 /** 打开搜索结果的动作。 */

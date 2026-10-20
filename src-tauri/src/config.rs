@@ -91,6 +91,9 @@ pub struct AppConfig {
     pub clipboard_capture_images: bool,
     /// 点击一条记录时是否自动「回到上一个焦点并粘贴」；关闭后只复制到剪贴板。
     pub clipboard_paste_on_click: bool,
+    /// 首页 Bento 布局（前端 `serializeHomeLayout` 生成的 JSON 字符串）。
+    /// 空串表示用默认布局；解析失败也回退默认，因此后端只当不透明字符串存。
+    pub home_layout: String,
 }
 
 impl Default for AppConfig {
@@ -119,6 +122,7 @@ impl Default for AppConfig {
             clipboard_retention_days: 30,
             clipboard_capture_images: true,
             clipboard_paste_on_click: true,
+            home_layout: String::new(),
         }
     }
 }
@@ -255,5 +259,17 @@ mod tests {
         assert_eq!(config.clipboard_retention_days, 30);
         assert!(config.clipboard_capture_images);
         assert!(config.clipboard_paste_on_click);
+    }
+
+    #[test]
+    fn home_layout_key_is_camel_case_and_defaults_to_empty() {
+        // 首页布局整份以 JSON 字符串存在这个键里（解析归前端），后端只负责原样存取。
+        let value = serde_json::to_value(AppConfig::default()).expect("配置应当可序列化");
+        assert_eq!(value["homeLayout"], "");
+
+        // 老配置里没有这个键：必须回落到空串，而不是整份配置反序列化失败。
+        let config: AppConfig =
+            serde_json::from_str(r#"{"fileSearch":true}"#).expect("老配置应当可读");
+        assert!(config.home_layout.is_empty());
     }
 }
