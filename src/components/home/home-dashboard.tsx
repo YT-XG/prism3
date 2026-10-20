@@ -297,7 +297,8 @@ export function HomeDashboard() {
       <div
         className={cn(
           "min-h-0 flex-1",
-          placements.length === 0 ? "overflow-hidden" : "overflow-y-auto",
+          // 只纵向滚动：卡片已 `min-w-0`，横向不该再有溢出，显式隐藏免得偶发一条横向条。
+          placements.length === 0 ? "overflow-hidden" : "overflow-y-auto overflow-x-hidden",
         )}
       >
         {placements.length === 0 ? (

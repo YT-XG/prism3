@@ -354,3 +354,35 @@ html[data-wallpaper].dark aside svg {
     background: var(--wallpaper-veil-color);
     }
 }
+
+/*
+ * 细而克制的滚动条（只针对 WebView2 = Chromium）。
+ *
+ * 原生滚动条在壁纸 / 玻璃界面里又粗又亮（浅灰轨道 + 明显滑块），观感很突兀。这里统一
+ * 改成「全透明轨道 + **默认隐形**、鼠标进入滚动容器才显形的细圆角滑块」：静止时看不出
+ * 有滚动条，悬停 / 滚动时以半透明细条出现，既不丢可发现性也不再抢眼。
+ * `*:hover` 会沿祖先链生效，所以鼠标悬停在卡片等子元素上同样会显形。
+ * Radix `ScrollArea` 用的是它自己的滚动条组件，不受这里影响。
+ */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  /* 透明边框 + `background-clip: content-box` ⇒ 视觉上只有 ~4px 细条，手感区域仍是 12px */
+  background-color: transparent;
+  background-clip: content-box;
+  border: 4px solid transparent;
+  border-radius: 999px;
+}
+*:hover::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklab, var(--muted-foreground) 32%, transparent);
+}
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
+  background-color: color-mix(in oklab, var(--muted-foreground) 55%, transparent);
+}

@@ -40,7 +40,9 @@ export function HomeCard({
   return (
     <section
       className={cn(
-        "group/card relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl bg-card text-sm text-card-foreground ring-1 ring-[color:var(--frost-border)] [background-image:var(--frost-surface)]",
+        // `min-w-0`：网格项默认 `min-width:auto`，内部长文本（路径等）会把卡片撑得比
+        // 自己的轨道还宽，进而让整个网格溢出、冒出横向滚动条。归零后由 `overflow-hidden` 裁切。
+        "group/card relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl bg-card text-sm text-card-foreground ring-1 ring-[color:var(--frost-border)] [background-image:var(--frost-surface)]",
         editing && "ring-brand/35",
         dragging && "opacity-35",
       )}
