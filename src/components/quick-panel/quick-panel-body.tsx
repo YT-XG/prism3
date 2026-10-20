@@ -27,7 +27,7 @@ import {
   Search,
 } from "lucide-react";
 
-const APP_VERSION = "0.1.0";
+const APP_VERSION = "0.2.0";
 /** 搜索页的页面 id（分页器按 id 记忆停留页，改名会丢记忆）。 */
 const SEARCH_PAGE_ID = "search";
 /** 蓝牙页的页面 id（同上：改名会丢停留页记忆）。 */

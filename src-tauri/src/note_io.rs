@@ -114,7 +114,7 @@ pub fn export(app: &AppHandle, snapshot: ExportSnapshot, root: &Path) -> AppResu
             None => root.to_path_buf(),
         };
         let stem = unique_filename(&n.title, &folder_dir, &mut used_files);
-        let mut body = n.content.replace(NOTE_URL_PREFIX, "assets/");
+        let body = n.content.replace(NOTE_URL_PREFIX, "assets/");
         for name in extract_asset_names(&body) {
             if copied_images.insert(name.clone()) {
                 let src = images_root.join(&name);
