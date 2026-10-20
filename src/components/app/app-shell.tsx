@@ -5,6 +5,7 @@ import { BluetoothPanel } from "@/components/bluetooth/bluetooth-panel";
 import { ClipboardPanel } from "@/components/clipboard/clipboard-panel";
 import { HomeDashboard } from "@/components/home/home-dashboard";
 import { MonitorPanel } from "@/components/monitor/monitor-panel";
+import { NotesPanel } from "@/components/notes/notes-panel";
 import { SearchPanel } from "@/components/search/search-panel";
 import { cn } from "@/lib/utils";
 import { ipc } from "@/lib/ipc";
@@ -29,6 +30,7 @@ export function AppShell() {
     search: "max-w-none",
     bluetooth: "max-w-none",
     clipboard: "max-w-none",
+    notes: "max-w-none",
   }[activeView];
 
   return (
@@ -48,8 +50,9 @@ export function AppShell() {
                 className={cn(
                   "mx-auto w-full px-6 py-5 pb-8",
                   contentWidth,
-                  // 剪贴板是整页数据列表：撑满视口高度，让列表自己滚动，不把页面留空。
-                  activeView === "clipboard" && "flex h-full flex-col",
+                  // 剪贴板 / 速记是整页数据视图：撑满视口高度，让内容自己滚动。
+                  (activeView === "clipboard" || activeView === "notes") &&
+                    "flex h-full flex-col",
                 )}
               >
                 {activeView === "search" && <SearchPanel />}
@@ -57,6 +60,7 @@ export function AppShell() {
                 {activeView === "monitor" && <MonitorPanel />}
                 {activeView === "bluetooth" && <BluetoothPanel />}
                 {activeView === "clipboard" && <ClipboardPanel />}
+                {activeView === "notes" && <NotesPanel />}
               </div>
             </ScrollArea>
           )}

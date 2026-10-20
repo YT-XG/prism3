@@ -4,6 +4,7 @@ import type { PanelPage } from "@/components/quick-panel/panel-pager";
 import { PanelPager } from "@/components/quick-panel/panel-pager";
 import { QuickPanelBluetooth } from "@/components/quick-panel/quick-panel-bluetooth";
 import { QuickPanelClipboard } from "@/components/quick-panel/quick-panel-clipboard";
+import { QuickPanelNotes } from "@/components/quick-panel/quick-panel-notes";
 import { QuickPanelSearch } from "@/components/quick-panel/quick-panel-search";
 import { useQuickPanelBody, CLIP_BY_EDGE } from "@/hooks/use-quick-panel-body";
 import {
@@ -16,7 +17,15 @@ import { formatBytes, formatPercent, formatRate, formatUptime } from "@/lib/form
 import type { SystemSnapshot } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
-import { Bluetooth, ClipboardList, Gauge, Info, MousePointerClick, Search } from "lucide-react";
+import {
+  Bluetooth,
+  ClipboardList,
+  Gauge,
+  Info,
+  MousePointerClick,
+  NotebookPen,
+  Search,
+} from "lucide-react";
 
 const APP_VERSION = "0.1.0";
 /** 搜索页的页面 id（分页器按 id 记忆停留页，改名会丢记忆）。 */
@@ -25,6 +34,8 @@ const SEARCH_PAGE_ID = "search";
 const BLUETOOTH_PAGE_ID = "bluetooth";
 /** 剪贴板页的页面 id（同上）。 */
 const CLIPBOARD_PAGE_ID = "clipboard";
+/** 速记页的页面 id（同上）。 */
+const NOTES_PAGE_ID = "notes";
 
 /**
  * 快捷小窗面板本体：跑在独立窗口 `quick-panel-body` 中，高度恒为 `PANEL_HEIGHT`。
@@ -87,6 +98,22 @@ export function QuickPanelBody() {
         content: (
           <QuickPanelClipboard
             active={phase === "open" && activePageId === CLIPBOARD_PAGE_ID}
+            focused={focusMode}
+            onRequestFocus={requestFocus}
+            onReleaseFocus={releaseFocus}
+            onDismiss={dismiss}
+          />
+        ),
+      },
+      {
+        id: NOTES_PAGE_ID,
+        label: "速记",
+        icon: NotebookPen,
+        // 与剪贴板页同为最大页宽：快记表单 + 最近列表需要横向空间。
+        panelWidth: PANEL_WIDTH_WIDE,
+        content: (
+          <QuickPanelNotes
+            active={phase === "open" && activePageId === NOTES_PAGE_ID}
             focused={focusMode}
             onRequestFocus={requestFocus}
             onReleaseFocus={releaseFocus}

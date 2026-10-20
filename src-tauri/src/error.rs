@@ -14,6 +14,8 @@ pub enum AppError {
     Image(#[from] image::ImageError),
     #[error("剪贴板错误: {0}")]
     Clipboard(#[from] arboard::Error),
+    #[error("数据库错误: {0}")]
+    Db(#[from] rusqlite::Error),
     /// 兜底变体：用于放置不便归类的临时错误，避免为每个场景新增变体。
     #[error("{0}")]
     Other(String),

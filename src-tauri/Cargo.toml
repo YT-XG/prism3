@@ -46,6 +46,13 @@ uuid = "1"
 arboard = "3.7"
 image = "0.25"
 
+# 统一存储（见 db.rs）：速记（笔记正文 + 元数据）与剪贴板历史都进这一个 SQLite 库。
+# `bundled` = 自带 SQLite C 源码（MSVC 下经 cc → cl.exe 本地编译，不依赖系统 sqlite3.dll，
+# NSIS 打包干净）；`backup` 与 x-hub 对齐版本特性。
+rusqlite = { version = "0.37", features = ["bundled", "backup"] }
+# 笔记图片导入：前端传 base64，后端解码落盘（现有 clipboard.rs 只手写了编码侧）。
+base64 = "0.22"
+
 # 自动更新（见 updater.rs）：阻塞式 HTTP 下载安装包，Windows 上 native-tls 走系统
 # schannel（不引入 OpenSSL；也不启用 reqwest 默认的 rustls/aws-lc-rs，避免 NASM/CMake）。
 # `sha2` 校验安装包，`semver` 比较版本（semver 本来就是 tauri-utils 的传递依赖）。

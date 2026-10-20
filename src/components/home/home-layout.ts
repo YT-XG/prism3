@@ -28,6 +28,7 @@ export type HomeModuleId =
   | "monitor"
   | "search"
   | "clipboard"
+  | "notes"
   | "bluetooth"
   | "shortcuts";
 
@@ -56,6 +57,7 @@ export const HOME_MODULES: HomeModuleDef[] = [
   { id: "monitor", title: "系统资源", minW: 3, minH: 2, idealW: 4, idealH: 3 },
   { id: "bluetooth", title: "蓝牙耳机", minW: 3, minH: 2, idealW: 4, idealH: 3 },
   { id: "clipboard", title: "剪贴板", minW: 3, minH: 3, idealW: 4, idealH: 5 },
+  { id: "notes", title: "速记", minW: 3, minH: 3, idealW: 4, idealH: 5 },
   { id: "search", title: "快速搜索", minW: 3, minH: 3, idealW: 4, idealH: 5 },
   { id: "shortcuts", title: "常用入口", minW: 2, minH: 2, idealW: 4, idealH: 5 },
 ];

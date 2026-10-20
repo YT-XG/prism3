@@ -15,6 +15,7 @@ import {
   Clock,
   Bluetooth,
   LayoutGrid,
+  NotebookPen,
   PencilLine,
   Plus,
   RotateCcw,
@@ -27,6 +28,7 @@ import { BluetoothCard } from "@/components/home/cards/bluetooth";
 import { ClipboardCard } from "@/components/home/cards/clipboard";
 import { ClockCard } from "@/components/home/cards/clock";
 import { MonitorCard } from "@/components/home/cards/monitor";
+import { NotesCard } from "@/components/home/cards/notes";
 import { SearchCard } from "@/components/home/cards/search";
 import { ShortcutsCard } from "@/components/home/cards/shortcuts";
 import { HomeCard } from "@/components/home/home-card";
@@ -57,6 +59,7 @@ const MODULE_ICONS: Record<HomeModuleId, LucideIcon> = {
   monitor: Activity,
   bluetooth: Bluetooth,
   clipboard: ClipboardList,
+  notes: NotebookPen,
   search: Search,
   shortcuts: LayoutGrid,
 };
@@ -66,6 +69,7 @@ const MODULE_BODIES: Record<HomeModuleId, ComponentType> = {
   monitor: MonitorCard,
   bluetooth: BluetoothCard,
   clipboard: ClipboardCard,
+  notes: NotesCard,
   search: SearchCard,
   shortcuts: ShortcutsCard,
 };

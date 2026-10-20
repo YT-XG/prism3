@@ -10,11 +10,18 @@ use crate::ble::{
 };
 use crate::clipboard::{self, ClipEntryMeta, ClipKindFilter, ClipState, ClipboardState};
 use crate::config::{AppConfig, AppState, DockEdge};
+use crate::db::DbState;
 use crate::error::{AppError, AppResult};
 use crate::file_index::{self, FileIndexState, IndexState, SearchHit};
+use crate::models::{Note, NoteFolder, NoteImageGcReport, NoteLinks, NoteTagRow, PurgeReport, Tag};
+use crate::note_image;
+use crate::note_io::{self, ExportReport, ImportOptions, ImportReport};
 use crate::paste::{self, PasteOutcome};
+use crate::repo::{note, note_folder, note_link, tag};
 use crate::status::{self, AppStatus, AppStatusState};
 use crate::updater::{self, UpdateSnapshot};
+
+use std::sync::atomic::Ordering;
 
 /// 快捷小窗**灰条**窗口标签。灰条独占交互与状态。
 const QUICK_PANEL_LABEL: &str = "quick-panel";
@@ -304,6 +311,8 @@ pub fn set_config(
         != config.clipboard_retention_days
         || guard.clipboard_capture_images != config.clipboard_capture_images
         || guard.clipboard_paste_on_click != config.clipboard_paste_on_click;
+    let notes_retention_changed =
+        guard.note_trash_retention_days != config.note_trash_retention_days;
 
     *guard = config.clone();
     drop(guard);
@@ -324,6 +333,9 @@ pub fn set_config(
     }
     if clipboard_toggled || clipboard_settings_changed {
         clipboard::sync(&app, &config);
+    }
+    if notes_retention_changed {
+        purge_expired_notes_now(&app);
     }
     // BLE 的三个键上面已经被换回权威值（这里必然「无变化」），调用它是为了让
     // 「配置改了 → 运行时跟着改」只有一条共享路径（见 `ble::sync_from_config`）。
@@ -348,6 +360,8 @@ pub fn reset_config(app: AppHandle, state: State<'_, AppState>) -> AppResult<App
     crate::autostart::sync(&app, &default);
     sync_file_index(&app, &default);
     clipboard::sync(&app, &default);
+    // 默认保留天数为 0（永久保留），这里调用只为保持「配置改了 → 运行时跟着改」一条路径。
+    purge_expired_notes_now(&app);
     // 恢复默认是**显式**动作（不是过期副本回写）：BLE 键也要跟着回默认并停掉看门狗。
     ble::sync_from_config(&app);
     Ok(default)
@@ -869,8 +883,8 @@ pub async fn set_dual_device(app: AppHandle, enabled: bool) -> AppResult<()> {
 
 /// 读取剪贴板历史状态（窗口挂载时兜底拉取：事件不缓存）。
 #[tauri::command]
-pub fn get_clipboard_state(state: State<'_, ClipboardState>) -> ClipState {
-    state.snapshot()
+pub fn get_clipboard_state(app: AppHandle, state: State<'_, ClipboardState>) -> ClipState {
+    state.snapshot(&app)
 }
 
 /// 查询剪贴板历史。空关键词返回「最近入库」的条目。
@@ -878,18 +892,23 @@ pub fn get_clipboard_state(state: State<'_, ClipboardState>) -> ClipState {
 /// 走 worker 线程（`async`）：历史虽小，但图片条目多时线性扫描 + 预览拼接也不该压在主线程上。
 #[tauri::command(async)]
 pub fn search_clipboard(
+    app: AppHandle,
     state: State<'_, ClipboardState>,
     query: String,
     kind: Option<String>,
     limit: Option<usize>,
 ) -> Vec<ClipEntryMeta> {
-    state.query(&query, ClipKindFilter::parse(kind.as_deref()), limit)
+    state.query(&app, &query, ClipKindFilter::parse(kind.as_deref()), limit)
 }
 
 /// 取一条文本记录的完整正文（列表只拿预览，编辑 / 展开时才按需拉全文）。
 #[tauri::command(async)]
-pub fn get_clipboard_text(state: State<'_, ClipboardState>, id: u64) -> AppResult<String> {
-    state.text_of(id)
+pub fn get_clipboard_text(
+    app: AppHandle,
+    state: State<'_, ClipboardState>,
+    id: u64,
+) -> AppResult<String> {
+    state.text_of(&app, id)
 }
 
 /// 取一条图片记录，返回 data URL（`thumb` 为真时给列表用的缩略图）。
@@ -933,7 +952,7 @@ pub fn paste_clipboard_entry(
     let seq = paste::copy(&content)?;
     state.note_self_write(seq);
 
-    if !state.snapshot().paste_on_click {
+    if !state.snapshot(&app).paste_on_click {
         return Ok(PasteOutcome::copied());
     }
     Ok(paste::paste(&app))
@@ -981,6 +1000,474 @@ pub fn clear_clipboard_history(app: AppHandle, state: State<'_, ClipboardState>)
 #[tauri::command]
 pub fn prune_clipboard_history(app: AppHandle, state: State<'_, ClipboardState>) -> AppResult<()> {
     state.prune(&app)
+}
+
+// ------------------------------ 速记（笔记 / 文件夹 / 标签 / 图片） ------------------------------
+
+/// 速记数据变化的事件名。载荷只带 `revision`，前端据此重拉（同 `clipboard:state` 的教训：
+/// 不把正文塞进广播里）。
+const NOTES_EVENT: &str = "notes:changed";
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NotesChanged {
+    revision: u64,
+}
+
+/// 任何笔记侧写操作成功后调用：自增 revision 并广播。
+fn bump_notes(app: &AppHandle) {
+    let state = app.state::<DbState>();
+    let revision = state.notes_revision.fetch_add(1, Ordering::SeqCst) + 1;
+    if let Err(err) = app.emit(NOTES_EVENT, NotesChanged { revision }) {
+        log::warn!("广播速记变化失败：{err}");
+    }
+}
+
+/// 按配置的保留天数清理速记回收站（`0` = 永久保留）。返回清掉的条数。
+fn purge_expired_notes_now(app: &AppHandle) -> usize {
+    let days = app
+        .state::<AppState>()
+        .config
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .note_trash_retention_days;
+    let state = app.state::<DbState>();
+    let conn = state.lock();
+    let purged = note::purge_expired(&conn, days as u64).unwrap_or(0);
+    if purged > 0 {
+        bump_notes(app);
+    }
+    purged
+}
+
+// ---- 笔记 ----
+
+#[tauri::command(async)]
+pub fn list_notes(state: State<'_, DbState>, trashed: Option<bool>) -> AppResult<Vec<Note>> {
+    let conn = state.lock();
+    Ok(note::list_full(&conn, trashed.unwrap_or(false))?)
+}
+
+/// 只传 `note_id` 不存在时返回 `None`，其余错误照常上报。
+#[tauri::command(async)]
+pub fn get_note(state: State<'_, DbState>, note_id: i64) -> AppResult<Option<Note>> {
+    let conn = state.lock();
+    Ok(note::get(&conn, note_id).ok())
+}
+
+#[tauri::command(async)]
+pub fn create_note_in(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    title: String,
+    content: Option<String>,
+    folder_id: Option<i64>,
+    source_url: Option<String>,
+) -> AppResult<Note> {
+    let created = {
+        let conn = state.lock();
+        note::create_in(
+            &conn,
+            &title,
+            content.as_deref().unwrap_or(""),
+            folder_id,
+            source_url.as_deref().unwrap_or(""),
+        )?
+    };
+    bump_notes(&app);
+    Ok(created)
+}
+
+#[tauri::command(async)]
+pub fn update_note(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    id: i64,
+    title: String,
+    content: String,
+) -> AppResult<Note> {
+    let updated = {
+        let conn = state.lock();
+        note::update_with_link_fixup(&conn, id, &title, &content)?
+    };
+    bump_notes(&app);
+    Ok(updated)
+}
+
+#[tauri::command(async)]
+pub fn set_note_icon(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    id: i64,
+    icon: Option<String>,
+) -> AppResult<()> {
+    {
+        let conn = state.lock();
+        note::set_icon(&conn, id, icon.as_deref())?;
+    }
+    bump_notes(&app);
+    Ok(())
+}
+
+/// 移动单条笔记到文件夹（`folder_id` 传 null = 回树根）。
+#[tauri::command(async)]
+pub fn set_note_folder(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    note_id: i64,
+    folder_id: Option<i64>,
+) -> AppResult<()> {
+    {
+        let conn = state.lock();
+        note::set_folder(&conn, note_id, folder_id)?;
+    }
+    bump_notes(&app);
+    Ok(())
+}
+
+/// 移入回收站（软删）。UI 删除按钮与撤销恢复走这里；硬删见 `purge_note`。
+#[tauri::command(async)]
+pub fn trash_note(app: AppHandle, state: State<'_, DbState>, id: i64) -> AppResult<()> {
+    {
+        let conn = state.lock();
+        note::trash(&conn, id)?;
+    }
+    bump_notes(&app);
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub fn restore_note(app: AppHandle, state: State<'_, DbState>, id: i64) -> AppResult<()> {
+    {
+        let conn = state.lock();
+        note::restore(&conn, id)?;
+    }
+    bump_notes(&app);
+    Ok(())
+}
+
+/// 永久删除（回收站内）：连带 `note_tags`、`note_links` 出链。
+#[tauri::command(async)]
+pub fn purge_note(app: AppHandle, state: State<'_, DbState>, id: i64) -> AppResult<()> {
+    {
+        let conn = state.lock();
+        note::delete(&conn, id)?;
+    }
+    bump_notes(&app);
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub fn purge_all_trashed_notes(app: AppHandle, state: State<'_, DbState>) -> AppResult<usize> {
+    let purged = {
+        let conn = state.lock();
+        note::purge_all_trashed(&conn)?
+    };
+    if purged > 0 {
+        bump_notes(&app);
+    }
+    Ok(purged)
+}
+
+/// 按设置的保留天数清理回收站（`note_trash_retention_days`，0 = 永久保留）。
+#[tauri::command]
+pub fn purge_expired_notes(app: AppHandle) -> PurgeReport {
+    PurgeReport {
+        purged: purge_expired_notes_now(&app),
+    }
+}
+
+/// 关键词搜索笔记（标题 OR 正文，排除回收站）；全局搜索用。
+#[tauri::command(async)]
+pub fn search_notes(
+    state: State<'_, DbState>,
+    keyword: String,
+    limit: Option<usize>,
+) -> AppResult<Vec<Note>> {
+    let conn = state.lock();
+    Ok(note::search(
+        &conn,
+        &keyword,
+        limit.unwrap_or(20).clamp(1, 200),
+    )?)
+}
+
+/// 反链面板数据（出链 + 入链）。
+#[tauri::command(async)]
+pub fn get_note_links(state: State<'_, DbState>, note_id: i64) -> AppResult<NoteLinks> {
+    let conn = state.lock();
+    let (outgoing, incoming) = note_link::for_note(&conn, note_id)?;
+    Ok(NoteLinks { outgoing, incoming })
+}
+
+/// 全库双链索引重建。幂等。
+#[tauri::command(async)]
+pub fn rebuild_note_links(state: State<'_, DbState>) -> AppResult<()> {
+    let conn = state.lock();
+    note_link::reindex_all(&conn)?;
+    log::info!("速记双链索引已全量重建");
+    Ok(())
+}
+
+// ---- 文件夹 ----
+
+#[tauri::command(async)]
+pub fn list_note_folders(state: State<'_, DbState>) -> AppResult<Vec<NoteFolder>> {
+    let conn = state.lock();
+    Ok(note_folder::list(&conn)?)
+}
+
+#[tauri::command(async)]
+pub fn create_note_folder(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    name: String,
+    parent_id: Option<i64>,
+) -> AppResult<NoteFolder> {
+    let folder = {
+        let conn = state.lock();
+        note_folder::create(&conn, &name, parent_id)?
+    };
+    bump_notes(&app);
+    Ok(folder)
+}
+
+#[tauri::command(async)]
+pub fn rename_note_folder(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    id: i64,
+    name: String,
+) -> AppResult<()> {
+    {
+        let conn = state.lock();
+        note_folder::rename(&conn, id, &name)?;
+    }
+    bump_notes(&app);
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub fn delete_note_folder(app: AppHandle, state: State<'_, DbState>, id: i64) -> AppResult<()> {
+    {
+        let conn = state.lock();
+        note_folder::delete(&conn, id)?;
+    }
+    bump_notes(&app);
+    Ok(())
+}
+
+/// 拖拽落点批量写回（后端做环检测，任一项非法整批拒绝）。
+#[tauri::command(async)]
+pub fn reorder_note_folders(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    moves: Vec<note_folder::FolderMove>,
+) -> AppResult<()> {
+    {
+        let conn = state.lock();
+        note_folder::reorder(&conn, &moves)?;
+    }
+    bump_notes(&app);
+    Ok(())
+}
+
+// ---- 标签 ----
+
+#[tauri::command(async)]
+pub fn list_tags(state: State<'_, DbState>) -> AppResult<Vec<Tag>> {
+    let conn = state.lock();
+    Ok(tag::list(&conn)?)
+}
+
+#[tauri::command(async)]
+pub fn create_tag(app: AppHandle, state: State<'_, DbState>, name: String) -> AppResult<Tag> {
+    let created = {
+        let conn = state.lock();
+        tag::create(&conn, &name)?
+    };
+    bump_notes(&app);
+    Ok(created)
+}
+
+#[tauri::command(async)]
+pub fn rename_tag(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    id: i64,
+    name: String,
+) -> AppResult<()> {
+    {
+        let conn = state.lock();
+        tag::rename(&conn, id, &name)?;
+    }
+    bump_notes(&app);
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub fn delete_tag(app: AppHandle, state: State<'_, DbState>, id: i64) -> AppResult<()> {
+    {
+        let conn = state.lock();
+        tag::delete(&conn, id)?;
+    }
+    bump_notes(&app);
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub fn get_note_tags(state: State<'_, DbState>, note_id: i64) -> AppResult<Vec<Tag>> {
+    let conn = state.lock();
+    Ok(tag::tags_of_note(&conn, note_id)?)
+}
+
+#[tauri::command(async)]
+pub fn set_note_tags(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    note_id: i64,
+    tag_ids: Vec<i64>,
+) -> AppResult<()> {
+    {
+        let conn = state.lock();
+        tag::set_note_tags(&conn, note_id, &tag_ids)?;
+    }
+    bump_notes(&app);
+    Ok(())
+}
+
+/// 笔记-标签全量关联（前端构建 `tag_id → noteIds` 筛选映射用）。
+#[tauri::command(async)]
+pub fn list_note_tags(state: State<'_, DbState>) -> AppResult<Vec<NoteTagRow>> {
+    let conn = state.lock();
+    Ok(tag::list_note_tags(&conn)?)
+}
+
+// ---- 笔记图片 ----
+
+/// 导入一张笔记图片（前端传 base64），返回正文应插入的 URL。
+#[tauri::command(async)]
+pub fn import_note_image(app: AppHandle, data_b64: String, ext: String) -> AppResult<String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_b64.trim())
+        .map_err(|err| AppError::Other(format!("图片解码失败：{err}")))?;
+    note_image::save(&app, &bytes, &ext)
+}
+
+/// 孤儿图片扫描 / 清理（`dry_run = true` 只报告；`false` 真删）。
+/// 回收站内笔记的引用也算活引用，避免「先清孤儿、再还原笔记」丢图。
+#[tauri::command(async)]
+pub fn gc_orphan_note_images(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    dry_run: bool,
+) -> AppResult<NoteImageGcReport> {
+    use std::collections::HashSet;
+
+    let dir = note_image::image_dir(&app)?;
+    let mut files: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if note_image::valid_note_image_name(name) {
+                    files.push(name.to_string());
+                }
+            }
+        }
+    }
+
+    let mut referenced: HashSet<String> = HashSet::new();
+    {
+        let conn = state.lock();
+        for content in note::all_contents(&conn)? {
+            for stem in note_image::extract_image_stems(&content) {
+                referenced.insert(stem);
+            }
+        }
+    }
+
+    let orphans: Vec<String> = files
+        .iter()
+        .filter(|file| {
+            let stem = file.split('.').next().unwrap_or("");
+            !referenced.contains(stem)
+        })
+        .cloned()
+        .collect();
+
+    let mut report = NoteImageGcReport {
+        dry_run,
+        total_files: files.len(),
+        referenced: referenced.len(),
+        orphan_files: orphans,
+        removed: 0,
+        failed: 0,
+    };
+    if !dry_run {
+        let mut removed = 0usize;
+        let mut failed = 0usize;
+        for name in &report.orphan_files {
+            if std::fs::remove_file(dir.join(name)).is_ok() {
+                removed += 1;
+            } else {
+                failed += 1;
+            }
+        }
+        report.removed = removed;
+        report.failed = failed;
+        log::info!(
+            "笔记孤儿图片清理: 孤儿 {} 张，删除 {} 张，失败 {} 张",
+            report.orphan_files.len(),
+            removed,
+            failed
+        );
+    }
+    Ok(report)
+}
+
+// ---- 速记导出 / 导入 ----
+
+/// 导出全部速记到指定目录（按文件夹树建目录 + 每条一个 .md + front-matter + assets/）。
+#[tauri::command(async)]
+pub fn export_notes(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    dir: String,
+) -> AppResult<ExportReport> {
+    // 先读快照再释放锁，文件 IO 全程不持 DB 锁（导出是分钟级操作）。
+    let snapshot = {
+        let conn = state.lock();
+        note_io::read_export_snapshot(&conn)?
+    };
+    note_io::export(&app, snapshot, std::path::Path::new(&dir))
+}
+
+/// 导入本应用导出的目录（front-matter 格式已知）；`sourceUrl` 命中默认跳过，可开覆盖。
+#[tauri::command(async)]
+pub fn import_notes(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    dir: String,
+    opts: Option<ImportOptions>,
+) -> AppResult<ImportReport> {
+    let report = note_io::import(
+        &app,
+        &state,
+        std::path::Path::new(&dir),
+        opts.unwrap_or_default(),
+    )?;
+    if report.imported > 0 {
+        bump_notes(&app);
+    }
+    Ok(report)
+}
+
+/// 取消正在进行的导入（幂等）。
+#[tauri::command]
+pub fn import_notes_cancel() -> AppResult<()> {
+    note_io::cancel_import();
+    Ok(())
 }
 
 // ------------------------------ 自动更新 ------------------------------

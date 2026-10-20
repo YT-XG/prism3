@@ -3,11 +3,16 @@ mod ble;
 mod clipboard;
 mod commands;
 mod config;
+mod db;
 mod error;
 mod file_index;
 mod focus;
+mod models;
 mod monitor;
+mod note_image;
+mod note_io;
 mod paste;
+mod repo;
 mod status;
 mod tray;
 mod updater;
@@ -72,6 +77,46 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![autostart::LAUNCH_FLAG]),
         ))
+        // 速记图片协议：笔记正文内嵌 `http://prism3-note.localhost/<hash>.<ext>`，
+        // 按「配置目录/notes/images/<文件名>」读取（URL 不含绝对路径，迁数据目录后仍有效）；
+        // 文件名严格校验为「16 位十六进制哈希 + 白名单扩展」，杜绝路径穿越。
+        // **不启用 `protocol-asset`、不动 CSP**（当前 `csp: null`）；将来若启用 CSP，
+        // 必须把 `http://prism3-note.localhost` 加进 `img-src`。
+        .register_uri_scheme_protocol("prism3-note", |ctx, request| {
+            let name = request.uri().path().trim_start_matches('/').to_string();
+            if !note_image::valid_note_image_name(&name) {
+                return tauri::http::Response::builder()
+                    .status(400)
+                    .body(Vec::new())
+                    .unwrap();
+            }
+            let mime = match name.rsplit_once('.').map(|(_, ext)| ext.to_lowercase()) {
+                Some(ext) if ext == "png" => "image/png",
+                Some(ext) if ext == "jpg" || ext == "jpeg" => "image/jpeg",
+                Some(ext) if ext == "webp" => "image/webp",
+                Some(ext) if ext == "bmp" => "image/bmp",
+                Some(ext) if ext == "gif" => "image/gif",
+                _ => "application/octet-stream",
+            };
+            let path = ctx
+                .app_handle()
+                .path()
+                .app_config_dir()
+                .map(|dir| dir.join("notes").join("images").join(&name));
+            match path.ok().and_then(|path| std::fs::read(path).ok()) {
+                Some(bytes) => tauri::http::Response::builder()
+                    .header("Content-Type", mime)
+                    .header("Access-Control-Allow-Origin", "*")
+                    // 内容哈希命名 ⇒ 同名同内容，可长缓存。
+                    .header("Cache-Control", "public, max-age=31536000, immutable")
+                    .body(bytes)
+                    .unwrap(),
+                None => tauri::http::Response::builder()
+                    .status(404)
+                    .body(Vec::new())
+                    .unwrap(),
+            }
+        })
         .setup(|app| {
             let handle = app.handle().clone();
 
@@ -86,6 +131,23 @@ pub fn run() {
             app.manage(config::AppState {
                 config: RwLock::new(initial_config.clone()),
             });
+
+            // 统一存储：速记（笔记）与剪贴板历史共用一个 SQLite 库（见 db.rs）。
+            // 库与 config.json / 剪贴板图片目录同放在 app_config_dir 下。
+            let db_path = handle.path().app_config_dir()?.join("prism3.db");
+            if let Some(parent) = db_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            match db::init(&db_path) {
+                Ok(conn) => {
+                    app.manage(db::DbState::new(conn));
+                }
+                Err(err) => {
+                    // 库打不开是致命问题：记日志并让启动失败（不回退到内存库，避免数据静默丢失）。
+                    log::error!("初始化数据库失败 path={} err={err}", db_path.display());
+                    return Err(err.into());
+                }
+            }
 
             // 系统监控状态：前端在监控页按需轮询时才会真正采集。
             app.manage(monitor::MonitorState::new());
@@ -104,7 +166,7 @@ pub fn run() {
             app.manage(clipboard::ClipboardState::new());
             {
                 let state = app.state::<clipboard::ClipboardState>();
-                clipboard::load_from_disk(&handle, &state);
+                clipboard::load_from_db(&handle, &state);
             }
 
             // 蓝牙配置同步：把三个 BLE 键灌进状态镜像，并在「自动连接 + 已知目标」时起看门狗。
@@ -124,6 +186,31 @@ pub fn run() {
             updater::schedule_startup_check(&handle);
 
             tray::init(app)?;
+
+            // 速记启动维护（启动 15s 后跑，避开启动期与其它 DB 操作撞车）：
+            // ① 按保留天数清理回收站；② 全库双链索引重建（幂等）。都不阻塞启动。
+            {
+                let maintenance_handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                    let days = maintenance_handle
+                        .state::<config::AppState>()
+                        .config
+                        .read()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .note_trash_retention_days;
+                    let state = maintenance_handle.state::<db::DbState>();
+                    let conn = state.lock();
+                    if let Ok(purged) = repo::note::purge_expired(&conn, days as u64) {
+                        if purged > 0 {
+                            log::info!("启动维护：清理回收站过期速记 {purged} 条");
+                        }
+                    }
+                    if let Err(err) = repo::note_link::reindex_all(&conn) {
+                        log::warn!("启动维护：重建速记双链索引失败：{err}");
+                    }
+                });
+            }
 
             // 窗口以 visible: false 启动，避免白屏闪烁。
             // 显示前先把底色设成当前主题：窗口比页面首帧早得多，默认白色在暗色主题下会闪。
@@ -256,6 +343,37 @@ pub fn run() {
             commands::set_clipboard_pinned,
             commands::clear_clipboard_history,
             commands::prune_clipboard_history,
+            commands::list_notes,
+            commands::get_note,
+            commands::create_note_in,
+            commands::update_note,
+            commands::set_note_icon,
+            commands::set_note_folder,
+            commands::trash_note,
+            commands::restore_note,
+            commands::purge_note,
+            commands::purge_all_trashed_notes,
+            commands::purge_expired_notes,
+            commands::search_notes,
+            commands::get_note_links,
+            commands::rebuild_note_links,
+            commands::list_note_folders,
+            commands::create_note_folder,
+            commands::rename_note_folder,
+            commands::delete_note_folder,
+            commands::reorder_note_folders,
+            commands::list_tags,
+            commands::create_tag,
+            commands::rename_tag,
+            commands::delete_tag,
+            commands::get_note_tags,
+            commands::set_note_tags,
+            commands::list_note_tags,
+            commands::import_note_image,
+            commands::gc_orphan_note_images,
+            commands::export_notes,
+            commands::import_notes,
+            commands::import_notes_cancel,
             commands::get_update_state,
             commands::check_update,
             commands::reinstall_latest,

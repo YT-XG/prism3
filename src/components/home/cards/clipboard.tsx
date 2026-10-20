@@ -1,36 +1,71 @@
-import { ClipboardPaste, Image as ImageIcon, Star, Type } from "lucide-react";
+import { useState } from "react";
+
+import { ClipboardPaste, Image as ImageIcon, Search, Star, Type, X } from "lucide-react";
 
 import { HomeCardHint, HomeCardLink } from "@/components/home/home-card";
+import { Input } from "@/components/ui/input";
 import { useClipboardList } from "@/hooks/use-clipboard-list";
 import { formatTimeAgo } from "@/lib/format";
 import { useAppStore } from "@/stores/app-store";
 
-/** 首页只露最近的几条，完整列表在「剪贴板」页。 */
+/** 空关键词时首页只露最近的几条，完整列表在「剪贴板」页。 */
 const ENTRY_LIMIT = 4;
+/** 有关键词时多给几条（首页卡片空间有限，仍给上限）。 */
+const SEARCH_LIMIT = 8;
 
-/** 首页「剪贴板」卡片：最近记录，点击复制、悬停可粘贴，收藏项置顶（与完整页同一数据源）。 */
+/** 首页「剪贴板」卡片：最近记录，点击复制、悬停可粘贴，收藏项置顶；带关键词搜索框。 */
 export function ClipboardCard() {
   const config = useAppStore((state) => state.config);
   const setActiveView = useAppStore((state) => state.setActiveView);
 
+  const [query, setQuery] = useState("");
   const enabled = config?.clipboardHistory ?? false;
+  const searching = query.trim().length > 0;
+
   const { entries, state, paste, copy } = useClipboardList({
     enabled,
-    query: "",
+    query,
     kind: "all",
-    limit: ENTRY_LIMIT,
+    limit: searching ? SEARCH_LIMIT : ENTRY_LIMIT,
   });
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
+      {enabled && (
+        <div className="relative shrink-0">
+          <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={query}
+            spellCheck={false}
+            placeholder="搜索记录…"
+            onChange={(event) => setQuery(event.target.value)}
+            className="h-7 pr-6 pl-7 text-xs"
+          />
+          {query && (
+            <button
+              type="button"
+              aria-label="清空搜索"
+              className="absolute top-1/2 right-1.5 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              onClick={() => setQuery("")}
+            >
+              <X className="size-3.5" />
+            </button>
+          )}
+        </div>
+      )}
+
       {!enabled ? (
         <HomeCardHint>
           剪贴板历史未开启。开启后会记录复制的文本与图片，支持收藏与按保留天数清理。
         </HomeCardHint>
       ) : entries.length === 0 ? (
-        <HomeCardHint>还没有记录。复制一段文字或一张图片后会自动出现在这里。</HomeCardHint>
+        <HomeCardHint>
+          {searching
+            ? `没有匹配「${query.trim()}」的记录`
+            : "还没有记录。复制一段文字或一张图片后会自动出现在这里。"}
+        </HomeCardHint>
       ) : (
-        <ul className="flex min-h-0 flex-1 flex-col gap-0.5">
+        <ul className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
           {entries.map((entry) => (
             <li
               key={entry.id}

@@ -1,0 +1,41 @@
+/*
+ * Milkdown Crepe 主题的 prism3 适配层。
+ *
+ * 只做「变量覆盖」：把编辑区底色改透明，让编辑区直接浮在 prism3 的玻璃卡 / 壁纸上，
+ * 文字颜色继承当前主题（亮色深字 / 暗色浅字），否则 frame.css 的白底会盖住玻璃卡。
+ *
+ * 本文件在 `components/notes/milkdown-editor.tsx` 里随该模块一起 import，
+ * 因此只在速记编辑器挂载时加载（懒加载 chunk），且排在 `index.css` 之后。
+ */
+
+.prism-note-editor {
+  --crepe-color-background: transparent;
+  --crepe-color-surface: transparent;
+  --crepe-color-surface-low: transparent;
+  --crepe-color-on-background: currentColor;
+  --crepe-color-on-surface: currentColor;
+  --crepe-color-on-surface-variant: var(--muted-foreground, currentColor);
+  --crepe-color-outline: var(--border, currentColor);
+  color: inherit;
+}
+
+.prism-note-editor .milkdown,
+.prism-note-editor .milkdown .ProseMirror {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+/* 编辑区最小高度：让空笔记也有可点击的落点。 */
+.prism-note-editor .ProseMirror {
+  min-height: 12rem;
+}
+
+/* 代码块 / 表格用主题的软底，而不是 Crepe 自带的浅色块。 */
+.prism-note-editor .milkdown code {
+  background: var(--muted, rgba(127, 127, 127, 0.14));
+  color: inherit;
+}
+.prism-note-editor .milkdown pre {
+  background: var(--muted, rgba(127, 127, 127, 0.14));
+}

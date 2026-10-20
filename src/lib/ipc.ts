@@ -56,6 +56,112 @@ export interface AppConfig {
    * 空串 = 默认布局；后端只当不透明字符串存取，解析与校验都在前端。
    */
   homeLayout: string;
+  /** 速记编辑器模式（见 `NoteEditorMode`）。 */
+  noteEditorMode: NoteEditorMode;
+  /** 速记回收站保留天数；`0` 表示永久保留。 */
+  noteTrashRetentionDays: number;
+}
+
+/** 速记编辑器模式：实时预览 / 分屏 / 源码 / 仅预览（与 Rust 侧配置字符串一一对应）。 */
+export type NoteEditorMode = "wysiwyg" | "split" | "source" | "preview";
+
+/** 与 Rust 侧 `Note` 一一对应。时间字段为**秒级 unix 时间戳**。 */
+export interface Note {
+  id: number;
+  title: string;
+  content: string;
+  createdAt: number;
+  updatedAt: number;
+  /** 所在文件夹（null = 树根）。 */
+  folderId: number | null;
+  /** 剪藏来源 URL（普通笔记为空串）。 */
+  sourceUrl: string;
+  /** 回收站标记（null = 正常）。 */
+  deletedAt: number | null;
+  /** 自定义树图标（emoji；null = 默认文件图标）。 */
+  icon: string | null;
+}
+
+/** 与 Rust 侧 `NoteFolder` 一一对应。 */
+export interface NoteFolder {
+  id: number;
+  name: string;
+  parentId: number | null;
+  sortOrder: number;
+  /** 内置「剪藏」文件夹不可改名 / 删除。 */
+  builtin: boolean;
+  createdAt: number;
+}
+
+/** 与 Rust 侧 `Tag` 一一对应。 */
+export interface Tag {
+  id: number;
+  name: string;
+  createdAt: number;
+  /** 内置「剪藏」标签不可改名 / 删除。 */
+  builtin: boolean;
+}
+
+/** 笔记-标签关联对（前端构建 `tagId → noteIds` 筛选映射）。 */
+export interface NoteTagRow {
+  noteId: number;
+  tagId: number;
+}
+
+/** 双链出链项（`toNoteId` 为 null 表示「未链接提及」）。 */
+export interface NoteLinkOut {
+  toTitle: string;
+  toNoteId: number | null;
+}
+
+/** 双链入链项。 */
+export interface NoteLinkIn {
+  fromNoteId: number;
+  fromTitle: string;
+}
+
+/** 反链面板数据。 */
+export interface NoteLinks {
+  outgoing: NoteLinkOut[];
+  incoming: NoteLinkIn[];
+}
+
+/** 回收站清理报告。 */
+export interface PurgeReport {
+  purged: number;
+}
+
+/** 孤儿图片清理报告。 */
+export interface NoteImageGcReport {
+  dryRun: boolean;
+  totalFiles: number;
+  referenced: number;
+  orphanFiles: string[];
+  removed: number;
+  failed: number;
+}
+
+/** 速记导出报告。 */
+export interface ExportReport {
+  exported: number;
+  /** 复制进 `assets/` 的图片数。 */
+  images: number;
+  failed: string[];
+  dir: string;
+}
+
+/** 速记导入报告。 */
+export interface ImportReport {
+  imported: number;
+  /** `sourceUrl` 命中已有笔记而跳过（去重）。 */
+  skipped: number;
+  failed: string[];
+  cancelled: boolean;
+}
+
+/** `notes:changed` 事件载荷（只带 revision，列表由前端据此重拉）。 */
+export interface NotesChanged {
+  revision: number;
 }
 
 /** 打开搜索结果的动作。 */
@@ -382,6 +488,73 @@ export const ipc = {
   clearClipboardHistory: () => invoke<void>("clear_clipboard_history"),
   /** 立即按保留策略清理过期条目。 */
   pruneClipboardHistory: () => invoke<void>("prune_clipboard_history"),
+
+  // ---- 速记（笔记 / 文件夹 / 标签 / 图片） ----
+  /** 拉全量笔记（含正文；`trashed = true` 为回收站）。 */
+  listNotes: (trashed = false) => invoke<Note[]>("list_notes", { trashed }),
+  /** 取单条笔记；不存在返回 null。 */
+  getNote: (noteId: number) => invoke<Note | null>("get_note", { noteId }),
+  /** 新建笔记（可一次带正文 / 文件夹 / 来源）。 */
+  createNoteIn: (title: string, content = "", folderId: number | null = null, sourceUrl = "") =>
+    invoke<Note>("create_note_in", { title, content, folderId, sourceUrl }),
+  /** 保存笔记（后端会做改名断链修复）。 */
+  updateNote: (id: number, title: string, content: string) =>
+    invoke<Note>("update_note", { id, title, content }),
+  /** 设置 / 清除笔记的树图标（emoji）。 */
+  setNoteIcon: (id: number, icon: string | null) =>
+    invoke<void>("set_note_icon", { id, icon }),
+  /** 移动笔记到文件夹（`folderId` 传 null 回树根）。 */
+  setNoteFolder: (noteId: number, folderId: number | null) =>
+    invoke<void>("set_note_folder", { noteId, folderId }),
+  /** 移入回收站（软删）。 */
+  trashNote: (id: number) => invoke<void>("trash_note", { id }),
+  /** 从回收站还原。 */
+  restoreNote: (id: number) => invoke<void>("restore_note", { id }),
+  /** 永久删除（回收站内）。 */
+  purgeNote: (id: number) => invoke<void>("purge_note", { id }),
+  /** 清空回收站，返回清掉的条数。 */
+  purgeAllTrashedNotes: () => invoke<number>("purge_all_trashed_notes"),
+  /** 按配置的保留天数清理回收站。 */
+  purgeExpiredNotes: () => invoke<PurgeReport>("purge_expired_notes"),
+  /** 关键词搜索笔记（排除回收站）。 */
+  searchNotes: (keyword: string, limit?: number) =>
+    invoke<Note[]>("search_notes", { keyword, limit }),
+  /** 反链面板数据。 */
+  getNoteLinks: (noteId: number) => invoke<NoteLinks>("get_note_links", { noteId }),
+  /** 全库双链索引重建。 */
+  rebuildNoteLinks: () => invoke<void>("rebuild_note_links"),
+  listNoteFolders: () => invoke<NoteFolder[]>("list_note_folders"),
+  createNoteFolder: (name: string, parentId: number | null) =>
+    invoke<NoteFolder>("create_note_folder", { name, parentId }),
+  renameNoteFolder: (id: number, name: string) =>
+    invoke<void>("rename_note_folder", { id, name }),
+  deleteNoteFolder: (id: number) => invoke<void>("delete_note_folder", { id }),
+  /** 拖拽落点批量写回（后端做环检测）。 */
+  reorderNoteFolders: (
+    moves: { id: number; parentId: number | null; sortOrder: number }[],
+  ) => invoke<void>("reorder_note_folders", { moves }),
+  listTags: () => invoke<Tag[]>("list_tags"),
+  createTag: (name: string) => invoke<Tag>("create_tag", { name }),
+  renameTag: (id: number, name: string) => invoke<void>("rename_tag", { id, name }),
+  deleteTag: (id: number) => invoke<void>("delete_tag", { id }),
+  getNoteTags: (noteId: number) => invoke<Tag[]>("get_note_tags", { noteId }),
+  setNoteTags: (noteId: number, tagIds: number[]) =>
+    invoke<void>("set_note_tags", { noteId, tagIds }),
+  listNoteTags: () => invoke<NoteTagRow[]>("list_note_tags"),
+  /** 导入图片（base64），返回正文应插入的 URL。 */
+  importNoteImage: (dataB64: string, ext: string) =>
+    invoke<string>("import_note_image", { dataB64, ext }),
+  /** 孤儿图片扫描 / 清理（`dryRun = true` 只报告）。 */
+  gcOrphanNoteImages: (dryRun: boolean) =>
+    invoke<NoteImageGcReport>("gc_orphan_note_images", { dryRun }),
+  /** 导出全部速记到指定目录（.md + front-matter + assets/）。 */
+  exportNotes: (dir: string) => invoke<ExportReport>("export_notes", { dir }),
+  /** 导入本应用导出的目录；`opts.overwrite` 控制 sourceUrl 命中时是否覆盖。 */
+  importNotes: (dir: string, opts?: { overwrite: boolean }) =>
+    invoke<ImportReport>("import_notes", { dir, opts }),
+  /** 取消正在进行的导入。 */
+  importNotesCancel: () => invoke<void>("import_notes_cancel"),
+
   /** 读取自动更新状态（窗口挂载后兜底拉取；变化由 `update:state` 事件广播）。 */
   getUpdateState: () => invoke<UpdateState>("get_update_state"),
   /** 检查更新：立即返回当前快照，结果与进度经 `update:state` 广播。 */

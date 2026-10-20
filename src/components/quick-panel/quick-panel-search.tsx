@@ -62,12 +62,12 @@ export function QuickPanelSearch({
   }, [active, focused]);
 
   const handleMouseDown = (event: MouseEvent<HTMLDivElement>) => {
-    // 阻止默认的「点击即给输入框 DOM 焦点」：此时窗口还没拿到焦点，先让 Rust 切。
+    // 已聚焦：窗口已持有键盘焦点，不要再拦默认行为——否则点击无法把光标移到点击处、
+    // 拖动也无法选择文字（结果行自身仍会 preventDefault，键盘继续留在输入框里）。
+    if (focused) return;
+    // 未聚焦：先拦下「点击即给输入框 DOM 焦点」，让 Rust 把窗口切成可聚焦并索要焦点，
+    // 成功后再把 DOM 焦点给输入框。
     event.preventDefault();
-    if (focused) {
-      inputRef.current?.focus();
-      return;
-    }
     void onRequestFocus().then((ok) => {
       if (ok) inputRef.current?.focus();
     });

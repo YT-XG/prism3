@@ -16,25 +16,23 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::RwLock;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::config::AppConfig;
+use crate::db::{now_secs, DbState};
 use crate::error::{AppError, AppResult};
+use crate::repo::clipboard as clip_repo;
 
 /// 剪贴板历史变化的广播事件名。
 ///
 /// 广播给所有窗口：主窗口「剪贴板」页与快捷小窗「剪贴板」页共用同一份历史。
 pub const CLIPBOARD_EVENT: &str = "clipboard:state";
 
-/// 历史元数据文件名。
-const INDEX_FILE_NAME: &str = "clipboard-v1.json";
 /// 图片目录名（位于配置目录下）。
 const IMAGE_DIR_NAME: &str = "clipboard-images";
-/// 落盘格式版本；变更即忽略旧文件重建。
-const INDEX_VERSION: u32 = 1;
 
 /// 采集轮询间隔：只读一次序列号，命中变化才真正读内容。
 const POLL_INTERVAL: Duration = Duration::from_millis(400);
@@ -145,14 +143,6 @@ impl ClipKindFilter {
             _ => Self::All,
         }
     }
-
-    fn accepts(self, kind: ClipKind) -> bool {
-        match self {
-            Self::All => true,
-            Self::Text => kind == ClipKind::Text,
-            Self::Image => kind == ClipKind::Image,
-        }
-    }
 }
 
 /// 采集到的一份内容。
@@ -165,11 +155,9 @@ enum Captured {
     },
 }
 
-/// 历史在内存中的权威副本（最新在前）。
+/// 内存里只留「配置镜像 + 变更计数」：条目本身以 SQLite 为权威（见 `repo::clipboard`）。
 struct Inner {
     enabled: bool,
-    entries: Vec<ClipEntry>,
-    next_id: u64,
     retention_days: u32,
     capture_images: bool,
     paste_on_click: bool,
@@ -190,8 +178,6 @@ impl ClipboardState {
         Self {
             inner: RwLock::new(Inner {
                 enabled: false,
-                entries: Vec::new(),
-                next_id: 1,
                 retention_days: AppConfig::default().clipboard_retention_days,
                 capture_images: true,
                 paste_on_click: true,
@@ -219,45 +205,63 @@ impl ClipboardState {
     }
 
     /// 配置同步：保留天数 / 是否采集图片 / 是否点击即粘贴。
-    /// 返回是否因保留天数收紧而删掉了条目（调用方据此落盘）。
+    /// 返回是否因保留天数收紧而删掉了条目（调用方据此刷新 UI）。
     pub fn configure(&self, app: &AppHandle, config: &AppConfig) -> bool {
-        let mut inner = self.write();
-        let retention_changed = inner.retention_days != config.clipboard_retention_days;
-        inner.retention_days = config.clipboard_retention_days;
-        inner.capture_images = config.clipboard_capture_images;
-        inner.paste_on_click = config.clipboard_paste_on_click;
-
-        let removed = if retention_changed {
-            prune_locked(&mut inner, now_secs())
-        } else {
-            Vec::new()
+        let (retention_changed, retention_days) = {
+            let mut inner = self.write();
+            let retention_changed = inner.retention_days != config.clipboard_retention_days;
+            inner.retention_days = config.clipboard_retention_days;
+            inner.capture_images = config.clipboard_capture_images;
+            inner.paste_on_click = config.clipboard_paste_on_click;
+            (retention_changed, inner.retention_days)
         };
-        if !removed.is_empty() {
-            inner.revision += 1;
-        }
-        drop(inner);
 
-        delete_image_files(app, &removed);
-        !removed.is_empty()
+        let (removed_count, removed) = if retention_changed {
+            let db = app.state::<DbState>();
+            let conn = db.lock();
+            clip_repo::prune(&conn, retention_days as u64, now_secs()).unwrap_or((0, Vec::new()))
+        } else {
+            (0, Vec::new())
+        };
+        if removed_count > 0 {
+            delete_image_files(app, &removed);
+            self.write().revision += 1;
+        }
+        removed_count > 0
     }
 
-    pub fn snapshot(&self) -> ClipState {
-        let inner = self.read();
+    /// 状态快照：内存里的配置镜像 + 库里的统计（命令返回值与事件载荷共用）。
+    pub fn snapshot(&self, app: &AppHandle) -> ClipState {
+        let (enabled, retention_days, capture_images, paste_on_click, revision) = {
+            let inner = self.read();
+            (
+                inner.enabled,
+                inner.retention_days,
+                inner.capture_images,
+                inner.paste_on_click,
+                inner.revision,
+            )
+        };
+        let (count, pinned_count, storage_bytes) = {
+            let db = app.state::<DbState>();
+            let conn = db.lock();
+            clip_repo::stats(&conn).unwrap_or((0, 0, 0))
+        };
         ClipState {
-            enabled: inner.enabled,
-            count: inner.entries.len(),
-            pinned_count: inner.entries.iter().filter(|entry| entry.pinned).count(),
-            revision: inner.revision,
-            retention_days: inner.retention_days,
-            capture_images: inner.capture_images,
-            paste_on_click: inner.paste_on_click,
-            storage_bytes: inner.entries.iter().map(|entry| entry.size).sum(),
+            enabled,
+            count,
+            pinned_count,
+            revision,
+            retention_days,
+            capture_images,
+            paste_on_click,
+            storage_bytes,
         }
     }
 
     /// 主动广播一次当前状态（配置开关等由外部触发的时机）。
     pub fn broadcast(&self, app: &AppHandle) {
-        if let Err(err) = app.emit(CLIPBOARD_EVENT, self.snapshot()) {
+        if let Err(err) = app.emit(CLIPBOARD_EVENT, self.snapshot(app)) {
             log::warn!("广播剪贴板历史状态失败：{err}");
         }
     }
@@ -290,17 +294,21 @@ impl ClipboardState {
                     return false;
                 }
                 let digest = digest_text(&text);
-                let entry = ClipEntry {
-                    id: 0,
-                    kind: ClipKind::Text,
-                    text: Some(text.clone()),
-                    image: None,
-                    digest,
-                    created_at: now_secs(),
-                    size: text.len() as u64,
-                    pinned: false,
+                let size = text.len() as u64;
+                let removed = {
+                    let db = app.state::<DbState>();
+                    let conn = db.lock();
+                    if let Err(err) =
+                        clip_repo::upsert_text(&conn, &digest, &text, size, now_secs())
+                    {
+                        log::warn!("写入剪贴板历史失败：{err}");
+                        return false;
+                    }
+                    self.prune_db(&conn)
                 };
-                self.install(app, entry)
+                delete_image_files(app, &removed);
+                self.bump_and_broadcast(app);
+                true
             }
             Captured::Image {
                 width,
@@ -311,97 +319,57 @@ impl ClipboardState {
                     return false;
                 }
                 let digest = digest_image(width, height, &rgba);
-                if self.bump_existing(app, &digest) {
+                let db = app.state::<DbState>();
+                let (id, existed) = {
+                    let conn = db.lock();
+                    match clip_repo::upsert_image_stub(&conn, &digest, now_secs()) {
+                        Ok(value) => value,
+                        Err(err) => {
+                            log::warn!("写入剪贴板历史失败：{err}");
+                            return false;
+                        }
+                    }
+                };
+                if existed {
+                    // 同一张图再复制一次：只把它提到最前，文件无需重写。
+                    self.bump_and_broadcast(app);
                     return true;
                 }
-
-                let id = self.alloc_id();
-                let image = match write_image_files(app, id, width, height, rgba) {
+                // 图片落盘是重 IO，不持 DB 锁。
+                let image = match write_image_files(app, id as u64, width, height, rgba) {
                     Ok(image) => image,
                     Err(err) => {
                         log::warn!("保存剪贴板图片失败：{err}");
+                        // 回滚刚插入的占位行，避免留下「有记录、无图片」的空壳。
+                        let conn = db.lock();
+                        let _ = clip_repo::delete(&conn, id);
                         return false;
                     }
                 };
-                let entry = ClipEntry {
-                    id,
-                    kind: ClipKind::Image,
-                    text: None,
-                    size: image.bytes,
-                    image: Some(image),
-                    digest,
-                    created_at: now_secs(),
-                    pinned: false,
+                let removed = {
+                    let conn = db.lock();
+                    let _ = clip_repo::set_image(&conn, id, &image);
+                    self.prune_db(&conn)
                 };
-                self.install(app, entry)
+                delete_image_files(app, &removed);
+                self.bump_and_broadcast(app);
+                true
             }
         }
     }
 
-    fn alloc_id(&self) -> u64 {
-        let mut inner = self.write();
-        let id = inner.next_id;
-        inner.next_id += 1;
-        id
+    /// 按保留策略裁剪库里的过期条目，返回被删条目的图片文件名。
+    fn prune_db(&self, conn: &rusqlite::Connection) -> Vec<String> {
+        let retention_days = self.read().retention_days;
+        clip_repo::prune(conn, retention_days as u64, now_secs())
+            .map(|(_, files)| files)
+            .unwrap_or_default()
     }
 
-    /// 同一内容已存在时把它提到最前（复用原 id，不新增一条）。
-    fn bump_existing(&self, app: &AppHandle, digest: &str) -> bool {
-        {
-            let mut inner = self.write();
-            let Some(pos) = inner
-                .entries
-                .iter()
-                .position(|entry| entry.digest == digest)
-            else {
-                return false;
-            };
-            let mut entry = inner.entries.remove(pos);
-            entry.created_at = now_secs();
-            inner.entries.insert(0, entry);
-            inner.revision += 1;
-        }
-        self.persist(app);
+    /// 记录一次变更：自增 revision 并广播。
+    fn bump_and_broadcast(&self, app: &AppHandle) {
+        self.write().revision += 1;
         self.broadcast(app);
-        true
-    }
-
-    /// 入库：同摘要则「提到最前」并复用原 id；否则插到最前（`id == 0` 时自动分配）。
-    fn install(&self, app: &AppHandle, mut entry: ClipEntry) -> bool {
-        let removed = {
-            let mut inner = self.write();
-            if let Some(pos) = inner
-                .entries
-                .iter()
-                .position(|old| old.digest == entry.digest)
-            {
-                let old = inner.entries.remove(pos);
-                entry.id = old.id;
-                // 再复制同一条内容时沿用原记录，收藏状态一并保留（不会因为再复制一次就掉收藏）。
-                entry.pinned = old.pinned;
-                if entry.image.is_none() {
-                    entry.image = old.image;
-                }
-                if entry.size == 0 {
-                    entry.size = old.size;
-                }
-            } else if entry.id == 0 {
-                entry.id = inner.next_id;
-                inner.next_id += 1;
-            } else {
-                inner.next_id = inner.next_id.max(entry.id + 1);
-            }
-
-            inner.entries.insert(0, entry);
-            let removed = prune_locked(&mut inner, now_secs());
-            inner.revision += 1;
-            removed
-        };
-
-        delete_image_files(app, &removed);
-        self.persist(app);
-        self.broadcast(app);
-        true
     }
 
     /// 查询历史元数据。空关键词返回「最近入库」的条目。
@@ -409,153 +377,127 @@ impl ClipboardState {
     /// **收藏的记录始终排在前面**（收藏组内仍按最近入库排序），这样收藏才真正「找得到」。
     pub fn query(
         &self,
+        app: &AppHandle,
         raw_query: &str,
         kind: ClipKindFilter,
         limit: Option<usize>,
     ) -> Vec<ClipEntryMeta> {
         let needle = raw_query.trim().to_lowercase();
         let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
-
-        let inner = self.read();
-        let (pinned, rest): (Vec<_>, Vec<_>) = inner.entries.iter().partition(|entry| entry.pinned);
-
-        pinned
-            .into_iter()
-            .chain(rest)
-            .filter(|entry| kind.accepts(entry.kind))
-            .filter(|entry| {
-                needle.is_empty()
-                    || entry
-                        .text
-                        .as_deref()
-                        .is_some_and(|text| text.to_lowercase().contains(&needle))
-            })
-            .take(limit)
+        let db = app.state::<DbState>();
+        let conn = db.lock();
+        clip_repo::query(&conn, &needle, kind, limit)
+            .unwrap_or_default()
+            .iter()
             .map(ClipEntryMeta::from)
             .collect()
     }
 
     /// 删除一条历史（图片条目连文件一起删）。
     pub fn delete(&self, app: &AppHandle, id: u64) -> AppResult<()> {
-        let removed = {
-            let mut inner = self.write();
-            let Some(pos) = inner.entries.iter().position(|entry| entry.id == id) else {
-                return Ok(());
-            };
-            let entry = inner.entries.remove(pos);
-            inner.revision += 1;
-            image_files_of(&entry)
+        let (count, files) = {
+            let db = app.state::<DbState>();
+            let conn = db.lock();
+            clip_repo::delete(&conn, id as i64)?
         };
-        delete_image_files(app, &removed);
-        self.persist(app);
-        self.broadcast(app);
+        if count == 0 {
+            return Ok(());
+        }
+        delete_image_files(app, &files);
+        self.bump_and_broadcast(app);
         Ok(())
     }
 
     /// 清空历史（连同图片文件）。**收藏的记录会被保留**——收藏只由手动删除移除。
     pub fn clear(&self, app: &AppHandle) -> AppResult<()> {
-        let (names, removed) = {
-            let mut inner = self.write();
-            let before = inner.entries.len();
-            let mut names = Vec::new();
-            inner.entries.retain(|entry| {
-                if entry.pinned {
-                    return true;
-                }
-                names.extend(image_files_of(entry));
-                false
-            });
-            let removed = before != inner.entries.len();
-            if removed {
-                inner.revision += 1;
-            }
-            (names, removed)
+        let (count, files) = {
+            let db = app.state::<DbState>();
+            let conn = db.lock();
+            clip_repo::clear_unpinned(&conn)?
         };
-        if !removed {
+        if count == 0 {
             return Ok(());
         }
-        delete_image_files(app, &names);
-        self.persist(app);
-        self.broadcast(app);
+        delete_image_files(app, &files);
+        self.bump_and_broadcast(app);
         Ok(())
     }
 
     /// 设置 / 取消一条记录的收藏。
     pub fn set_pinned(&self, app: &AppHandle, id: u64, pinned: bool) -> AppResult<()> {
-        {
-            let mut inner = self.write();
-            let Some(entry) = inner.entries.iter_mut().find(|entry| entry.id == id) else {
+        let changed = {
+            let db = app.state::<DbState>();
+            let conn = db.lock();
+            let Some(entry) = clip_repo::get(&conn, id as i64)? else {
                 return Err(AppError::Other("记录不存在".into()));
             };
             if entry.pinned == pinned {
                 return Ok(());
             }
-            entry.pinned = pinned;
-            inner.revision += 1;
+            clip_repo::set_pinned(&conn, id as i64, pinned)?;
+            true
+        };
+        if changed {
+            self.bump_and_broadcast(app);
         }
-        self.persist(app);
-        self.broadcast(app);
         Ok(())
     }
 
     /// 按保留策略清理一次过期条目。
     pub fn prune(&self, app: &AppHandle) -> AppResult<()> {
-        let removed = {
-            let mut inner = self.write();
-            let removed = prune_locked(&mut inner, now_secs());
-            if !removed.is_empty() {
-                inner.revision += 1;
-            }
-            removed
+        let (count, files) = {
+            let db = app.state::<DbState>();
+            let conn = db.lock();
+            let retention_days = self.read().retention_days;
+            clip_repo::prune(&conn, retention_days as u64, now_secs())?
         };
-        if removed.is_empty() {
+        if count == 0 {
             return Ok(());
         }
-        delete_image_files(app, &removed);
-        self.persist(app);
-        self.broadcast(app);
+        delete_image_files(app, &files);
+        self.bump_and_broadcast(app);
         Ok(())
     }
 
     /// 读取一条文本记录的完整正文（编辑 / 预览时按需拉取）。
-    pub fn text_of(&self, id: u64) -> AppResult<String> {
-        self.read()
-            .entries
-            .iter()
-            .find(|entry| entry.id == id)
-            .and_then(|entry| entry.text.clone())
+    pub fn text_of(&self, app: &AppHandle, id: u64) -> AppResult<String> {
+        let db = app.state::<DbState>();
+        let conn = db.lock();
+        clip_repo::get(&conn, id as i64)?
+            .and_then(|entry| entry.text)
             .ok_or_else(|| AppError::Other("文本记录不存在".into()))
     }
 
     /// 修改一条文本记录的正文。
     pub fn update_text(&self, app: &AppHandle, id: u64, text: &str) -> AppResult<()> {
         {
-            let mut inner = self.write();
-            let Some(entry) = inner.entries.iter_mut().find(|entry| entry.id == id) else {
+            let db = app.state::<DbState>();
+            let conn = db.lock();
+            let Some(entry) = clip_repo::get(&conn, id as i64)? else {
                 return Err(AppError::Other("记录不存在".into()));
             };
             if entry.kind != ClipKind::Text {
                 return Err(AppError::Other("只能编辑文本记录".into()));
             }
-            entry.text = Some(text.to_string());
-            entry.digest = digest_text(text);
-            entry.size = text.len() as u64;
-            inner.revision += 1;
+            clip_repo::update_text(
+                &conn,
+                id as i64,
+                text,
+                &digest_text(text),
+                text.len() as u64,
+            )?;
         }
-        self.persist(app);
-        self.broadcast(app);
+        self.bump_and_broadcast(app);
         Ok(())
     }
 
     /// 取一条记录的内容（用于写剪贴板）。
     pub fn content(&self, app: &AppHandle, id: u64) -> AppResult<crate::paste::PasteContent> {
-        let entry = self
-            .read()
-            .entries
-            .iter()
-            .find(|entry| entry.id == id)
-            .cloned()
-            .ok_or_else(|| AppError::Other("记录不存在".into()))?;
+        let entry = {
+            let db = app.state::<DbState>();
+            let conn = db.lock();
+            clip_repo::get(&conn, id as i64)?.ok_or_else(|| AppError::Other("记录不存在".into()))?
+        };
 
         match entry.kind {
             ClipKind::Text => Ok(crate::paste::PasteContent::Text(
@@ -577,32 +519,17 @@ impl ClipboardState {
 
     /// 图片记录的 data URL（`thumb` 为真时给列表用的缩略图）。
     pub fn image_data_url(&self, app: &AppHandle, id: u64, thumb: bool) -> AppResult<String> {
-        let meta = self
-            .read()
-            .entries
-            .iter()
-            .find(|entry| entry.id == id)
-            .and_then(|entry| entry.image.clone())
-            .ok_or_else(|| AppError::Other("图片记录不存在".into()))?;
+        let meta = {
+            let db = app.state::<DbState>();
+            let conn = db.lock();
+            clip_repo::get(&conn, id as i64)?
+                .and_then(|entry| entry.image)
+                .ok_or_else(|| AppError::Other("图片记录不存在".into()))?
+        };
 
         let name = if thumb { meta.thumb } else { meta.file };
         let bytes = std::fs::read(image_dir(app)?.join(name))?;
         Ok(format!("data:image/png;base64,{}", base64_encode(&bytes)))
-    }
-
-    /// 把历史（元数据）写回磁盘。
-    fn persist(&self, app: &AppHandle) {
-        let index = {
-            let inner = self.read();
-            PersistedIndex {
-                version: INDEX_VERSION,
-                next_id: inner.next_id,
-                entries: inner.entries.clone(),
-            }
-        };
-        if let Err(err) = write_index(app, &index) {
-            log::warn!("写入剪贴板历史失败：{err}");
-        }
     }
 }
 
@@ -610,16 +537,6 @@ impl Default for ClipboardState {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// 落盘的历史文件结构。
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PersistedIndex {
-    version: u32,
-    next_id: u64,
-    #[serde(default)]
-    entries: Vec<ClipEntry>,
 }
 
 /// 采集线程的运行标志：进程级单例（同一时刻只允许一个采集线程）。
@@ -708,62 +625,44 @@ pub fn sync(app: &AppHandle, config: &AppConfig) {
         crate::paste::stop_tracker();
     }
 
-    // 保留天数收紧会立刻裁掉过期条目（`configure` 返回是否有条目被删）。
-    if state.configure(app, config) {
-        state.persist(app);
-    }
+    // 保留天数收紧会立刻裁掉过期条目（`configure` 已落库并删除对应图片文件）。
+    state.configure(app, config);
     state.broadcast(app);
 }
 
-/// 读取落盘的历史（启动时调用，与启用与否无关：重新启用能立刻看到旧历史）。
-pub fn load_from_disk(app: &AppHandle, state: &ClipboardState) -> bool {
-    let Ok(path) = index_path(app) else {
-        return false;
-    };
-    if !path.is_file() {
-        return false;
-    }
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return false;
-    };
-    let Ok(index) = serde_json::from_str::<PersistedIndex>(&content) else {
-        log::warn!("读取剪贴板历史失败（将忽略）：JSON 解析失败");
-        return false;
-    };
-    if index.version != INDEX_VERSION {
-        log::warn!("剪贴板历史版本不符（{}），已忽略", index.version);
-        return false;
-    }
-
-    let dir = image_dir(app).ok();
-    let removed = {
-        let mut inner = state.write();
-        inner.entries = index
-            .entries
-            .into_iter()
-            .filter(|entry| match &entry.image {
-                // 图片文件已被外部删掉：这条记录不再可用。
+/// 启动时校验库里的历史（与启用与否无关：重新启用能立刻看到旧历史）。
+///
+/// 条目以 SQLite 为权威，这里只做「图片文件是否还在」的可用性校验——
+/// 文件被外部删掉的图片记录直接删行，文本记录保留（正文就在库里）。
+pub fn load_from_db(app: &AppHandle, state: &ClipboardState) -> bool {
+    let db = app.state::<DbState>();
+    let (count, removed) = {
+        let conn = db.lock();
+        let Ok(entries) = clip_repo::all(&conn) else {
+            return false;
+        };
+        let dir = image_dir(app).ok();
+        let mut dead_files = Vec::new();
+        let mut alive = 0usize;
+        for entry in &entries {
+            let usable = match &entry.image {
                 Some(image) => dir
                     .as_ref()
                     .is_some_and(|dir| dir.join(&image.file).is_file()),
                 None => entry.kind == ClipKind::Text && entry.text.is_some(),
-            })
-            .collect();
-        inner.next_id = inner.next_id.max(index.next_id).max(
-            inner
-                .entries
-                .iter()
-                .map(|entry| entry.id + 1)
-                .max()
-                .unwrap_or(1),
-        );
-        prune_locked(&mut inner, now_secs())
+            };
+            if usable {
+                alive += 1;
+            } else if let Ok((_, files)) = clip_repo::delete(&conn, entry.id as i64) {
+                dead_files.extend(files);
+            }
+        }
+        (alive, dead_files)
     };
-
-    let count = state.read().entries.len();
     if !removed.is_empty() {
         delete_image_files(app, &removed);
     }
+    let _ = state;
     log::info!("已载入剪贴板历史：{count} 条");
     true
 }
@@ -814,35 +713,6 @@ impl From<&ClipEntry> for ClipEntryMeta {
     }
 }
 
-/// 按保留天数裁掉过期条目，返回被删掉的图片文件名。
-///
-/// `retention_days == 0` 表示永久保留（此时不删任何条目）；
-/// **收藏的记录永不参与裁剪**（无论过期多久都留着，只由手动删除移除）。
-fn prune_locked(inner: &mut Inner, now: u64) -> Vec<String> {
-    if inner.retention_days == 0 {
-        return Vec::new();
-    }
-    let cutoff = now.saturating_sub(inner.retention_days as u64 * 86_400);
-
-    let mut removed = Vec::new();
-    inner.entries.retain(|entry| {
-        if entry.pinned || entry.created_at >= cutoff {
-            return true;
-        }
-        removed.extend(image_files_of(entry));
-        false
-    });
-    removed
-}
-
-/// 一条记录对应的图片文件（文本条目为空）。
-fn image_files_of(entry: &ClipEntry) -> Vec<String> {
-    match &entry.image {
-        Some(image) => vec![image.file.clone(), image.thumb.clone()],
-        None => Vec::new(),
-    }
-}
-
 fn text_preview(text: &str) -> String {
     let mut preview = String::new();
     for (index, ch) in text.chars().enumerate() {
@@ -878,31 +748,9 @@ fn digest_image(width: u32, height: u32, rgba: &[u8]) -> String {
     format!("i{hash:016x}")
 }
 
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs())
-        .unwrap_or_default()
-}
-
-fn index_path(app: &AppHandle) -> AppResult<PathBuf> {
-    Ok(app.path().app_config_dir()?.join(INDEX_FILE_NAME))
-}
-
 /// 图片目录（不存在时由写入方创建）。
 pub fn image_dir(app: &AppHandle) -> AppResult<PathBuf> {
     Ok(app.path().app_config_dir()?.join(IMAGE_DIR_NAME))
-}
-
-fn write_index(app: &AppHandle, index: &PersistedIndex) -> AppResult<()> {
-    let path = index_path(app)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_string(index)?)?;
-    std::fs::rename(&tmp, &path)?;
-    Ok(())
 }
 
 fn write_image_files(
@@ -1659,18 +1507,6 @@ mod tests {
         }
     }
 
-    fn inner_with(entries: Vec<ClipEntry>, retention_days: u32) -> Inner {
-        Inner {
-            enabled: true,
-            entries,
-            next_id: 100,
-            retention_days,
-            capture_images: true,
-            paste_on_click: true,
-            revision: 0,
-        }
-    }
-
     #[test]
     fn digest_is_stable_and_content_addressed() {
         assert_eq!(digest_text("hello"), digest_text("hello"));
@@ -1684,164 +1520,6 @@ mod tests {
         assert_ne!(
             digest_image(1, 2, &[1, 2, 3, 4, 5, 6, 7, 8]),
             digest_image(2, 1, &[1, 2, 3, 4, 5, 6, 7, 8])
-        );
-    }
-
-    #[test]
-    fn prune_drops_entries_older_than_retention_and_keeps_the_rest() {
-        let now = 1_000_000_000u64;
-        let day = 86_400u64;
-        let mut inner = inner_with(
-            vec![
-                text_entry(1, "今天", now - 10),
-                text_entry(2, "昨天", now - day - 10),
-                text_entry(3, "上个月", now - 40 * day),
-            ],
-            30,
-        );
-
-        assert!(
-            prune_locked(&mut inner, now).is_empty(),
-            "文本条目没有图片文件"
-        );
-        let ids: Vec<u64> = inner.entries.iter().map(|entry| entry.id).collect();
-        assert_eq!(ids, vec![1, 2], "只保留 30 天内的条目");
-    }
-
-    #[test]
-    fn retention_zero_keeps_everything() {
-        let now = 2_000_000_000u64;
-        let mut inner = inner_with(vec![text_entry(1, "很久以前", 1)], 0);
-        prune_locked(&mut inner, now);
-        assert_eq!(inner.entries.len(), 1, "0 = 永久保留，不裁任何条目");
-    }
-
-    #[test]
-    fn prune_keeps_pinned_entries_even_when_expired() {
-        let now = 1_000_000_000u64;
-        let day = 86_400u64;
-        let mut pinned = text_entry(1, "收藏的旧文本", now - 40 * day);
-        pinned.pinned = true;
-
-        let mut inner = inner_with(
-            vec![pinned, text_entry(2, "过期未收藏", now - 40 * day)],
-            30,
-        );
-        prune_locked(&mut inner, now);
-
-        let ids: Vec<u64> = inner.entries.iter().map(|entry| entry.id).collect();
-        assert_eq!(ids, vec![1], "收藏的条目不参与裁剪，其余照常过期删除");
-    }
-
-    #[test]
-    fn query_puts_pinned_entries_first() {
-        let mut pinned = text_entry(3, "pinned", 30);
-        pinned.pinned = true;
-
-        let state = ClipboardState::new();
-        *state.write() = inner_with(
-            vec![text_entry(1, "最新", 40), pinned, text_entry(2, "较早", 20)],
-            30,
-        );
-
-        let ids: Vec<u64> = state
-            .query("", ClipKindFilter::All, None)
-            .iter()
-            .map(|meta| meta.id)
-            .collect();
-        assert_eq!(ids, vec![3, 1, 2], "收藏置顶，其余仍按最近入库排序");
-    }
-
-    #[test]
-    fn prune_reports_image_files_so_they_can_be_deleted() {
-        let now = 1_000_000_000u64;
-        let mut entry = text_entry(7, "旧图", now - 40 * 86_400);
-        entry.kind = ClipKind::Image;
-        entry.text = None;
-        entry.image = Some(ImageMeta {
-            width: 4,
-            height: 4,
-            file: "7.png".into(),
-            thumb: "7.thumb.png".into(),
-            bytes: 128,
-        });
-
-        let mut inner = inner_with(vec![entry], 30);
-        let removed = prune_locked(&mut inner, now);
-        assert_eq!(
-            removed,
-            vec!["7.png".to_string(), "7.thumb.png".to_string()]
-        );
-        assert!(inner.entries.is_empty());
-    }
-
-    #[test]
-    fn query_filters_by_kind_and_substring_case_insensitively() {
-        let mut image = text_entry(1, "占位", 10);
-        image.kind = ClipKind::Image;
-        image.text = None;
-        image.image = Some(ImageMeta {
-            width: 100,
-            height: 50,
-            file: "1.png".into(),
-            thumb: "1.thumb.png".into(),
-            bytes: 10,
-        });
-
-        let state = ClipboardState::new();
-        *state.write() = inner_with(
-            vec![
-                image,
-                text_entry(2, "Hello World", 20),
-                text_entry(3, "world 之外", 30),
-            ],
-            30,
-        );
-
-        let all: Vec<u64> = state
-            .query("", ClipKindFilter::All, None)
-            .iter()
-            .map(|meta| meta.id)
-            .collect();
-        assert_eq!(all, vec![1, 2, 3]);
-
-        let matched: Vec<u64> = state
-            .query("WORLD", ClipKindFilter::All, None)
-            .iter()
-            .map(|meta| meta.id)
-            .collect();
-        assert_eq!(
-            matched,
-            vec![2, 3],
-            "大小写不敏感的子串匹配，图片无正文不参与"
-        );
-
-        let images: Vec<u64> = state
-            .query("", ClipKindFilter::Image, None)
-            .iter()
-            .map(|meta| meta.id)
-            .collect();
-        assert_eq!(images, vec![1]);
-    }
-
-    #[test]
-    fn limit_is_clamped_to_the_hard_cap() {
-        let entries = (1..=10)
-            .map(|id| text_entry(id, &format!("text {id}"), id))
-            .collect();
-        let state = ClipboardState::new();
-        *state.write() = inner_with(entries, 30);
-
-        assert_eq!(state.query("", ClipKindFilter::All, Some(3)).len(), 3);
-        assert_eq!(
-            state.query("", ClipKindFilter::All, Some(0)).len(),
-            1,
-            "0 会夹到 1"
-        );
-        assert_eq!(
-            state.query("", ClipKindFilter::All, Some(9999)).len(),
-            10,
-            "超出硬上限只会夹到上限，不会凭空补条目"
         );
     }
 
@@ -1886,26 +1564,6 @@ mod tests {
         assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
         // 含高位字节：必须按无符号处理，不能出现符号扩展。
         assert_eq!(base64_encode(&[0xFF, 0xFF, 0xFF]), "////");
-    }
-
-    #[test]
-    fn persisted_index_round_trips_and_tolerates_missing_entries() {
-        let index = PersistedIndex {
-            version: INDEX_VERSION,
-            next_id: 42,
-            entries: vec![text_entry(1, "hi", 5)],
-        };
-        let json = serde_json::to_string(&index).expect("应当可序列化");
-        let back: PersistedIndex = serde_json::from_str(&json).expect("应当可读");
-        assert_eq!(back.version, INDEX_VERSION);
-        assert_eq!(back.next_id, 42);
-        assert_eq!(back.entries.len(), 1);
-        assert_eq!(back.entries[0].text.as_deref(), Some("hi"));
-
-        // 老版本文件缺 `entries` 时不该让整个文件报废。
-        let sparse: PersistedIndex =
-            serde_json::from_str(r#"{"version":1,"nextId":3}"#).expect("缺 entries 应当可读");
-        assert!(sparse.entries.is_empty());
     }
 
     #[test]

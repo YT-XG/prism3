@@ -137,11 +137,12 @@ export function QuickPanelClipboard({
 
   /** 点输入框：只有这里才需要键盘焦点（点列表行绝不能接管焦点）。 */
   const handleInputMouseDown = (event: MouseEvent<HTMLDivElement>) => {
+    // 已聚焦：窗口已持有键盘焦点，不要再拦默认行为——否则浏览器拿不到鼠标按下，
+    // 点击就无法把光标移到点击处、拖动也无法选择文字。交给浏览器原生处理。
+    if (focused) return;
+    // 未聚焦：窗口还没拿到键盘焦点，先拦下「点击即给输入框 DOM 焦点」让 Rust 去切，
+    // 切换成功后再把 DOM 焦点给输入框（否则「看起来能打字其实打不进去」）。
     event.preventDefault();
-    if (focused) {
-      inputRef.current?.focus();
-      return;
-    }
     void onRequestFocus().then((ok) => {
       if (ok) inputRef.current?.focus();
     });

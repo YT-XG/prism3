@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useFileSearch } from "@/hooks/use-file-search";
+import { useNoteSearch } from "@/hooks/use-note-search";
+import { markdownPlainText } from "@/lib/notes/markdown-text";
 import { useAppStore } from "@/stores/app-store";
 
 import { toast } from "sonner";
@@ -25,6 +27,7 @@ export function SearchPanel() {
   const config = useAppStore((state) => state.config);
   const saveConfig = useAppStore((state) => state.saveConfig);
   const setActiveView = useAppStore((state) => state.setActiveView);
+  const openNote = useAppStore((state) => state.openNote);
 
   const {
     query,
@@ -43,6 +46,8 @@ export function SearchPanel() {
 
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // 速记搜索：与文件搜索共用同一个输入框（关键词一致）。
+  const noteHits = useNoteSearch(query, 5);
 
   // ↑↓ 选中项始终滚进可视区。
   useEffect(() => {
@@ -155,6 +160,41 @@ export function SearchPanel() {
           </Button>
         )}
       </div>
+
+      {query.trim() && (
+        <Card>
+          <CardHeader>
+            <CardTitle>速记</CardTitle>
+            <CardDescription>同时检索笔记标题与正文。</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {noteHits.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                没有匹配「{query.trim()}」的速记
+              </p>
+            ) : (
+              <ul className="flex flex-col gap-1">
+                {noteHits.map((note) => (
+                  <li key={note.id}>
+                    <button
+                      type="button"
+                      onClick={() => openNote(note.id)}
+                      className="flex w-full flex-col rounded-md px-2.5 py-1.5 text-left hover:bg-muted/70"
+                    >
+                      <span className="truncate text-sm font-medium">
+                        {note.title || "无标题笔记"}
+                      </span>
+                      <span className="truncate text-xs text-muted-foreground">
+                        {markdownPlainText(note.content, 60) || "空白笔记"}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <SearchIndexStatus state={indexState} onRebuild={rebuild} onCancel={cancelScan} />
 

@@ -4,10 +4,14 @@ import { info } from "@tauri-apps/plugin-log";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   ClipboardList,
+  Eraser,
+  FileDown,
+  FileUp,
   FolderSearch,
   ImagePlus,
   Monitor,
   Moon,
+  NotebookPen,
   RotateCcw,
   Sun,
   Trash2,
@@ -39,7 +43,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useClipboardState } from "@/hooks/use-clipboard-state";
 import { useFileIndexState } from "@/hooks/use-file-index-state";
-import { ipc, type AppConfig, type Theme } from "@/lib/ipc";
+import { ipc, type AppConfig, type NoteEditorMode, type Theme } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/stores/app-store";
 
@@ -60,6 +64,8 @@ export function SettingsPanel() {
   const indexState = useFileIndexState(true);
   const clipboardState = useClipboardState();
   const setActiveView = useAppStore((state) => state.setActiveView);
+  const [notesFeedback, setNotesFeedback] = useState<string | null>(null);
+  const [notesBusy, setNotesBusy] = useState(false);
 
   if (!config) {
     return <p className="text-sm text-muted-foreground">正在读取配置…</p>;
@@ -91,6 +97,69 @@ export function SettingsPanel() {
       toast.success("已开始重建索引");
     } catch (cause) {
       toast.error(`重建失败：${String(cause)}`);
+    }
+  };
+
+  const exportNotes = async () => {
+    const dir = await open({ directory: true, title: "选择速记导出目录" });
+    if (typeof dir !== "string") return;
+    setNotesBusy(true);
+    setNotesFeedback("导出中…");
+    try {
+      const report = await ipc.exportNotes(dir);
+      setNotesFeedback(
+        `已导出 ${report.exported} 篇（图片 ${report.images} 张）${
+          report.failed.length ? `，${report.failed.length} 条失败` : ""
+        }`,
+      );
+    } catch (cause) {
+      setNotesFeedback(`导出失败：${String(cause)}`);
+    } finally {
+      setNotesBusy(false);
+    }
+  };
+
+  const importNotes = async () => {
+    const dir = await open({ directory: true, title: "选择速记导入目录" });
+    if (typeof dir !== "string") return;
+    setNotesBusy(true);
+    setNotesFeedback("导入中…");
+    try {
+      const report = await ipc.importNotes(dir);
+      setNotesFeedback(
+        `导入 ${report.imported} 篇，跳过 ${report.skipped}${
+          report.failed.length ? `，失败 ${report.failed.length}` : ""
+        }`,
+      );
+    } catch (cause) {
+      setNotesFeedback(`导入失败：${String(cause)}`);
+    } finally {
+      setNotesBusy(false);
+    }
+  };
+
+  const gcNoteImages = async () => {
+    setNotesBusy(true);
+    try {
+      const dry = await ipc.gcOrphanNoteImages(true);
+      if (dry.orphanFiles.length === 0) {
+        setNotesFeedback(`没有孤儿图片（共 ${dry.totalFiles} 张，均被引用）`);
+        return;
+      }
+      if (
+        !window.confirm(
+          `发现 ${dry.orphanFiles.length} 张未被任何笔记引用的图片，永久删除它们？`,
+        )
+      ) {
+        setNotesFeedback(null);
+        return;
+      }
+      const done = await ipc.gcOrphanNoteImages(false);
+      setNotesFeedback(`已清理 ${done.removed} 张孤儿图片${done.failed ? `，${done.failed} 张失败` : ""}`);
+    } catch (cause) {
+      setNotesFeedback(`清理失败：${String(cause)}`);
+    } finally {
+      setNotesBusy(false);
     }
   };
 
@@ -453,6 +522,74 @@ export function SettingsPanel() {
         </CardContent>
       </Card>
 
+      <Card>
+        <CardHeader>
+          <CardTitle>速记</CardTitle>
+          <CardDescription>
+            文件夹、标签、回收站与双链的笔记系统；正文以 Markdown 保存，可整库导出为 .md
+            文件（含图片）。完整列表与编辑在「速记」页。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-col gap-0.5">
+              <Label>编辑器模式</Label>
+              <span className="text-xs text-muted-foreground">
+                实时预览 / 仅预览 / 源码 / 分屏。
+              </span>
+            </div>
+            <Tabs
+              value={config.noteEditorMode}
+              onValueChange={(value) => void apply({ noteEditorMode: value as NoteEditorMode })}
+            >
+              <TabsList>
+                <TabsTrigger value="wysiwyg">实时</TabsTrigger>
+                <TabsTrigger value="preview">预览</TabsTrigger>
+                <TabsTrigger value="source">源码</TabsTrigger>
+                <TabsTrigger value="split">分屏</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-col gap-0.5">
+              <Label htmlFor="notes-retention">回收站保留天数</Label>
+              <span className="text-xs text-muted-foreground">
+                到期自动清理回收站；填 0 表示永久保留。
+              </span>
+            </div>
+            <RetentionInput
+              id="notes-retention"
+              value={config.noteTrashRetentionDays}
+              onCommit={(days) => void apply({ noteTrashRetentionDays: days })}
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" disabled={notesBusy} onClick={() => void exportNotes()}>
+              <FileDown data-icon="inline-start" />
+              导出为 .md
+            </Button>
+            <Button variant="outline" size="sm" disabled={notesBusy} onClick={() => void importNotes()}>
+              <FileUp data-icon="inline-start" />
+              从 .md 导入
+            </Button>
+            <Button variant="outline" size="sm" disabled={notesBusy} onClick={() => void gcNoteImages()}>
+              <Eraser data-icon="inline-start" />
+              清理孤儿图片
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setActiveView("notes")}>
+              <NotebookPen data-icon="inline-start" />
+              打开速记页
+            </Button>
+          </div>
+
+          {notesFeedback && (
+            <p className="break-words text-xs text-muted-foreground">{notesFeedback}</p>
+          )}
+        </CardContent>
+      </Card>
+
       <UpdateCard />
 
       <Card>
@@ -480,9 +617,12 @@ export function SettingsPanel() {
 function RetentionInput({
   value,
   onCommit,
+  id = "clipboard-retention",
 }: {
   value: number;
   onCommit: (days: number) => void;
+  /** 输入框 id（剪贴板与速记两处复用，避免重复 id）。 */
+  id?: string;
 }) {
   const [draft, setDraft] = useState(String(value));
 
@@ -500,7 +640,7 @@ function RetentionInput({
 
   return (
     <Input
-      id="clipboard-retention"
+      id={id}
       type="number"
       min={0}
       max={MAX_RETENTION_DAYS}

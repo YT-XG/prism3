@@ -94,6 +94,10 @@ pub struct AppConfig {
     /// 首页 Bento 布局（前端 `serializeHomeLayout` 生成的 JSON 字符串）。
     /// 空串表示用默认布局；解析失败也回退默认，因此后端只当不透明字符串存。
     pub home_layout: String,
+    /// 速记编辑器模式：`wysiwyg`（实时预览，默认）/ `split`（分屏）/ `source`（源码）/ `preview`（仅预览）。
+    pub note_editor_mode: String,
+    /// 速记回收站保留天数；`0` 表示永久保留。启动后与配置变更时各清理一次。
+    pub note_trash_retention_days: u32,
 }
 
 impl Default for AppConfig {
@@ -123,6 +127,8 @@ impl Default for AppConfig {
             clipboard_capture_images: true,
             clipboard_paste_on_click: true,
             home_layout: String::new(),
+            note_editor_mode: "wysiwyg".to_string(),
+            note_trash_retention_days: 0,
         }
     }
 }
@@ -271,5 +277,19 @@ mod tests {
         let config: AppConfig =
             serde_json::from_str(r#"{"fileSearch":true}"#).expect("老配置应当可读");
         assert!(config.home_layout.is_empty());
+    }
+
+    #[test]
+    fn notes_keys_are_camel_case_and_default_to_sane_values() {
+        // 前端按这些键名读写速记设置（与 `AppConfig` 的 camelCase 约定一致），改名即破坏契约。
+        let value = serde_json::to_value(AppConfig::default()).expect("配置应当可序列化");
+        assert_eq!(value["noteEditorMode"], "wysiwyg");
+        assert_eq!(value["noteTrashRetentionDays"], 0);
+
+        // 老配置里没有这两个键：必须回落到默认值，而不是整份配置反序列化失败。
+        let config: AppConfig =
+            serde_json::from_str(r#"{"fileSearch":true}"#).expect("老配置应当可读");
+        assert_eq!(config.note_editor_mode, "wysiwyg");
+        assert_eq!(config.note_trash_retention_days, 0);
     }
 }
