@@ -1,5 +1,6 @@
 //! 笔记标签。改名在 repo 层完成，归属关系（`note_tags`）不动；删除只解关联
-//! （`note_tags` 级联清掉），笔记本身不受影响。内置「剪藏」标签不可改名/删除。
+//! （`note_tags` 级联清掉），笔记本身不受影响。`builtin` 的内置标签不可改名/删除
+//! （prism3 当前不新建任何内置标签）。
 
 use rusqlite::{params, Connection, Result};
 
@@ -139,9 +140,13 @@ mod tests {
     #[test]
     fn builtin_tag_protected() {
         let conn = init_in_memory().unwrap();
-        let builtin: i64 = conn
-            .query_row("SELECT id FROM tags WHERE builtin = 1", [], |r| r.get(0))
-            .unwrap();
+        // `builtin` 守卫保留（prism3 已不再新建内置项，但机制仍在），自带一行来验证保护生效。
+        conn.execute(
+            "INSERT INTO tags (name, builtin, created_at) VALUES ('内置', 1, 0)",
+            [],
+        )
+        .unwrap();
+        let builtin = conn.last_insert_rowid();
         let err = rename(&conn, builtin, "改名").unwrap_err().to_string();
         assert!(err.contains("FORBIDDEN_BUILTIN"), "err: {err}");
         assert!(delete(&conn, builtin).is_err());

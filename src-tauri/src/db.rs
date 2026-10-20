@@ -176,25 +176,25 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         ",
     )?;
 
-    // 内置种子（幂等）。顺序不可颠倒：tags.name 是 UNIQUE，先认领同名再插入，
-    // 否则用户手工建过「剪藏」标签时会撞 UNIQUE 直接启动失败。
-    let now = now_secs() as i64;
-    conn.execute(
-        "INSERT INTO note_folders (name, parent_id, sort_order, builtin, created_at)
-         SELECT '剪藏', NULL, 0, 1, ?1
-         WHERE NOT EXISTS (SELECT 1 FROM note_folders WHERE builtin = 1)",
-        [now],
-    )?;
-    conn.execute(
-        "UPDATE tags SET builtin = 1 WHERE name = '剪藏' AND builtin = 0",
-        [],
-    )?;
-    conn.execute(
-        "INSERT INTO tags (name, builtin, created_at)
-         SELECT '剪藏', 1, ?1
-         WHERE NOT EXISTS (SELECT 1 FROM tags WHERE name = '剪藏')",
-        [now],
-    )?;
+    // 清理历史遗留的内置「剪藏」文件夹 / 标签（幂等、**不再新建**）。
+    //
+    // prism3 没有「网页剪藏」功能，这个内置项是从 x-hub 照搬 schema 时一起带过来的：
+    // 既解释不清用途，又因为 `builtin = 1` 受保护而改不动、删不掉。这里直接清掉——
+    // 删文件夹会把其中的笔记与子文件夹**上移到树根**（外键 `ON DELETE SET NULL`），
+    // 删标签只解关联（`note_tags` 级联），都不会丢笔记。新建的库本就没有这些行。
+    //
+    // `builtin` 列与 `repo::{note_folder,tag}` 里的内置守卫**保留但不再命中**：老库里
+    // 该列还在，留着避免做一次有风险的 `ALTER TABLE ... DROP COLUMN`（本表是外键的父表）。
+    let purged_folders = conn.execute("DELETE FROM note_folders WHERE builtin = 1", [])?;
+    if purged_folders > 0 {
+        log::info!(
+            "已清理历史遗留的内置「剪藏」文件夹 {purged_folders} 个（其中的笔记已上移到树根）"
+        );
+    }
+    let purged_tags = conn.execute("DELETE FROM tags WHERE builtin = 1", [])?;
+    if purged_tags > 0 {
+        log::info!("已清理历史遗留的内置「剪藏」标签 {purged_tags} 个");
+    }
 
     // 记录 schema 版本（仅作留痕，本库无历史补列逻辑）。
     conn.pragma_update(None, "user_version", SCHEMA_VERSION as i64)?;
@@ -207,7 +207,7 @@ mod tests {
     use rusqlite::params;
 
     #[test]
-    fn fresh_db_creates_all_tables_and_seeds_builtin() {
+    fn fresh_db_creates_all_tables_without_builtin_items() {
         let conn = init_in_memory().unwrap();
         for table in [
             "note_folders",
@@ -219,7 +219,8 @@ mod tests {
         ] {
             assert!(table_exists(&conn, table), "缺表 {table}");
         }
-        // 内置「剪藏」文件夹与标签各只有一份
+        // 全新库不再新建任何内置（builtin）文件夹 / 标签
+
         let n: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM note_folders WHERE builtin = 1",
@@ -227,13 +228,13 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 1, "内置文件夹应只有一条");
+        assert_eq!(n, 0, "不应再新建内置文件夹");
         let n: i64 = conn
             .query_row("SELECT COUNT(*) FROM tags WHERE builtin = 1", [], |r| {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(n, 1, "内置标签应只有一条");
+        assert_eq!(n, 0, "不应再新建内置标签");
     }
 
     #[test]
@@ -249,13 +250,96 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(folders, 1);
+        assert_eq!(folders, 0);
         let tags: i64 = conn
             .query_row("SELECT COUNT(*) FROM tags WHERE builtin = 1", [], |r| {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(tags, 1);
+        assert_eq!(tags, 0);
+    }
+
+    #[test]
+    fn legacy_builtin_items_are_cleaned_and_their_notes_move_to_root() {
+        // 模拟老库：内置「剪藏」文件夹（含一条笔记 + 一个子文件夹）与内置标签。
+        let conn = init_in_memory().unwrap();
+        let now = now_secs() as i64;
+        conn.execute(
+            "INSERT INTO note_folders (name, parent_id, sort_order, builtin, created_at)
+             VALUES ('剪藏', NULL, 0, 1, ?1)",
+            params![now],
+        )
+        .unwrap();
+        let builtin = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO note_folders (name, parent_id, sort_order, builtin, created_at)
+             VALUES ('子目录', ?1, 0, 0, ?2)",
+            params![builtin, now],
+        )
+        .unwrap();
+        let child = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO notes (title, content, folder_id, created_at, updated_at)
+             VALUES ('夹内笔记', '', ?1, ?2, ?2)",
+            params![builtin, now],
+        )
+        .unwrap();
+        let note_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO tags (name, builtin, created_at) VALUES ('剪藏', 1, ?1)",
+            params![now],
+        )
+        .unwrap();
+        let tag_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO note_tags (note_id, tag_id) VALUES (?1, ?2)",
+            params![note_id, tag_id],
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        // 内置项被清掉
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM note_folders WHERE builtin = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0);
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tags WHERE builtin = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(n, 0);
+        // 笔记与子文件夹都上移到树根（不丢数据）
+        let folder_id: Option<i64> = conn
+            .query_row(
+                "SELECT folder_id FROM notes WHERE id = ?1",
+                params![note_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(folder_id, None);
+        let parent_id: Option<i64> = conn
+            .query_row(
+                "SELECT parent_id FROM note_folders WHERE id = ?1",
+                params![child],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(parent_id, None);
+        // 标签关联被级联清掉
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM note_tags WHERE tag_id = ?1",
+                params![tag_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0);
     }
 
     #[test]

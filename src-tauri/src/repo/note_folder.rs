@@ -1,5 +1,5 @@
 //! 笔记文件夹树（单归属、可嵌套不限深度、删除不级联——子文件夹与笔记在同一事务内
-//! **上移一级**，绝不满门抄斩；`builtin` 的「剪藏」不可改名/删除）。
+//! **上移一级**，绝不满门抄斩；`builtin` 的内置文件夹不可改名/删除，prism3 当前不新建任何内置项）。
 //! 树由前端按 `parent_id` 组装，后端只给平铺列表。
 
 use rusqlite::{params, Connection, Result};
@@ -68,7 +68,7 @@ pub fn create(conn: &Connection, name: &str, parent_id: Option<i64>) -> Result<N
     get(conn, conn.last_insert_rowid())
 }
 
-/// 重命名。`builtin`（「剪藏」）拒绝，报错带 `FORBIDDEN_BUILTIN:` 前缀供前端识别。
+/// 重命名。`builtin` 拒绝，报错带 `FORBIDDEN_BUILTIN:` 前缀供前端识别。
 pub fn rename(conn: &Connection, id: i64, name: &str) -> Result<()> {
     ensure_not_builtin(conn, id)?;
     let affected = conn.execute(
@@ -201,7 +201,8 @@ mod tests {
         let child = create(&conn, "子目录", Some(root.id)).unwrap();
         assert_eq!(child.parent_id, Some(root.id));
         let list = list(&conn).unwrap();
-        assert!(list.iter().any(|f| f.builtin && f.name == "剪藏"));
+        // 全新库不再新建内置（builtin）文件夹
+        assert!(list.iter().all(|f| !f.builtin));
         let second = create(&conn, "项目2", None).unwrap();
         assert!(second.sort_order > root.sort_order);
     }
@@ -215,11 +216,12 @@ mod tests {
     #[test]
     fn builtin_folder_protected() {
         let conn = init_in_memory().unwrap();
-        let builtin: i64 = conn
-            .query_row("SELECT id FROM note_folders WHERE builtin = 1", [], |r| {
-                r.get(0)
-            })
-            .unwrap();
+        conn.execute(
+            "INSERT INTO note_folders (name, sort_order, builtin, created_at) VALUES ('内置', 0, 1, 0)",
+            [],
+        )
+        .unwrap();
+        let builtin = conn.last_insert_rowid();
         let err = rename(&conn, builtin, "改名").unwrap_err().to_string();
         assert!(err.contains("FORBIDDEN_BUILTIN"), "rename err: {err}");
         assert!(delete(&conn, builtin).is_err());

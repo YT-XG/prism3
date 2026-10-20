@@ -16,7 +16,7 @@ pub fn create(conn: &Connection, title: &str) -> Result<Note> {
     create_in(conn, title, "", None, "")
 }
 
-/// 一次性带 folder/source 建行：剪藏（create_in + 打标签）与新建落当前文件夹共用。
+/// 一次性带 folder/source 建行：新建落当前文件夹（或未来的剪藏等入口）共用。
 pub fn create_in(
     conn: &Connection,
     title: &str,
