@@ -44,23 +44,26 @@ export function AppShell() {
         <main className="min-w-0 flex-1 overflow-hidden">
           {activeView === "home" ? (
             <HomeDashboard />
+          ) : activeView === "notes" || activeView === "clipboard" ? (
+            // 整页数据视图（速记 / 剪贴板）：**不进 ScrollArea**——Radix 的 Viewport 内部是
+            // `display: table` 包装层，子元素的 `h-full` 撑不满视口（卡片会被内容撑成一条、
+            // 下方留一大片空白），故直接挂在有确定高度的 `main` 下，让两栏卡片铺满整屏、
+            // 由卡片内部的列表自己滚动。
+            <div
+              className={cn(
+                "mx-auto flex h-full min-h-0 w-full flex-col px-6 py-5 pb-8",
+                contentWidth,
+              )}
+            >
+              {activeView === "notes" ? <NotesPanel /> : <ClipboardPanel />}
+            </div>
           ) : (
             <ScrollArea className="h-full">
-              <div
-                className={cn(
-                  "mx-auto w-full px-6 py-5 pb-8",
-                  contentWidth,
-                  // 剪贴板 / 速记是整页数据视图：撑满视口高度，让内容自己滚动。
-                  (activeView === "clipboard" || activeView === "notes") &&
-                    "flex h-full flex-col",
-                )}
-              >
+              <div className={cn("mx-auto w-full px-6 py-5 pb-8", contentWidth)}>
                 {activeView === "search" && <SearchPanel />}
                 {activeView === "settings" && <SettingsPanel />}
                 {activeView === "monitor" && <MonitorPanel />}
                 {activeView === "bluetooth" && <BluetoothPanel />}
-                {activeView === "clipboard" && <ClipboardPanel />}
-                {activeView === "notes" && <NotesPanel />}
               </div>
             </ScrollArea>
           )}
