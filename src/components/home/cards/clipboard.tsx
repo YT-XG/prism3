@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import { ClipboardPaste, Search, Star, Type, X } from "lucide-react";
 
+import { ClipboardImagePreview } from "@/components/clipboard/clipboard-image-preview";
 import { ClipboardThumb } from "@/components/clipboard/clipboard-thumb";
 import { HomeCardHint, HomeCardLink } from "@/components/home/home-card";
 import { Input } from "@/components/ui/input";
@@ -20,6 +21,8 @@ export function ClipboardCard() {
   const setActiveView = useAppStore((state) => state.setActiveView);
 
   const [query, setQuery] = useState("");
+  /** 正在悬停预览的图片记录（缩略图太小看不清，悬停时放大）；`anchor` 是被悬停那一行的位置。 */
+  const [preview, setPreview] = useState<{ id: number; anchor: DOMRect } | null>(null);
   const enabled = config?.clipboardHistory ?? false;
   const searching = query.trim().length > 0;
 
@@ -71,6 +74,17 @@ export function ClipboardCard() {
             <li
               key={entry.id}
               className="group flex items-center gap-1 rounded-md pr-1 transition-colors hover:bg-muted/70"
+              // 悬停图片记录即放大预览（文本记录不预览）；浮层挂在 body 上，见组件内注释。
+              onMouseEnter={
+                entry.kind === "image"
+                  ? (event) =>
+                      setPreview({
+                        id: entry.id,
+                        anchor: event.currentTarget.getBoundingClientRect(),
+                      })
+                  : undefined
+              }
+              onMouseLeave={entry.kind === "image" ? () => setPreview(null) : undefined}
             >
               <button
                 type="button"
@@ -128,6 +142,8 @@ export function ClipboardCard() {
           <HomeCardLink onClick={() => setActiveView("settings")}>去设置</HomeCardLink>
         )}
       </div>
+
+      {preview && <ClipboardImagePreview id={preview.id} anchor={preview.anchor} />}
     </div>
   );
 }
