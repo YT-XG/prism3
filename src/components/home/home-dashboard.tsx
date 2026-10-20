@@ -245,9 +245,9 @@ export function HomeDashboard() {
   return (
     <div className="flex h-full min-h-0 flex-col px-6 py-5 pb-4">
       <div className="mb-3 flex shrink-0 flex-wrap items-center gap-2">
-        <div className="min-w-0">
-          <h1 className="font-heading text-base font-semibold">首页</h1>
-          <p className="text-[0.65rem] text-muted-foreground">
+        <div className="home-heading min-w-0">
+          <h1 className="home-heading-title font-heading text-base font-semibold">首页</h1>
+          <p className="home-heading-subtitle text-[0.65rem] text-muted-foreground">
             {editing
               ? "拖动卡片标题移动 · 右下角改尺寸 · 改动即时保存"
               : "常用模块一览，布局会自动保存"}

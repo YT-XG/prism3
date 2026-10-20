@@ -85,6 +85,18 @@ function WallpaperLayer() {
     };
   }, [path]);
 
+  // 壁纸真的加载出来后才把 `data-wallpaper` 挂到 <html>：
+  // CSS 用 `html[data-wallpaper]` 把「亮色实心白卡」切到半透明玻璃，
+  // 并给暗色卡片换成深色基底（亮壁纸下白字才有对比度）。读图失败时保持实心卡。
+  useEffect(() => {
+    if (!src) return;
+    const root = document.documentElement;
+    root.dataset.wallpaper = "1";
+    return () => {
+      delete root.dataset.wallpaper;
+    };
+  }, [src]);
+
   if (!src) return null;
 
   return (

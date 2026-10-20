@@ -103,7 +103,6 @@
         linear-gradient(150deg, var(--frost-base-a) 0%, var(--frost-base-b) 100%);
     --frost-edge: inset 0 1px 0 rgba(255, 255, 255, 0.7);
     --frost-border: rgba(15, 23, 42, 0.08);
-    --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.05), 0 8px 24px -18px rgba(15, 23, 42, 0.28);
 
     /* ---- shadcn 语义 token 映射到上述基线 ---- */
     --background: var(--bg-page);
@@ -156,7 +155,6 @@
     --frost-base-b: rgba(255, 255, 255, calc(0.07 * var(--glass-dim, 1)));
     --frost-edge: inset 0 1px 0 rgba(255, 255, 255, 0.10);
     --frost-border: rgba(255, 255, 255, 0.12);
-    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 14px 36px -18px rgba(0, 0, 0, 0.7);
 
     --background: var(--bg-page);
     --foreground: #f2efe8;
@@ -185,6 +183,65 @@
     --sidebar-border: rgba(255, 255, 255, 0.10);
     --sidebar-ring: var(--brand);
     --wallpaper-veil-color: #0b0c12;
+}
+
+/* ---- 有壁纸时的玻璃基线：亮色也保留半透明（无壁纸时仍是实心白卡） ----
+   亮色：白色半透明基底 + 轻染色，深色文字；不逐卡 backdrop-filter（壁纸整层已模糊）。
+   暗色：把原来的白色薄雾换成**深色**基底——亮壁纸下白字不再被"提亮"到看不清。
+   两种模式都乘 `--glass-dim`，设置页「玻璃不透明度」对亮色同样生效。 */
+html[data-wallpaper]:not(.dark) {
+    --frost-base-a: rgba(255, 255, 255, calc(0.78 * var(--glass-dim, 1)));
+    --frost-base-b: rgba(255, 255, 255, calc(0.62 * var(--glass-dim, 1)));
+    --frost-tint-a: hsl(var(--hue-a) var(--tint-sat) 72% / 0.12);
+    --frost-tint-b: hsl(var(--hue-b) var(--tint-sat) 72% / 0.09);
+    --frost-tint-c: hsl(var(--hue-c) var(--tint-sat) 72% / 0.12);
+    /* 卡片保留一层低透明白底 + frost 渐变，避免 bg-card + 渐变叠成近实心，
+       同时把小号灰字从壁纸的亮斑里"托"出来。 */
+    --card: rgba(255, 255, 255, 0.40);
+    --muted-foreground: #4a453d;
+    --sidebar: rgba(255, 255, 255, calc(0.82 * var(--glass-dim, 1)));
+    --sidebar-border: rgba(40, 35, 60, 0.14);
+    --frost-border: rgba(40, 35, 60, 0.18);
+}
+html[data-wallpaper].dark {
+    --frost-base-a: rgba(15, 17, 26, calc(0.60 * var(--glass-dim, 1)));
+    --frost-base-b: rgba(15, 17, 26, calc(0.50 * var(--glass-dim, 1)));
+    --card: transparent;
+    --muted-foreground: #c9c5bc;
+    --sidebar: rgba(8, 10, 16, calc(0.60 * var(--glass-dim, 1)));
+    --frost-border: rgba(255, 255, 255, 0.16);
+}
+
+/* 首页标题直接浮在壁纸上（没有卡片托底）：亮色加白晕、暗色加黑影，
+   否则小号灰字落在壁纸亮斑上会看不清。 */
+html[data-wallpaper] .home-heading-title,
+html[data-wallpaper] .home-heading-subtitle {
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8);
+}
+html[data-wallpaper] .home-heading-subtitle {
+    color: #3d3932;
+}
+html[data-wallpaper].dark .home-heading-title,
+html[data-wallpaper].dark .home-heading-subtitle {
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+html[data-wallpaper].dark .home-heading-subtitle {
+    color: #d8d4cb;
+}
+
+/* 侧栏去掉了底色与边框，图标/文字直接浮在壁纸上：只补一层很淡的轮廓光，
+   不重新加背景，避免又变成一条"实心菜单栏"。 */
+html[data-wallpaper] aside {
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.7);
+}
+html[data-wallpaper] aside svg {
+    filter: drop-shadow(0 1px 1px rgba(255, 255, 255, 0.55));
+}
+html[data-wallpaper].dark aside {
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+html[data-wallpaper].dark aside svg {
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.8));
 }
 
 /* ---- 10 套配色：只改色相与饱和度（个别预设额外覆盖页面基底色），其余全部派生 ---- */
@@ -241,10 +298,9 @@
 }
 
 @layer components {
-  /* 玻璃卡片：常驻表面统一用这一层（烘焙渐变 + 顶部高光 + 分层阴影） */
+  /* 玻璃卡片：常驻表面统一用这一层（烘焙渐变 + 顶部高光 + 发丝边框，不加投影） */
   .glass-card {
     background-image: var(--frost-surface);
-    box-shadow: var(--shadow-card);
     border: 1px solid var(--frost-border);
     }
   /* 瞬态表面（弹窗/下拉）才允许真模糊，一次性成本 */

@@ -40,7 +40,7 @@ export function HomeCard({
   return (
     <section
       className={cn(
-        "group/card relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl bg-card text-sm text-card-foreground shadow-[var(--shadow-card)] ring-1 ring-[color:var(--frost-border)] [background-image:var(--frost-surface)]",
+        "group/card relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl bg-card text-sm text-card-foreground ring-1 ring-[color:var(--frost-border)] [background-image:var(--frost-surface)]",
         editing && "ring-brand/35",
         dragging && "opacity-35",
       )}

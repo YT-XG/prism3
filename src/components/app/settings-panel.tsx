@@ -237,7 +237,7 @@ export function SettingsPanel() {
         <CardHeader>
           <CardTitle>壁纸与玻璃</CardTitle>
           <CardDescription>
-            选一张图片做底；毛玻璃仅暗色主题生效，亮色下卡片是实心白。
+            选一张图片做底；有壁纸时亮/暗主题都用半透明玻璃卡片，亮色保留深色文字。
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
@@ -275,7 +275,7 @@ export function SettingsPanel() {
 
           <RangeRow
             label="蒙版强度"
-            hint="压暗壁纸，保证文字对比度"
+            hint="调整壁纸与卡片的对比度（亮色蒙白 / 暗色压暗）"
             value={config.wallpaperVeil}
             min={0}
             max={90}
@@ -287,15 +287,15 @@ export function SettingsPanel() {
           <RangeRow
             label="玻璃不透明度"
             hint={
-              config.theme === "light"
-                ? "仅暗色主题生效；亮色下卡片保持实心白"
+              config.theme === "light" && !config.wallpaper
+                ? "亮色 + 无壁纸时卡片保持实心白；设置壁纸后这里控制玻璃透明度"
                 : "越低越透出背景；30% 以下文字会开始难读"
             }
             value={config.glassOpacity}
             min={30}
             max={100}
             suffix="%"
-            disabled={config.theme === "light"}
+            disabled={config.theme === "light" && !config.wallpaper}
             onCommit={(value) => void apply({ glassOpacity: value })}
           />
         </CardContent>
