@@ -1,7 +1,8 @@
 import { useState } from "react";
 
-import { ClipboardPaste, Image as ImageIcon, Search, Star, Type, X } from "lucide-react";
+import { ClipboardPaste, Search, Star, Type, X } from "lucide-react";
 
+import { ClipboardThumb } from "@/components/clipboard/clipboard-thumb";
 import { HomeCardHint, HomeCardLink } from "@/components/home/home-card";
 import { Input } from "@/components/ui/input";
 import { useClipboardList } from "@/hooks/use-clipboard-list";
@@ -78,7 +79,8 @@ export function ClipboardCard() {
                 className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-1 text-left focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
               >
                 {entry.kind === "image" ? (
-                  <ImageIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  // 图片条目直接给缩略图（懒加载 + 跨列表缓存，图片经命令回传 data URL）
+                  <ClipboardThumb id={entry.id} className="size-6" />
                 ) : (
                   <Type className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
                 )}
