@@ -21,11 +21,20 @@ interface AppState {
    * 速记页挂载后 consume 一次（`AppShell` 按视图分支渲染，速记页离开即卸载）。
    */
   pendingNoteId: number | null;
+  /**
+   * 待打开的项目运行记录：首页项目卡点「查看输出」时先落这里，
+   * 项目页挂载后 consume 一次（选中对应项目并展开控制台）。
+   */
+  pendingProjectRun: { projectId: string; runId: string | null } | null;
   setActiveView: (view: AppView) => void;
   /** 切到速记页并请求打开某条笔记。 */
   openNote: (id: number) => void;
   /** 取走待打开笔记 id（命中即清空，避免重复跳转）。 */
   consumePendingNote: () => number | null;
+  /** 切到项目页并选中某项目；给了 `runId` 就同时展开那条运行记录的控制台。 */
+  openProjectRun: (projectId: string, runId?: string | null) => void;
+  /** 取走待打开的项目运行记录（命中即清空）。 */
+  consumePendingProjectRun: () => { projectId: string; runId: string | null } | null;
   loadConfig: () => Promise<void>;
   saveConfig: (patch: Partial<AppConfig>) => Promise<void>;
   resetConfig: () => Promise<void>;
@@ -36,6 +45,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   loading: true,
   activeView: "home",
   pendingNoteId: null,
+  pendingProjectRun: null,
 
   setActiveView: (view) => set({ activeView: view }),
 
@@ -45,6 +55,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     const id = get().pendingNoteId;
     if (id != null) set({ pendingNoteId: null });
     return id;
+  },
+
+  openProjectRun: (projectId, runId = null) =>
+    set({ activeView: "projects", pendingProjectRun: { projectId, runId } }),
+
+  consumePendingProjectRun: () => {
+    const pending = get().pendingProjectRun;
+    if (pending) set({ pendingProjectRun: null });
+    return pending;
   },
 
   loadConfig: async () => {

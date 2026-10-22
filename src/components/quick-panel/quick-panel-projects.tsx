@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { FolderOpen, Play } from "lucide-react";
+import { FolderOpen, Play, Square } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { projectCommandKey, useProjectRuns } from "@/hooks/use-project-runs";
 import { ipc, type ProjectCommand, type ProjectEntry } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
@@ -23,6 +24,7 @@ type Feedback = { tone: "ok" | "error"; text: string } | null;
 export function QuickPanelProjects({ active }: QuickPanelProjectsProps) {
   const [projects, setProjects] = useState<ProjectEntry[]>([]);
   const [feedback, setFeedback] = useState<Feedback>(null);
+  const { start, stop, findRunning } = useProjectRuns();
 
   useEffect(() => {
     if (!active) {
@@ -52,24 +54,35 @@ export function QuickPanelProjects({ active }: QuickPanelProjectsProps) {
     }
   }, []);
 
-  const runCommand = useCallback(async (project: ProjectEntry, command: ProjectCommand) => {
-    try {
-      await ipc.launchProjectCommand(project.path, command.command);
-      setFeedback({
-        tone: "ok",
-        text: `已在新 cmd 窗口启动 ${project.name} · ${command.name || command.command}`,
-      });
-    } catch (cause) {
-      setFeedback({ tone: "error", text: `启动失败：${String(cause)}` });
-    }
-  }, []);
+  /** 与主窗口一致：没跑就启动，在跑就停止；这里只看状态，输出去主窗口项目页。 */
+  const runCommand = useCallback(
+    async (project: ProjectEntry, command: ProjectCommand, index: number) => {
+      const label = `${project.name} · ${command.name || command.command}`;
+      const running = findRunning(projectCommandKey(project.id, index));
+      try {
+        if (running) {
+          await stop(running.runId);
+          setFeedback({ tone: "ok", text: `已停止 ${label}` });
+        } else {
+          await start(project, command, index);
+          setFeedback({ tone: "ok", text: `已在应用内启动 ${label}` });
+        }
+      } catch (cause) {
+        setFeedback({
+          tone: "error",
+          text: `${running ? "停止" : "启动"}失败：${String(cause)}`,
+        });
+      }
+    },
+    [findRunning, start, stop],
+  );
 
   return (
     <div className="flex flex-col gap-2.5">
       <div className="flex flex-col gap-0.5">
         <h2 className="font-heading text-sm font-medium">项目</h2>
         <p className="text-xs text-muted-foreground">
-          点击命令即在新 cmd 窗口运行；目录按钮打开资源管理器。
+          点击命令即在应用内启动 / 停止（不弹命令行窗口）；输出到主窗口「项目」页查看。
         </p>
       </div>
 
@@ -98,39 +111,54 @@ export function QuickPanelProjects({ active }: QuickPanelProjectsProps) {
               <span className="truncate text-xs font-medium">{project.name}</span>
               <span
                 className="truncate text-[0.65rem] text-muted-foreground"
-                title={project.path}
+                title={project.path || undefined}
               >
-                {project.path}
+                {project.path || "按各命令目录启动"}
               </span>
               <div className="flex flex-wrap gap-1 pt-0.5">
-                <Button
-                  variant="outline"
-                  size="xs"
-                  title={`打开 ${project.path}`}
-                  onClick={() => void openFolder(project)}
-                >
-                  <FolderOpen data-icon="inline-start" />
-                  目录
-                </Button>
+                {project.path.trim() !== "" && (
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    title={`打开 ${project.path}`}
+                    onClick={() => void openFolder(project)}
+                  >
+                    <FolderOpen data-icon="inline-start" />
+                    目录
+                  </Button>
+                )}
                 {project.commands.length === 0 ? (
                   <span className="self-center text-[0.7rem] text-muted-foreground">
                     未配置启动命令
                   </span>
                 ) : (
-                  project.commands.map((command, index) => (
-                    <Button
-                      key={`${command.name}-${index}`}
-                      variant="secondary"
-                      size="xs"
-                      title={command.command}
-                      onClick={() => void runCommand(project, command)}
-                    >
-                      <Play data-icon="inline-start" />
-                      <span className="max-w-28 truncate">
-                        {command.name || command.command}
-                      </span>
-                    </Button>
-                  ))
+                  project.commands.map((command, index) => {
+                    const running = findRunning(projectCommandKey(project.id, index));
+                    return (
+                      <Button
+                        key={`${command.name}-${index}`}
+                        variant={running ? "destructive" : "secondary"}
+                        size="xs"
+                        title={
+                          running
+                            ? "停止并结束整棵进程树"
+                            : command.dir
+                              ? `${command.command}\n工作目录：${command.dir}`
+                              : command.command
+                        }
+                        onClick={() => void runCommand(project, command, index)}
+                      >
+                        {running ? (
+                          <Square data-icon="inline-start" />
+                        ) : (
+                          <Play data-icon="inline-start" />
+                        )}
+                        <span className="max-w-28 truncate">
+                          {command.name || command.command}
+                        </span>
+                      </Button>
+                    );
+                  })
                 )}
               </div>
             </div>

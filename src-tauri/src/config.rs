@@ -43,12 +43,16 @@ pub struct BleDeviceEntry {
     pub adaptive_anc: bool,
 }
 
-/// 一个项目的启动命令预设：`name` 是按钮上的短名（如 `dev`），`command` 是整条命令行。
+/// 一个项目的启动命令预设：`name` 是按钮上的短名（如 `dev`），`command` 是命令行。
+///
+/// `command` 可以有多行（每行一条，按顺序执行）；`dir` 是这条命令的工作目录，
+/// 空 = 项目目录，相对路径按项目目录解析 —— 同一项目的「前端 / 后端」因此能共用一个条目。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ProjectCommand {
     pub name: String,
     pub command: String,
+    pub dir: String,
 }
 
 /// 一个本地项目：目录 + 可一键执行的启动命令预设。
@@ -315,6 +319,7 @@ mod tests {
                 commands: vec![ProjectCommand {
                     name: "dev".into(),
                     command: "pnpm tauri dev".into(),
+                    dir: "frontend".into(),
                 }],
             }],
             ..AppConfig::default()
@@ -325,6 +330,7 @@ mod tests {
         assert_eq!(entry["path"], r"D:\file\idea\prism3-project\prism3");
         assert_eq!(entry["commands"][0]["name"], "dev");
         assert_eq!(entry["commands"][0]["command"], "pnpm tauri dev");
+        assert_eq!(entry["commands"][0]["dir"], "frontend");
 
         // 老配置里没有这个键：必须回落到空列表，而不是整份配置反序列化失败。
         let config: AppConfig =

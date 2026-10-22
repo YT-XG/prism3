@@ -2,7 +2,7 @@ import { useCallback } from "react";
 
 import { toast } from "sonner";
 
-import { ipc, type ProjectCommand, type ProjectEntry } from "@/lib/ipc";
+import { ipc, type ProjectEntry } from "@/lib/ipc";
 import { useAppStore } from "@/stores/app-store";
 
 /** 项目没有天然唯一键，id 只用于增删改定位。 */
@@ -23,16 +23,17 @@ export function normalizeProject(entry: ProjectEntry): ProjectEntry {
       .map((command) => ({
         name: command.name.trim(),
         command: command.command.trim(),
+        dir: command.dir?.trim() ?? "",
       }))
       .filter((command) => command.name !== "" || command.command !== ""),
   };
 }
 
 /**
- * 主窗口的项目列表操作与启动动作。
+ * 主窗口的项目列表操作。
  *
  * 项目列表存在 `AppConfig.projects`，整份走 `saveConfig`（与首页布局同一路径）；
- * 启动 / 打开目录是两条一次性命令，不关心进程生命周期。
+ * 命令的启动 / 停止与输出见 `use-project-runs.ts`。
  */
 export function useProjects() {
   const config = useAppStore((state) => state.config);
@@ -76,21 +77,11 @@ export function useProjects() {
     }
   }, []);
 
-  const runCommand = useCallback(async (project: ProjectEntry, command: ProjectCommand) => {
-    try {
-      await ipc.launchProjectCommand(project.path, command.command);
-      toast.success(`已在新 cmd 窗口启动 ${command.name || project.name}`);
-    } catch (cause) {
-      toast.error(`启动失败：${String(cause)}`);
-    }
-  }, []);
-
   return {
     projects,
     addProject,
     updateProject,
     removeProject,
     openFolder,
-    runCommand,
   };
 }

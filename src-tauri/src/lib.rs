@@ -153,6 +153,9 @@ pub fn run() {
             // 系统监控状态：前端在监控页按需轮询时才会真正采集。
             app.manage(monitor::MonitorState::new());
 
+            // 项目命令的运行记录：内存态，不落盘（见 projects.rs）。
+            app.manage(projects::ProjectRuns::new());
+
             // 应用运行状态：由灰条窗口按固定间隔采样系统负载驱动（见 status.rs）。
             app.manage(status::AppStatusState::new());
 
@@ -316,7 +319,12 @@ pub fn run() {
             commands::cancel_file_index,
             commands::open_search_result,
             commands::open_project_folder,
-            commands::launch_project_command,
+            commands::run_project_command,
+            commands::stop_project_command,
+            commands::get_project_runs,
+            commands::get_project_run_log,
+            commands::clear_project_run,
+            commands::clear_project_run_log,
             commands::focus_quick_panel_body,
             commands::blur_quick_panel_body,
             commands::get_ble_state,
@@ -389,7 +397,14 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app, _event| {});
+        .run(|app, event| {
+            // 应用真正退出（托盘「退出」/ 进程结束）时，把由本应用托管的项目命令
+            // 进程树一并结束，避免留下看不见的孤儿进程占着端口。
+            // 关闭主窗口只是隐藏到托盘，不会走到这里，服务继续运行。
+            if let tauri::RunEvent::Exit = event {
+                projects::stop_all(app);
+            }
+        });
 }
 
 /// 把主窗口底色同步成主题的背景色。

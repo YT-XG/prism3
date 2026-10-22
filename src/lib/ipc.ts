@@ -64,10 +64,15 @@ export interface AppConfig {
   projects: ProjectEntry[];
 }
 
-/** 一个项目的启动命令预设：短名 + 完整命令行。 */
+/** 一个项目的启动命令预设：短名 + 命令行（支持多行）+ 工作目录。 */
 export interface ProjectCommand {
   name: string;
   command: string;
+  /**
+   * 命令的工作目录：空 = 项目目录；相对路径按项目目录解析（如 `backend`）。
+   * 同一项目的前端 / 后端因此可以各配一条命令、共用一个项目条目。
+   */
+  dir: string;
 }
 
 /** 一个本地项目：目录 + 可一键执行的启动命令预设（命令可以为空 = 只打开文件夹）。 */
@@ -75,9 +80,37 @@ export interface ProjectEntry {
   /** 前端生成的定位 id（项目没有天然唯一键，路径允许重复）。 */
   id: string;
   name: string;
-  /** 项目目录绝对路径。 */
+  /**
+   * 项目目录绝对路径；可为空。
+   * 为空时「打开目录」隐藏，启动完全依赖各命令自己的 `dir`。
+   */
   path: string;
   commands: ProjectCommand[];
+}
+
+/** 一条项目命令的运行记录（与 Rust 侧 `projects::ProjectRun` 一一对应，内存态）。 */
+export interface ProjectRun {
+  runId: string;
+  /** `${projectId}:${index}`：把卡片上的按钮和运行记录对上。 */
+  key: string;
+  projectId: string;
+  projectName: string;
+  commandName: string;
+  command: string;
+  workdir: string;
+  running: boolean;
+  /** 是否由用户点了「停止」（结束文案随之不同）。 */
+  stopping: boolean;
+  exitCode: number | null;
+  startedAt: number;
+  endedAt: number | null;
+}
+
+/** 控制台里的一行输出。 */
+export interface ProjectOutputLine {
+  /** `stdout` / `stderr` / `system`（命令回显、目录、退出提示）。 */
+  stream: "stdout" | "stderr" | "system";
+  text: string;
 }
 
 /** 速记编辑器模式：实时预览 / 分屏 / 源码 / 仅预览（与 Rust 侧配置字符串一一对应）。 */
@@ -445,9 +478,33 @@ export const ipc = {
     invoke<void>("open_search_result", { path, action }),
   /** 打开一个本地项目的目录（资源管理器）。 */
   openProjectFolder: (path: string) => invoke<void>("open_project_folder", { path }),
-  /** 在新 cmd 窗口里执行一条项目启动命令（工作目录 = 项目目录）。 */
-  launchProjectCommand: (path: string, command: string) =>
-    invoke<void>("launch_project_command", { path, command }),
+  /**
+   * 在应用内启动一条项目命令（不弹控制台窗口）。
+   * 输出经 `project:output` 推送，运行状态经 `project:runs` 广播。
+   */
+  runProjectCommand: (args: {
+    key: string;
+    projectId: string;
+    projectName: string;
+    commandName: string;
+    path: string;
+    command: string;
+    dir: string;
+  }) => invoke<ProjectRun>("run_project_command", args),
+  /** 停止一条运行中的项目命令（结束整棵进程树）。 */
+  stopProjectCommand: (runId: string) =>
+    invoke<void>("stop_project_command", { runId }),
+  /** 当前所有运行记录（窗口挂载后兜底拉取）。 */
+  getProjectRuns: () => invoke<ProjectRun[]>("get_project_runs"),
+  /** 读取某条运行记录的全部输出（打开控制台时回放后端缓冲）。 */
+  getProjectRunLog: (runId: string) =>
+    invoke<ProjectOutputLine[]>("get_project_run_log", { runId }),
+  /** 删除一条已结束的运行记录。 */
+  clearProjectRun: (runId: string) =>
+    invoke<void>("clear_project_run", { runId }),
+  /** 清空某条运行记录的输出缓冲（记录本身保留）。 */
+  clearProjectRunLog: (runId: string) =>
+    invoke<void>("clear_project_run_log", { runId }),
   /** 让快捷小窗面板进入「输入聚焦」模式；返回是否真的聚焦成功。 */
   focusQuickPanelBody: () => invoke<boolean>("focus_quick_panel_body"),
   /** 退出「输入聚焦」模式并把焦点还给用户原来的应用。 */

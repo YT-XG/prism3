@@ -732,13 +732,78 @@ pub fn open_project_folder(app: AppHandle, path: String) -> AppResult<()> {
     crate::projects::open_folder(&app, &path)
 }
 
-/// 在新 cmd 窗口里执行一条项目启动命令（工作目录 = 项目目录）。
+/// 在应用内启动一条项目命令（工作目录 = `dir`，空 = 项目目录）。
 ///
-/// 不做后台驻留、不捕获输出：命令与用户自己开的 cmd 窗口完全等价。
-/// 用 `async` 属性让进程创建跑在 worker 线程（杀毒软件扫描时 `CreateProcess` 可能卡一下）。
+/// 不弹控制台窗口：输出由 `projects.rs` 捕获并经 `project:output` 事件推送，
+/// 运行状态经 `project:runs` 广播。用 `async` 属性让 `CreateProcess` 跑在 worker 线程
+/// （杀毒软件扫描时可能卡一下）。
 #[tauri::command(async)]
-pub fn launch_project_command(path: String, command: String) -> AppResult<()> {
-    crate::projects::run_command(&path, &command)
+#[allow(clippy::too_many_arguments)]
+pub fn run_project_command(
+    app: AppHandle,
+    state: State<'_, crate::projects::ProjectRuns>,
+    key: String,
+    project_id: String,
+    project_name: String,
+    command_name: String,
+    path: String,
+    command: String,
+    dir: String,
+) -> AppResult<crate::projects::ProjectRun> {
+    crate::projects::start(
+        &app,
+        &state,
+        key,
+        project_id,
+        project_name,
+        command_name,
+        &path,
+        &command,
+        &dir,
+    )
+}
+
+/// 停止一条运行中的项目命令（结束整棵进程树）。
+#[tauri::command(async)]
+pub fn stop_project_command(
+    app: AppHandle,
+    state: State<'_, crate::projects::ProjectRuns>,
+    run_id: String,
+) -> AppResult<()> {
+    crate::projects::stop(&app, &state, &run_id)
+}
+
+/// 当前所有项目命令的运行记录（窗口挂载后兜底拉取；变化经 `project:runs` 广播）。
+#[tauri::command]
+pub fn get_project_runs(
+    state: State<'_, crate::projects::ProjectRuns>,
+) -> Vec<crate::projects::ProjectRun> {
+    crate::projects::snapshot(&state)
+}
+
+/// 读取某条运行记录的全部输出（打开控制台时兜底回放；增量经 `project:output` 推送）。
+#[tauri::command]
+pub fn get_project_run_log(
+    state: State<'_, crate::projects::ProjectRuns>,
+    run_id: String,
+) -> Vec<crate::projects::OutputLine> {
+    crate::projects::log_of(&state, &run_id)
+}
+
+/// 删除一条已结束的运行记录。
+#[tauri::command]
+pub fn clear_project_run(
+    app: AppHandle,
+    state: State<'_, crate::projects::ProjectRuns>,
+    run_id: String,
+) -> AppResult<()> {
+    crate::projects::clear(&app, &state, &run_id)
+}
+
+/// 清空某条运行记录的输出缓冲（记录本身保留）。
+#[tauri::command]
+pub fn clear_project_run_log(state: State<'_, crate::projects::ProjectRuns>, run_id: String) {
+    crate::projects::clear_log(&state, &run_id);
 }
 
 /// 读取系统监控动态快照。

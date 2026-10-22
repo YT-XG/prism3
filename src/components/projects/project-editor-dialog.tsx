@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import type { ProjectCommand, ProjectEntry } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
@@ -33,37 +34,66 @@ function folderNameOf(path: string): string {
   return parts[parts.length - 1] ?? "";
 }
 
-/** 项目新增 / 编辑对话框：名称 + 目录 + 若干启动命令预设。 */
+/** 项目新增 / 编辑对话框：名称 + 可选项目目录 + 若干启动命令预设（命令可各自选目录）。 */
 export function ProjectEditorDialog({ project, onClose, onSave }: ProjectEditorDialogProps) {
   const [name, setName] = useState(project?.name ?? "");
+  // 项目根目录是**可选**的：留空时靠每条命令自己的工作目录启动；
+  // 填写后既用于「打开目录」，也是命令没单独选目录时的默认工作目录。
   const [path, setPath] = useState(project?.path ?? "");
-  const [commands, setCommands] = useState<ProjectCommand[]>(project?.commands ?? []);
+  // 老配置里没有 `dir`：补空串，避免受控输入拿到 undefined。
+  const [commands, setCommands] = useState<ProjectCommand[]>(
+    () =>
+      project?.commands.map((command) => ({ ...command, dir: command.dir ?? "" })) ?? [],
+  );
   const [saving, setSaving] = useState(false);
 
   const nameOk = name.trim() !== "";
-  const pathOk = path.trim() !== "";
   // 整行留空视为「不要这条」，保存时丢弃；只填了一半则拦下来。
   const partialCommand = commands.some(
     (command) =>
       (command.name.trim() === "") !== (command.command.trim() === ""),
   );
-  const canSave = nameOk && pathOk && !partialCommand && !saving;
+  // 没有项目根目录时，每条命令都必须自己选目录，否则启动时无处可跑。
+  const missingCommandDir =
+    path.trim() === "" &&
+    commands.some(
+      (command) =>
+        (command.name.trim() !== "" || command.command.trim() !== "") &&
+        command.dir.trim() === "",
+    );
+  const canSave = nameOk && !partialCommand && !missingCommandDir && !saving;
 
-  const pickDirectory = async () => {
+  const updateCommand = (index: number, patch: Partial<ProjectCommand>) => {
+    setCommands((current) =>
+      current.map((command, i) => (i === index ? { ...command, ...patch } : command)),
+    );
+  };
+
+  /** 选择项目根目录（可选）；新建且名称还空着时顺手用目录末段补名。 */
+  const pickProjectDirectory = async () => {
     const picked = await openDirectoryDialog({
       directory: true,
       multiple: false,
-      title: "选择项目目录",
+      title: "选择项目目录（可选）",
     });
     if (typeof picked !== "string") return;
     setPath(picked);
     if (!name.trim()) setName(folderNameOf(picked));
   };
 
-  const updateCommand = (index: number, patch: Partial<ProjectCommand>) => {
-    setCommands((current) =>
-      current.map((command, i) => (i === index ? { ...command, ...patch } : command)),
-    );
+  const pickCommandDirectory = async (index: number) => {
+    const picked = await openDirectoryDialog({
+      directory: true,
+      multiple: false,
+      title: "选择命令的工作目录",
+    });
+    if (typeof picked !== "string") return;
+    updateCommand(index, {
+      dir: picked,
+      // 命令名留空时用目录末段补一个，省得再手打「前端 / 后端」。
+      ...(commands[index]?.name.trim() === "" ? { name: folderNameOf(picked) } : {}),
+    });
+    if (!name.trim()) setName(folderNameOf(picked));
   };
 
   const handleSave = async () => {
@@ -85,7 +115,8 @@ export function ProjectEditorDialog({ project, onClose, onSave }: ProjectEditorD
         <DialogHeader>
           <DialogTitle>{project ? "编辑项目" : "添加项目"}</DialogTitle>
           <DialogDescription>
-            目录与启动命令都保存在本机配置里；启动时会新开一个 cmd 窗口。
+            命令在应用内运行，不弹命令行窗口；项目目录可选，每条命令也可以单独指定工作目录，
+            前端 / 后端可以放在同一个项目里。
           </DialogDescription>
         </DialogHeader>
 
@@ -105,22 +136,36 @@ export function ProjectEditorDialog({ project, onClose, onSave }: ProjectEditorD
           </div>
 
           <div className="grid gap-1.5">
-            <span className="text-xs font-medium text-muted-foreground">项目目录</span>
-            <div className="flex items-center gap-2">
-              <Input
-                value={path}
-                spellCheck={false}
-                placeholder="D:\work\my-project"
-                onChange={(event) => setPath(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") void handleSave();
-                }}
-              />
-              <Button type="button" variant="outline" size="sm" onClick={() => void pickDirectory()}>
-                <FolderOpen data-icon="inline-start" />
-                选择
-              </Button>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-muted-foreground">
+                项目目录（可选）
+              </span>
+              {path.trim() !== "" && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => setPath("")}
+                >
+                  清除
+                </Button>
+              )}
             </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9 w-full justify-start overflow-hidden font-mono text-xs font-normal"
+              aria-label="选择项目目录"
+              title={path || "选择项目目录（可选）"}
+              onClick={() => void pickProjectDirectory()}
+            >
+              <FolderOpen data-icon="inline-start" />
+              <span className="truncate">{path || "选择文件夹（可选）"}</span>
+            </Button>
+            <p className="text-[0.7rem] text-muted-foreground">
+              留空也可以：命令各自选目录即可。填写后会用于「打开目录」，也是命令没单独选目录时的默认工作目录。
+            </p>
           </div>
 
           <div className="grid gap-2">
@@ -132,7 +177,12 @@ export function ProjectEditorDialog({ project, onClose, onSave }: ProjectEditorD
                 type="button"
                 variant="ghost"
                 size="xs"
-                onClick={() => setCommands((current) => [...current, { name: "", command: "" }])}
+                onClick={() =>
+                  setCommands((current) => [
+                    ...current,
+                    { name: "", command: "", dir: "" },
+                  ])
+                }
               >
                 <Plus data-icon="inline-start" />
                 添加命令
@@ -141,7 +191,7 @@ export function ProjectEditorDialog({ project, onClose, onSave }: ProjectEditorD
 
             {commands.length === 0 ? (
               <p className="rounded-lg border border-dashed border-border/70 px-3 py-2 text-xs text-muted-foreground">
-                没有启动命令时只能「打开文件夹」；填一条（如 dev → pnpm dev）就能一键起服务。
+                没有启动命令时这个项目没有可执行的动作；填一条（如 前端 → pnpm dev）就能一键起服务。
               </p>
             ) : (
               <div className="flex flex-col gap-2">
@@ -149,50 +199,76 @@ export function ProjectEditorDialog({ project, onClose, onSave }: ProjectEditorD
                   <div
                     key={index}
                     className={cn(
-                      "flex items-center gap-2 rounded-lg border px-2 py-1.5",
+                      "flex flex-col gap-1.5 rounded-lg border px-2 py-1.5",
                       (command.name.trim() === "") !== (command.command.trim() === "")
                         ? "border-destructive/50 bg-destructive/5"
                         : "border-border/60 bg-muted/30",
                     )}
                   >
-                    <Input
-                      value={command.name}
-                      spellCheck={false}
-                      placeholder="dev"
-                      aria-label="命令名称"
-                      className="h-7 w-24 shrink-0 text-xs"
-                      onChange={(event) => updateCommand(index, { name: event.target.value })}
-                    />
-                    <Input
+                    <div className="flex items-center gap-2">
+                      <Input
+                        value={command.name}
+                        spellCheck={false}
+                        placeholder="前端"
+                        aria-label="命令名称"
+                        className="h-7 w-24 shrink-0 text-xs"
+                        onChange={(event) =>
+                          updateCommand(index, { name: event.target.value })
+                        }
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        className="h-7 min-w-0 flex-1 justify-start overflow-hidden font-mono text-xs font-normal"
+                        aria-label="选择命令工作目录"
+                        title={command.dir || "选择这条命令的工作目录"}
+                        onClick={() => void pickCommandDirectory(index)}
+                      >
+                        <FolderOpen data-icon="inline-start" />
+                        <span className="truncate">{command.dir || "选择目录"}</span>
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label="删除这条命令"
+                        onClick={() =>
+                          setCommands((current) => current.filter((_, i) => i !== index))
+                        }
+                      >
+                        <Trash2 />
+                      </Button>
+                    </div>
+                    <Textarea
                       value={command.command}
                       spellCheck={false}
-                      placeholder="pnpm dev"
+                      rows={2}
+                      placeholder={"pnpm dev\n也可以整段粘贴 README 里的启动命令，按行依次执行"}
                       aria-label="命令行"
-                      className="h-7 flex-1 font-mono text-xs"
-                      onChange={(event) => updateCommand(index, { command: event.target.value })}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") void handleSave();
-                      }}
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-label="删除这条命令"
-                      onClick={() =>
-                        setCommands((current) => current.filter((_, i) => i !== index))
+                      className="min-h-0 resize-y font-mono text-xs leading-relaxed"
+                      onChange={(event) =>
+                        updateCommand(index, { command: event.target.value })
                       }
-                    >
-                      <Trash2 />
-                    </Button>
+                    />
                   </div>
                 ))}
               </div>
             )}
 
+            <p className="text-[0.7rem] text-muted-foreground">
+              命令支持多行：一行一条，在同一个会话里按顺序执行；空行和 # 开头的注释会被忽略。
+            </p>
+
             {partialCommand && (
               <p className="text-xs text-destructive">
                 每条命令的「名称」和「命令」都要填；整行留空会自动忽略。
+              </p>
+            )}
+
+            {missingCommandDir && (
+              <p className="text-xs text-destructive">
+                项目没有根目录，每条命令都要先选择自己的工作目录。
               </p>
             )}
           </div>
