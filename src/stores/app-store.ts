@@ -9,24 +9,13 @@ export type AppView =
   | "search"
   | "bluetooth"
   | "clipboard"
-  | "notes";
-
-/** 侧栏收起状态：纯 UI 偏好，放 localStorage 即可（不进配置文件、不跨窗口）。 */
-const SIDEBAR_KEY = "prism3:sidebar";
-
-function readSidebarCollapsed(): boolean {
-  try {
-    return window.localStorage.getItem(SIDEBAR_KEY) === "collapsed";
-  } catch {
-    return false;
-  }
-}
+  | "notes"
+  | "projects";
 
 interface AppState {
   config: AppConfig | null;
   loading: boolean;
   activeView: AppView;
-  sidebarCollapsed: boolean;
   /**
    * 待打开的速记 id：全局搜索 / 首页卡片 / 快捷小窗「打开某条笔记」时先落这里，
    * 速记页挂载后 consume 一次（`AppShell` 按视图分支渲染，速记页离开即卸载）。
@@ -37,7 +26,6 @@ interface AppState {
   openNote: (id: number) => void;
   /** 取走待打开笔记 id（命中即清空，避免重复跳转）。 */
   consumePendingNote: () => number | null;
-  toggleSidebar: () => void;
   loadConfig: () => Promise<void>;
   saveConfig: (patch: Partial<AppConfig>) => Promise<void>;
   resetConfig: () => Promise<void>;
@@ -47,7 +35,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   config: null,
   loading: true,
   activeView: "home",
-  sidebarCollapsed: readSidebarCollapsed(),
   pendingNoteId: null,
 
   setActiveView: (view) => set({ activeView: view }),
@@ -58,16 +45,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     const id = get().pendingNoteId;
     if (id != null) set({ pendingNoteId: null });
     return id;
-  },
-
-  toggleSidebar: () => {
-    const next = !get().sidebarCollapsed;
-    set({ sidebarCollapsed: next });
-    try {
-      window.localStorage.setItem(SIDEBAR_KEY, next ? "collapsed" : "expanded");
-    } catch {
-      // 存储不可用时只是不记忆，不影响本次交互。
-    }
   },
 
   loadConfig: async () => {

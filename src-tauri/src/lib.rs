@@ -12,6 +12,7 @@ mod monitor;
 mod note_image;
 mod note_io;
 mod paste;
+mod projects;
 mod repo;
 mod status;
 mod tray;
@@ -314,6 +315,8 @@ pub fn run() {
             commands::rebuild_file_index,
             commands::cancel_file_index,
             commands::open_search_result,
+            commands::open_project_folder,
+            commands::launch_project_command,
             commands::focus_quick_panel_body,
             commands::blur_quick_panel_body,
             commands::get_ble_state,

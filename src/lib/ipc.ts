@@ -60,6 +60,24 @@ export interface AppConfig {
   noteEditorMode: NoteEditorMode;
   /** 速记回收站保留天数；`0` 表示永久保留。 */
   noteTrashRetentionDays: number;
+  /** 本地项目快捷启动列表（对应 Rust 侧 `ProjectEntry`）。 */
+  projects: ProjectEntry[];
+}
+
+/** 一个项目的启动命令预设：短名 + 完整命令行。 */
+export interface ProjectCommand {
+  name: string;
+  command: string;
+}
+
+/** 一个本地项目：目录 + 可一键执行的启动命令预设（命令可以为空 = 只打开文件夹）。 */
+export interface ProjectEntry {
+  /** 前端生成的定位 id（项目没有天然唯一键，路径允许重复）。 */
+  id: string;
+  name: string;
+  /** 项目目录绝对路径。 */
+  path: string;
+  commands: ProjectCommand[];
 }
 
 /** 速记编辑器模式：实时预览 / 分屏 / 源码 / 仅预览（与 Rust 侧配置字符串一一对应）。 */
@@ -425,6 +443,11 @@ export const ipc = {
   /** 打开 / 在资源管理器中定位一条搜索结果（由 Rust 侧 opener 执行）。 */
   openSearchResult: (path: string, action: OpenAction) =>
     invoke<void>("open_search_result", { path, action }),
+  /** 打开一个本地项目的目录（资源管理器）。 */
+  openProjectFolder: (path: string) => invoke<void>("open_project_folder", { path }),
+  /** 在新 cmd 窗口里执行一条项目启动命令（工作目录 = 项目目录）。 */
+  launchProjectCommand: (path: string, command: string) =>
+    invoke<void>("launch_project_command", { path, command }),
   /** 让快捷小窗面板进入「输入聚焦」模式；返回是否真的聚焦成功。 */
   focusQuickPanelBody: () => invoke<boolean>("focus_quick_panel_body"),
   /** 退出「输入聚焦」模式并把焦点还给用户原来的应用。 */

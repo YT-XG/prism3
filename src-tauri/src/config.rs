@@ -43,6 +43,28 @@ pub struct BleDeviceEntry {
     pub adaptive_anc: bool,
 }
 
+/// 一个项目的启动命令预设：`name` 是按钮上的短名（如 `dev`），`command` 是整条命令行。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ProjectCommand {
+    pub name: String,
+    pub command: String,
+}
+
+/// 一个本地项目：目录 + 可一键执行的启动命令预设。
+///
+/// `id` 由前端生成（与 `ble_devices` 用地址做主键不同，项目没有天然唯一键），
+/// 只用于增删改的定位；目录路径本身允许重复（同一目录的不同启动方式）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ProjectEntry {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    /// 可以为零（此时只支持「打开文件夹」）。
+    pub commands: Vec<ProjectCommand>,
+}
+
 /// 应用配置，持久化为 `%APPDATA%\<identifier>\config.json`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -98,6 +120,8 @@ pub struct AppConfig {
     pub note_editor_mode: String,
     /// 速记回收站保留天数；`0` 表示永久保留。启动后与配置变更时各清理一次。
     pub note_trash_retention_days: u32,
+    /// 本地项目快捷启动列表（见 `projects.rs`）；空 = 还没添加过项目。
+    pub projects: Vec<ProjectEntry>,
 }
 
 impl Default for AppConfig {
@@ -129,6 +153,7 @@ impl Default for AppConfig {
             home_layout: String::new(),
             note_editor_mode: "wysiwyg".to_string(),
             note_trash_retention_days: 0,
+            projects: Vec::new(),
         }
     }
 }
@@ -277,6 +302,40 @@ mod tests {
         let config: AppConfig =
             serde_json::from_str(r#"{"fileSearch":true}"#).expect("老配置应当可读");
         assert!(config.home_layout.is_empty());
+    }
+
+    #[test]
+    fn project_keys_are_camel_case_and_old_configs_stay_valid() {
+        // 前端按这些键名读写项目列表（与 `AppConfig` 的 camelCase 约定一致），改名即破坏契约。
+        let config = AppConfig {
+            projects: vec![ProjectEntry {
+                id: "p1".into(),
+                name: "Prism3".into(),
+                path: r"D:\file\idea\prism3-project\prism3".into(),
+                commands: vec![ProjectCommand {
+                    name: "dev".into(),
+                    command: "pnpm tauri dev".into(),
+                }],
+            }],
+            ..AppConfig::default()
+        };
+        let value = serde_json::to_value(&config).expect("配置应当可序列化");
+        let entry = &value["projects"][0];
+        assert_eq!(entry["id"], "p1");
+        assert_eq!(entry["path"], r"D:\file\idea\prism3-project\prism3");
+        assert_eq!(entry["commands"][0]["name"], "dev");
+        assert_eq!(entry["commands"][0]["command"], "pnpm tauri dev");
+
+        // 老配置里没有这个键：必须回落到空列表，而不是整份配置反序列化失败。
+        let config: AppConfig =
+            serde_json::from_str(r#"{"theme":"dark"}"#).expect("老配置应当可读");
+        assert!(config.projects.is_empty());
+
+        // 项目条目自身缺字段同样回落（容器级 `serde(default)`）。
+        let entry: ProjectEntry =
+            serde_json::from_str(r#"{"name":"Prism3"}"#).expect("缺省字段的项目应当可读");
+        assert_eq!(entry.path, "");
+        assert!(entry.commands.is_empty());
     }
 
     #[test]

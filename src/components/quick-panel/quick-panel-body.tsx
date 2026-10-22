@@ -5,6 +5,7 @@ import { PanelPager } from "@/components/quick-panel/panel-pager";
 import { QuickPanelBluetooth } from "@/components/quick-panel/quick-panel-bluetooth";
 import { QuickPanelClipboard } from "@/components/quick-panel/quick-panel-clipboard";
 import { QuickPanelNotes } from "@/components/quick-panel/quick-panel-notes";
+import { QuickPanelProjects } from "@/components/quick-panel/quick-panel-projects";
 import { QuickPanelSearch } from "@/components/quick-panel/quick-panel-search";
 import { useQuickPanelBody, CLIP_BY_EDGE } from "@/hooks/use-quick-panel-body";
 import {
@@ -20,6 +21,7 @@ import { cn } from "@/lib/utils";
 import {
   Bluetooth,
   ClipboardList,
+  FolderGit2,
   Gauge,
   Info,
   MousePointerClick,
@@ -36,6 +38,8 @@ const BLUETOOTH_PAGE_ID = "bluetooth";
 const CLIPBOARD_PAGE_ID = "clipboard";
 /** 速记页的页面 id（同上）。 */
 const NOTES_PAGE_ID = "notes";
+/** 项目页的页面 id（同上）。 */
+const PROJECTS_PAGE_ID = "projects";
 
 /**
  * 快捷小窗面板本体：跑在独立窗口 `quick-panel-body` 中，高度恒为 `PANEL_HEIGHT`。
@@ -78,6 +82,14 @@ export function QuickPanelBody() {
         label: "概览",
         icon: Gauge,
         content: <OverviewPage snapshot={snapshot} />,
+      },
+      {
+        id: PROJECTS_PAGE_ID,
+        label: "项目",
+        icon: FolderGit2,
+        // 一行里要放目录 + 多条命令按钮，与剪贴板页同为最大页宽。
+        panelWidth: PANEL_WIDTH_WIDE,
+        content: <QuickPanelProjects active={phase === "open" && activePageId === PROJECTS_PAGE_ID} />,
       },
       {
         id: BLUETOOTH_PAGE_ID,

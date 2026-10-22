@@ -724,6 +724,23 @@ pub fn open_search_result(
     opened.map_err(|err| AppError::Other(format!("打开失败：{err}")))
 }
 
+/// 打开一个本地项目的目录（资源管理器）。
+///
+/// 项目路径来自用户配置，走 Rust 侧 opener：前端没有任意路径的 opener 权限。
+#[tauri::command]
+pub fn open_project_folder(app: AppHandle, path: String) -> AppResult<()> {
+    crate::projects::open_folder(&app, &path)
+}
+
+/// 在新 cmd 窗口里执行一条项目启动命令（工作目录 = 项目目录）。
+///
+/// 不做后台驻留、不捕获输出：命令与用户自己开的 cmd 窗口完全等价。
+/// 用 `async` 属性让进程创建跑在 worker 线程（杀毒软件扫描时 `CreateProcess` 可能卡一下）。
+#[tauri::command(async)]
+pub fn launch_project_command(path: String, command: String) -> AppResult<()> {
+    crate::projects::run_command(&path, &command)
+}
+
 /// 读取系统监控动态快照。
 ///
 /// 用 `async` 属性让采集在 worker 线程执行；同步命令会跑在主线程并阻塞 UI。

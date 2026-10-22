@@ -6,6 +6,7 @@ import { ClipboardPanel } from "@/components/clipboard/clipboard-panel";
 import { HomeDashboard } from "@/components/home/home-dashboard";
 import { MonitorPanel } from "@/components/monitor/monitor-panel";
 import { NotesPanel } from "@/components/notes/notes-panel";
+import { ProjectsPanel } from "@/components/projects/projects-panel";
 import { SearchPanel } from "@/components/search/search-panel";
 import { cn } from "@/lib/utils";
 import { ipc } from "@/lib/ipc";
@@ -31,6 +32,7 @@ export function AppShell() {
     bluetooth: "max-w-none",
     clipboard: "max-w-none",
     notes: "max-w-none",
+    projects: "max-w-none",
   }[activeView];
 
   return (
@@ -64,6 +66,7 @@ export function AppShell() {
                 {activeView === "settings" && <SettingsPanel />}
                 {activeView === "monitor" && <MonitorPanel />}
                 {activeView === "bluetooth" && <BluetoothPanel />}
+                {activeView === "projects" && <ProjectsPanel />}
               </div>
             </ScrollArea>
           )}
