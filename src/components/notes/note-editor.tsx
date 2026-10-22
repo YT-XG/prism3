@@ -60,6 +60,8 @@ export function NoteEditor({ note, notes, revision, onOpenNote, onCreateNote }: 
   const mode = normalizeMode(config?.noteEditorMode);
 
   const noteId = note?.id ?? null;
+  /** 已经装载到本地缓冲的笔记 id（用于「切笔记」时同步换内容）。 */
+  const [loadedNoteId, setLoadedNoteId] = useState<number | null>(null);
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [iconOpen, setIconOpen] = useState(false);
@@ -92,7 +94,7 @@ export function NoteEditor({ note, notes, revision, onOpenNote, onCreateNote }: 
     timerRef.current = window.setTimeout(flush, SAVE_DEBOUNCE_MS);
   };
 
-  // 切笔记 / 卸载：先冲刷上一条未落库的内容，再装载新笔记。
+  // 切笔记 / 卸载：先冲刷上一条未落库的内容（新笔记的装载在下面渲染期完成）。
   useEffect(() => {
     return () => {
       flush();
@@ -100,13 +102,17 @@ export function NoteEditor({ note, notes, revision, onOpenNote, onCreateNote }: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [noteId]);
 
-  useEffect(() => {
+  // 切笔记：**在渲染期**装载标题 / 正文，而不是放进 effect。
+  // MilkdownEditor 的 effect 比本组件的 effect 先跑（React 是「子先父后」），
+  // 若这里用 effect 装载，正文编辑器就会拿着**上一条笔记的正文**（首次打开时是空串）
+  // 去建 Crepe 实例——表现就是「实时预览空白、源码有数据」。
+  if (loadedNoteId !== noteId) {
+    setLoadedNoteId(noteId);
     setTitle(note?.title ?? "");
     setContent(note?.content ?? "");
     setIconOpen(false);
     setTagInput("");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [noteId]);
+  }
 
   const effectiveTitle = (rawTitle: string, rawContent: string) => {
     const trimmed = rawTitle.trim();

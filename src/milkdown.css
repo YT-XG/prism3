@@ -1,21 +1,43 @@
 /*
  * Milkdown Crepe 主题的 prism3 适配层。
  *
- * 只做「变量覆盖」：把编辑区底色改透明，让编辑区直接浮在 prism3 的玻璃卡 / 壁纸上，
- * 文字颜色继承当前主题（亮色深字 / 暗色浅字），否则 frame.css 的白底会盖住玻璃卡。
+ * 两件事：
+ * 1. 变量覆盖：把编辑区底色改透明，让编辑区直接浮在 prism3 的玻璃卡 / 壁纸上；
+ *    其余 `--crepe-color-*` 全部映射到本项目的语义 token（亮暗主题自动跟随），
+ *    否则 Crepe 的亮色值会在暗色主题下整片漏出来。
+ * 2. 代码块单独收口：Crepe 代码块内部的 CodeMirror **写死了 oneDark**
+ *    （浅色字 + 深色底），块底若跟着主题走就会变成「白底浅字」，所以整块按 oneDark 家族定色。
+ *
+ * 关键（踩坑记录）：这些变量必须声明在 **`.milkdown` 自己身上**。
+ * `frame.css` 是把 `--crepe-color-*` 写在 `.milkdown` 里的，而自定义属性在
+ * 「元素自身有声明」时不会取父层继承值——只在父层 `.prism-note-editor` 上写覆盖等于没写：
+ * surface（#f7f7f7 代码块白底）、selected（#d5d5d5 选中）、hover、outline 等亮色值
+ * 会原样漏进暗色主题。改这里时保持选择器落在 `.milkdown` 上。
  *
  * 本文件在 `components/notes/milkdown-editor.tsx` 里随该模块一起 import，
  * 因此只在速记编辑器挂载时加载（懒加载 chunk），且排在 `index.css` 之后。
  */
 
-.prism-note-editor {
+.prism-note-editor .milkdown {
   --crepe-color-background: transparent;
-  --crepe-color-surface: transparent;
-  --crepe-color-surface-low: transparent;
+  /* 弹层底色：斜杠菜单 / 链接气泡 / 选择浮条 / 图片编辑区 */
+  --crepe-color-surface: var(--popover, #1c1d28);
+  --crepe-color-surface-low: var(--muted, rgba(127, 127, 127, 0.14));
   --crepe-color-on-background: currentColor;
   --crepe-color-on-surface: currentColor;
   --crepe-color-on-surface-variant: var(--muted-foreground, currentColor);
-  --crepe-color-outline: var(--border, currentColor);
+  --crepe-color-outline: var(--muted-foreground, currentColor);
+  --crepe-color-primary: var(--primary, currentColor);
+  --crepe-color-secondary: var(--secondary, rgba(127, 127, 127, 0.14));
+  --crepe-color-on-secondary: var(--secondary-foreground, currentColor);
+  --crepe-color-inverse: var(--foreground, currentColor);
+  --crepe-color-on-inverse: var(--background, currentColor);
+  --crepe-color-inline-code: var(--destructive, currentColor);
+  --crepe-color-error: var(--destructive, currentColor);
+  --crepe-color-hover: var(--accent, rgba(127, 127, 127, 0.12));
+  /* 文字选中 / 块选中 / 面板高亮：品牌色淡垫，亮暗主题下都看得见 */
+  --crepe-color-selected: color-mix(in srgb, var(--primary, #6366f1) 28%, transparent);
+  --crepe-color-inline-area: var(--muted, rgba(127, 127, 127, 0.14));
   color: inherit;
 }
 
@@ -26,12 +48,34 @@
   padding: 0;
 }
 
+/*
+ * 代码块：块内 CodeMirror 固定 oneDark（浅色字），块底必须跟着走深色，
+ * 否则亮色主题下会变成「白底浅字」。这里把块内变量整体切到 oneDark 家族，
+ * 语言选择面板 / 复制按钮等块内控件一并跟着变深，不再吃主题 token。
+ *
+ * `color` 也必须一起钉死：语言列表那些行**自己没有配色规则**，只会继承编辑器的文字颜色，
+ * 而编辑器的颜色是跟主题走的（亮色主题是近黑、暗色主题是近白）。
+ * 块底既然是深的，亮色主题下这些行就会变成「深底近黑字」——所以统一按 oneDark 的浅色走。
+ */
+.prism-note-editor .milkdown .milkdown-code-block {
+  color: #abb2bf;
+  --crepe-color-surface: #282c34;
+  --crepe-color-surface-low: #3a3f4b;
+  --crepe-color-on-surface: #abb2bf;
+  --crepe-color-on-surface-variant: #9aa3b2;
+  --crepe-color-outline: #4b5263;
+  --crepe-color-hover: #2c313a;
+  --crepe-color-selected: #3e4451;
+  --crepe-color-secondary: #3e4451;
+  --crepe-color-on-secondary: #abb2bf;
+}
+
 /* 编辑区最小高度：让空笔记也有可点击的落点。 */
 .prism-note-editor .ProseMirror {
   min-height: 12rem;
 }
 
-/* 代码块 / 表格用主题的软底，而不是 Crepe 自带的浅色块。 */
+/* 行内代码 / 代码块外的 pre 用主题的软底，而不是 Crepe 自带的浅色块。 */
 .prism-note-editor .milkdown code {
   background: var(--muted, rgba(127, 127, 127, 0.14));
   color: inherit;
