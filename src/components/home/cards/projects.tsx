@@ -80,7 +80,7 @@ export function ProjectsCard() {
                   目录
                 </Button>
               )}
-              {project.commands.slice(0, 3).map((command, index) => {
+              {project.commands.map((command, index) => {
                 const key = projectCommandKey(project.id, index);
                 const running = findRunning(key);
                 return (
