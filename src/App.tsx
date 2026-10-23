@@ -7,6 +7,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { useConfig } from "@/hooks/use-config";
 import { useUpdateNotifications } from "@/hooks/use-update";
+import { ipc } from "@/lib/ipc";
 import { useAppStore } from "@/stores/app-store";
 
 /** 快捷小窗「打开某条速记」的事件名（面板侧 `emitTo("main", ...)`）。 */
@@ -17,12 +18,15 @@ function App() {
   // 启动 3s 后的静默检查发生在设置页还没打开的时候，所以更新提示挂在全局。
   useUpdateNotifications();
 
-  // 快捷小窗速记页点条目 → 主窗口切到速记页并打开该笔记。
+  // 快捷小窗 / 组合窗口速记页点条目 → 主窗口切到速记页并打开该笔记。
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | undefined;
     void listen<number>(OPEN_NOTE_EVENT, (event) => {
-      if (active) useAppStore.getState().openNote(event.payload);
+      if (!active) return;
+      useAppStore.getState().openNote(event.payload);
+      // 主窗口可能正缩在托盘或最小化：先把它带到前台，否则用户看不到打开结果。
+      void ipc.focusMainWindow();
     }).then((off) => {
       if (active) unlisten = off;
       else off();

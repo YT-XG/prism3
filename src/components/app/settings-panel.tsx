@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 
 import { info } from "@tauri-apps/plugin-log";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -420,6 +420,29 @@ export function SettingsPanel() {
 
       <Card>
         <CardHeader>
+          <CardTitle>组合窗口</CardTitle>
+          <CardDescription>
+            用全局快捷键唤起一个透明窗口，并排显示快速搜索 / 速记 / 剪贴板 / 项目四张卡片；
+            按 Esc、点击窗口外或窗口失焦都会收起。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <Label htmlFor="hub-shortcut">唤起快捷键</Label>
+            <span className="text-xs text-muted-foreground">
+              点击输入框后按下组合键即可录制；Backspace 清除（清除后不再注册）。
+            </span>
+          </div>
+          <ShortcutRecorder
+            id="hub-shortcut"
+            value={config.hubShortcut}
+            onCommit={(next) => void apply({ hubShortcut: next })}
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>文件搜索</CardTitle>
           <CardDescription>
             为常用目录建立文件名索引，实现本机毫秒级搜索；不联网、不读取文件内容。
@@ -715,5 +738,99 @@ function RangeRow({
       />
       {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
     </div>
+  );
+}
+
+/** 录制的命名键：与 Rust 侧 `hotkey.rs` 的解析表保持一致。 */
+const NAMED_KEYS: Record<string, string> = {
+  " ": "Space",
+  Spacebar: "Space",
+  Enter: "Enter",
+  Tab: "Tab",
+  ArrowUp: "Up",
+  ArrowDown: "Down",
+  ArrowLeft: "Left",
+  ArrowRight: "Right",
+  Home: "Home",
+  End: "End",
+  PageUp: "PageUp",
+  PageDown: "PageDown",
+  Insert: "Insert",
+  Delete: "Delete",
+};
+
+function normalizeShortcutKey(key: string): string | null {
+  if (key.length === 1 && /[a-z0-9]/i.test(key)) return key.toUpperCase();
+  if (/^f\d{1,2}$/i.test(key)) return key.toUpperCase();
+  return NAMED_KEYS[key] ?? null;
+}
+
+/** 把一次按键转换成 `Ctrl+Shift+C`；只按住修饰键时返回 null（继续等待）。 */
+function shortcutFromEvent(event: KeyboardEvent<HTMLInputElement>): string | null {
+  const modifiers: string[] = [];
+  if (event.ctrlKey) modifiers.push("Ctrl");
+  if (event.altKey) modifiers.push("Alt");
+  if (event.shiftKey) modifiers.push("Shift");
+  if (event.metaKey) modifiers.push("Win");
+  // 必须带修饰键，避免注册一个单键全局快捷键把正常输入抢走。
+  if (modifiers.length === 0) return null;
+
+  const key = normalizeShortcutKey(event.key);
+  return key ? [...modifiers, key].join("+") : null;
+}
+
+/** 全局快捷键录制框：聚焦即进入录制，按 Backspace 清除（空串 = 不注册）。 */
+function ShortcutRecorder({
+  id,
+  value,
+  onCommit,
+}: {
+  id: string;
+  value: string;
+  onCommit: (next: string) => void;
+}) {
+  const [recording, setRecording] = useState(false);
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => setDraft(value), [value]);
+
+  const finish = (next: string) => {
+    setRecording(false);
+    setDraft(next);
+    if (next !== value) onCommit(next);
+  };
+
+  return (
+    <Input
+      id={id}
+      readOnly
+      value={recording ? "" : draft}
+      placeholder={recording ? "请按下组合键…" : "点击录制"}
+      onFocus={() => {
+        setRecording(true);
+        setDraft("");
+      }}
+      onBlur={() => {
+        setRecording(false);
+        setDraft(value);
+      }}
+      onKeyDown={(event) => {
+        if (!recording) return;
+        // 录制期间不执行输入框的默认行为（Tab 跳焦点 / 空格滚动等）。
+        event.preventDefault();
+        if (event.key === "Backspace") {
+          finish("");
+          return;
+        }
+        if (event.key === "Escape") {
+          setRecording(false);
+          setDraft(value);
+          return;
+        }
+        const shortcut = shortcutFromEvent(event);
+        if (shortcut) finish(shortcut);
+      }}
+      className="h-8 w-52 font-mono text-xs"
+    />
   );
 }

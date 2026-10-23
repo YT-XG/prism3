@@ -99,6 +99,9 @@ pub struct AppConfig {
     /// 快捷小窗沿吸附边缘的偏移（逻辑像素）：`left`/`right` 时为纵向 y，`top` 时为横向 x。
     /// 由面板窗口独占写入。
     pub quick_panel_y: Option<i32>,
+    /// 唤起「组合窗口」的全局快捷键（如 `Ctrl+Shift+V`）；空串表示不注册。
+    /// 由 Rust 侧 `hotkey.rs` 解析并注册，格式不支持时只记日志。
+    pub hub_shortcut: String,
     /// 是否启用本地文件搜索（自建文件名索引，见 `file_index.rs`）。
     pub file_search: bool,
     /// 文件搜索的索引根目录；为空表示使用桌面 / 文档 / 下载 / 图片四个常用目录。
@@ -145,6 +148,7 @@ impl Default for AppConfig {
             quick_panel: false,
             quick_panel_edge: DockEdge::default(),
             quick_panel_y: None,
+            hub_shortcut: "Ctrl+Shift+V".to_string(),
             file_search: false,
             file_search_roots: Vec::new(),
             ble_auto_connect: false,

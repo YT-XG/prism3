@@ -7,6 +7,8 @@ mod db;
 mod error;
 mod file_index;
 mod focus;
+mod hotkey;
+mod hub;
 mod models;
 mod monitor;
 mod note_image;
@@ -62,7 +64,7 @@ pub fn run() {
         // 主窗口什么时候显示只由本文件（`setup`）与 `tray.rs`（点托盘）决定。
         .plugin(
             tauri_plugin_window_state::Builder::default()
-                .with_denylist(&["quick-panel", "quick-panel-body"])
+                .with_denylist(&["quick-panel", "quick-panel-body", hub::HUB_LABEL])
                 .with_state_flags(
                     tauri_plugin_window_state::StateFlags::all()
                         & !tauri_plugin_window_state::StateFlags::VISIBLE,
@@ -132,6 +134,9 @@ pub fn run() {
             app.manage(config::AppState {
                 config: RwLock::new(initial_config.clone()),
             });
+
+            // 组合窗口的全局快捷键（默认 Ctrl+Shift+V）：开机自启只驻留托盘时也要能唤起。
+            hotkey::init(&handle, &initial_config.hub_shortcut);
 
             // 统一存储：速记（笔记）与剪贴板历史共用一个 SQLite 库（见 db.rs）。
             // 库与 config.json / 剪贴板图片目录同放在 app_config_dir 下。
@@ -270,6 +275,10 @@ pub fn run() {
             // 面板失去焦点即退出「输入聚焦」模式：不管是被外部夺焦（Alt+Tab）还是
             // 窗口被隐藏，都必须让窗口回到不可聚焦，否则会残留一个会抢焦点的常驻窗口。
             if let WindowEvent::Focused(false) = event {
+                // 组合窗口「失焦即收起」：它没有标题栏与关闭按钮，丢焦就是用户的收起动作。
+                if window.label() == hub::HUB_LABEL {
+                    let _ = window.hide();
+                }
                 if window.label() == "quick-panel-body" {
                     let app = window.app_handle();
                     if let Err(err) = focus::release(app) {
@@ -309,6 +318,8 @@ pub fn run() {
             commands::open_quick_panel_body,
             commands::close_quick_panel_body,
             commands::hide_quick_panel_body,
+            commands::hide_hub_window,
+            commands::focus_main_window,
             commands::get_system_snapshot,
             commands::get_system_statics,
             commands::get_app_status,

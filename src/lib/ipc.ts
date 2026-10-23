@@ -33,6 +33,8 @@ export interface AppConfig {
   quickPanelEdge: DockEdge;
   /** 快捷小窗沿吸附边缘的偏移（left/right 为纵向 y，top 为横向 x），由灰条窗口独占写入。 */
   quickPanelY: number | null;
+  /** 唤起「组合窗口」的全局快捷键（如 `Ctrl+Shift+V`）；空串表示不注册。 */
+  hubShortcut: string;
   /** 是否启用本地文件搜索（自建文件名索引）。 */
   fileSearch: boolean;
   /** 文件搜索的索引根目录；空数组表示使用桌面 / 文档 / 下载 / 图片。 */
@@ -456,6 +458,10 @@ export const ipc = {
   closeQuickPanelBody: (edge: DockEdge) => invoke<void>("close_quick_panel_body", { edge }),
   /** 直接隐藏面板窗口（动画结束回调与兜底路径）。 */
   hideQuickPanelBody: () => invoke<void>("hide_quick_panel_body"),
+  /** 收起「组合窗口」（Esc / 点击透明背景时由窗口自身调用）。 */
+  hideHub: () => invoke<void>("hide_hub_window"),
+  /** 把主窗口显示 / 取消最小化 / 聚焦到前台（从快捷小窗打开速记时用）。 */
+  focusMainWindow: () => invoke<void>("focus_main_window"),
   /** 读取当前运行状态（窗口挂载后兜底拉取；档位变化由 `app:status` 事件广播）。 */
   getAppStatus: () => invoke<AppStatus>("get_app_status"),
   /** 采样一次系统负载并返回（可能已更新的）运行状态；由灰条窗口按可见性驱动。 */

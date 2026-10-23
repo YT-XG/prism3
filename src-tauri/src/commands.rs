@@ -313,6 +313,7 @@ pub fn set_config(
         || guard.clipboard_paste_on_click != config.clipboard_paste_on_click;
     let notes_retention_changed =
         guard.note_trash_retention_days != config.note_trash_retention_days;
+    let hub_shortcut_changed = guard.hub_shortcut != config.hub_shortcut;
 
     *guard = config.clone();
     drop(guard);
@@ -336,6 +337,9 @@ pub fn set_config(
     }
     if notes_retention_changed {
         purge_expired_notes_now(&app);
+    }
+    if hub_shortcut_changed {
+        crate::hotkey::sync(&config.hub_shortcut);
     }
     // BLE 的三个键上面已经被换回权威值（这里必然「无变化」），调用它是为了让
     // 「配置改了 → 运行时跟着改」只有一条共享路径（见 `ble::sync_from_config`）。
@@ -364,6 +368,7 @@ pub fn reset_config(app: AppHandle, state: State<'_, AppState>) -> AppResult<App
     purge_expired_notes_now(&app);
     // 恢复默认是**显式**动作（不是过期副本回写）：BLE 键也要跟着回默认并停掉看门狗。
     ble::sync_from_config(&app);
+    crate::hotkey::sync(&default.hub_shortcut);
     Ok(default)
 }
 
@@ -631,6 +636,26 @@ pub fn hide_quick_panel_body(app: AppHandle) -> AppResult<()> {
     }
     quick_panel_body(&app)?.hide()?;
     Ok(())
+}
+
+/// 隐藏组合窗口（`hub`）：前端按 Esc 或点击透明背景时调用。
+#[tauri::command]
+pub fn hide_hub_window(app: AppHandle) {
+    crate::hub::hide(&app);
+}
+
+/// 把主窗口带到前台：快捷小窗 / 组合窗口点「速记」条目时，主窗口可能正缩在托盘或最小化。
+#[tauri::command]
+pub fn focus_main_window(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        if let Err(err) = window
+            .show()
+            .and_then(|_| window.unminimize())
+            .and_then(|_| window.set_focus())
+        {
+            log::warn!("唤起主窗口失败：{err}");
+        }
+    }
 }
 
 /// 让面板窗口进入「输入聚焦」模式（点击搜索框时调用）。返回是否真的聚焦成功。
