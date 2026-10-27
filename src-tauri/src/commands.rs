@@ -644,6 +644,15 @@ pub fn hide_hub_window(app: AppHandle) {
     crate::hub::hide(&app);
 }
 
+/// 读取全局快捷键的注册状态。
+///
+/// 注册是系统级的，被别的程序占用或上一次进程还没退干净都会失败（且失败后本会话
+/// 一直不生效）。设置页据此把「设了但没生效」和它的原因直接显示出来。
+#[tauri::command]
+pub fn get_hotkey_state() -> crate::hotkey::HotkeyStatus {
+    crate::hotkey::status()
+}
+
 /// 把主窗口带到前台：快捷小窗 / 组合窗口点「速记」条目时，主窗口可能正缩在托盘或最小化。
 #[tauri::command]
 pub fn focus_main_window(app: AppHandle) {

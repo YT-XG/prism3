@@ -66,6 +66,21 @@ export interface AppConfig {
   projects: ProjectEntry[];
 }
 
+/**
+ * 全局快捷键的注册状态（与 Rust 侧 `HotkeyStatus` 一一对应）。
+ *
+ * 注册是**系统级**的：被别的程序占用、或上一次进程还没退干净都会失败，且失败后
+ * 本会话一直不生效。所以设置页要把「设了到底有没有生效」直接显示出来。
+ */
+export interface HotkeyStatus {
+  /** 期望生效的组合键；空串 = 已清除，不再注册。 */
+  shortcut: string;
+  /** 是否已在系统里注册成功。 */
+  registered: boolean;
+  /** 未生效的原因（系统给出的错误）；`null` = 没出问题。 */
+  error: string | null;
+}
+
 /** 一个项目的启动命令预设：短名 + 命令行（支持多行）+ 工作目录。 */
 export interface ProjectCommand {
   name: string;
@@ -460,6 +475,8 @@ export const ipc = {
   hideQuickPanelBody: () => invoke<void>("hide_quick_panel_body"),
   /** 收起「组合窗口」（Esc / 点击透明背景时由窗口自身调用）。 */
   hideHub: () => invoke<void>("hide_hub_window"),
+  /** 读取全局快捷键的注册状态（设置页打开时拉一次；变化由 `hotkey:state` 事件广播）。 */
+  getHotkeyState: () => invoke<HotkeyStatus>("get_hotkey_state"),
   /** 把主窗口显示 / 取消最小化 / 聚焦到前台（从快捷小窗打开速记时用）。 */
   focusMainWindow: () => invoke<void>("focus_main_window"),
   /** 读取当前运行状态（窗口挂载后兜底拉取；档位变化由 `app:status` 事件广播）。 */

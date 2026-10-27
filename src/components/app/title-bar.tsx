@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { useAppVersion } from "@/hooks/use-app-version";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/stores/app-store";
 
@@ -18,6 +19,7 @@ export function TitleBar() {
   const setActiveView = useAppStore((state) => state.setActiveView);
   const theme = useAppStore((state) => state.config?.theme);
   const saveConfig = useAppStore((state) => state.saveConfig);
+  const version = useAppVersion();
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -49,8 +51,15 @@ export function TitleBar() {
       data-tauri-drag-region="deep"
       className="flex h-12 shrink-0 items-center select-none"
     >
-      <div className="w-40 shrink-0 px-3 font-heading text-xs font-semibold tracking-[0.14em] uppercase">
-        Prism3
+      <div className="flex w-40 shrink-0 items-baseline gap-1.5 px-3">
+        <span className="font-heading text-xs font-semibold tracking-[0.14em] uppercase">
+          Prism3
+        </span>
+        {version && (
+          <span className="text-[0.65rem] font-medium text-muted-foreground tabular-nums">
+            v{version}
+          </span>
+        )}
       </div>
 
       <div className="flex flex-1 items-center justify-end gap-0.5 pr-1">

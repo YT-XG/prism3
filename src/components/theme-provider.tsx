@@ -84,8 +84,19 @@ export function useTheme() {
  *
  * 同时把三项原样写进 localStorage —— 启动时配置还没异步读回来，
  * index.html 的内联脚本靠它先画出正确底色，避免暗色/换色时闪一帧。
+ *
+ * `persist = false`：只应用、不落盘。次要窗口（组合窗口 / 快捷小窗）用这个模式——
+ * 它们的配置是异步读回来的，挂载瞬间还是默认值，若照写会用自己的默认值覆盖掉
+ * 主窗口存下的偏好（同一 origin 共享 localStorage），让下次启动的引导底色选错。
  */
-export function ThemeProvider({ children }: { children: ReactNode }) {
+export function ThemeProvider({
+  children,
+  persist = true,
+}: {
+  children: ReactNode;
+  /** 是否把外观偏好写进 localStorage。仅负责人工设置外观的窗口才该写。 */
+  persist?: boolean;
+}) {
   const theme = useAppStore((state) => state.config?.theme ?? "system");
   const themePreset = useAppStore((state) => state.config?.themePreset);
   const accentColor = useAppStore((state) => state.config?.accentColor);
@@ -108,6 +119,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       root.style.setProperty("--brand", accent);
       root.style.setProperty("--glass-dim", String(glassDim));
 
+      if (!persist) return;
       try {
         window.localStorage.setItem(STORAGE.theme, theme);
         window.localStorage.setItem(STORAGE.preset, preset);
@@ -122,7 +134,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
     media.addEventListener("change", apply);
     return () => media.removeEventListener("change", apply);
-  }, [theme, themePreset, accentColor, glassOpacity]);
+  }, [theme, themePreset, accentColor, glassOpacity, persist]);
 
   return <>{children}</>;
 }

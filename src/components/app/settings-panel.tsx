@@ -1,8 +1,10 @@
 import { useEffect, useState, type KeyboardEvent } from "react";
 
+import { listen } from "@tauri-apps/api/event";
 import { info } from "@tauri-apps/plugin-log";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
+  Check,
   ClipboardList,
   Eraser,
   FileDown,
@@ -15,6 +17,7 @@ import {
   RotateCcw,
   Sun,
   Trash2,
+  TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -43,12 +46,15 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useClipboardState } from "@/hooks/use-clipboard-state";
 import { useFileIndexState } from "@/hooks/use-file-index-state";
-import { ipc, type AppConfig, type NoteEditorMode, type Theme } from "@/lib/ipc";
+import { ipc, type AppConfig, type HotkeyStatus, type NoteEditorMode, type Theme } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/stores/app-store";
 
 /** 保留天数的可填范围（0 = 永久保留）。 */
 const MAX_RETENTION_DAYS = 3650;
+
+/** 快捷键注册状态变化事件名，与 Rust 侧 `hotkey.rs` 的 `STATUS_EVENT` 一致。 */
+const HOTKEY_STATUS_EVENT = "hotkey:state";
 
 const themes: { value: Theme; label: string; icon: typeof Sun }[] = [
   { value: "system", label: "跟随系统", icon: Monitor },
@@ -422,22 +428,26 @@ export function SettingsPanel() {
         <CardHeader>
           <CardTitle>组合窗口</CardTitle>
           <CardDescription>
-            用全局快捷键唤起一个透明窗口，并排显示快速搜索 / 速记 / 剪贴板 / 项目四张卡片；
-            按 Esc、点击窗口外或窗口失焦都会收起。
+            用全局快捷键唤起一个铺满整屏的悬浮窗：整屏先压暗一层灰，上面是顶部按钮切换主视图
+            （搜索 / 速记 / 剪贴板 / 项目）+ 左侧常驻系统资源 / 时钟 / 耳机小视图；
+            按 Esc、点蒙版空白处或窗口失焦都会收起。
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex items-center justify-between gap-3">
-          <div className="flex min-w-0 flex-col gap-0.5">
-            <Label htmlFor="hub-shortcut">唤起快捷键</Label>
-            <span className="text-xs text-muted-foreground">
-              点击输入框后按下组合键即可录制；Backspace 清除（清除后不再注册）。
-            </span>
+        <CardContent className="flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <Label htmlFor="hub-shortcut">唤起快捷键</Label>
+              <span className="text-xs text-muted-foreground">
+                点击输入框后按下组合键即可录制；Backspace 清除（清除后不再注册）。
+              </span>
+            </div>
+            <ShortcutRecorder
+              id="hub-shortcut"
+              value={config.hubShortcut}
+              onCommit={(next) => void apply({ hubShortcut: next })}
+            />
           </div>
-          <ShortcutRecorder
-            id="hub-shortcut"
-            value={config.hubShortcut}
-            onCommit={(next) => void apply({ hubShortcut: next })}
-          />
+          <HotkeyStatusLine />
         </CardContent>
       </Card>
 
@@ -777,6 +787,73 @@ function shortcutFromEvent(event: KeyboardEvent<HTMLInputElement>): string | nul
 
   const key = normalizeShortcutKey(event.key);
   return key ? [...modifiers, key].join("+") : null;
+}
+
+/**
+ * 快捷键「到底有没有生效」的状态行。
+ *
+ * 全局快捷键是系统级资源：注册失败（被别的程序占用、或上一次进程还没退干净）时
+ * 本会话一直不生效，而界面以前完全没有反馈——用户只会觉得「按了没反应」。
+ * 后端注册失败后会在启动期重试几次，状态变化通过 `hotkey:state` 推过来。
+ */
+function HotkeyStatusLine() {
+  const [status, setStatus] = useState<HotkeyStatus | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+
+    void listen<HotkeyStatus>(HOTKEY_STATUS_EVENT, (event) => {
+      if (active) setStatus(event.payload);
+    })
+      .then((off) => {
+        if (active) unlisten = off;
+        else off();
+      })
+      .catch(() => {
+        // 订不到事件不影响兜底拉取，下面还会主动读一次。
+      });
+
+    // 事件不缓存：打开设置页时先拉一次当前状态。
+    void ipc
+      .getHotkeyState()
+      .then((next) => {
+        if (active) setStatus(next);
+      })
+      .catch(() => {
+        // 读不到就不显示这一行，不影响其它设置项。
+      });
+
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
+
+  if (!status) return null;
+
+  if (!status.shortcut) {
+    return <p className="text-xs text-muted-foreground">未注册全局快捷键（已清除）。</p>;
+  }
+
+  if (status.registered) {
+    return (
+      <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Check className="size-3 shrink-0 text-brand" aria-hidden />
+        {status.shortcut} 已生效
+      </p>
+    );
+  }
+
+  return (
+    <p className="flex items-start gap-1.5 text-xs text-destructive">
+      <TriangleAlert className="mt-0.5 size-3 shrink-0" aria-hidden />
+      <span>
+        {status.shortcut} 未生效：{status.error ?? "注册失败"}。
+        多半是这个组合键被别的程序占用了，换一个试试。
+      </span>
+    </p>
+  );
 }
 
 /** 全局快捷键录制框：聚焦即进入录制，按 Backspace 清除（空串 = 不注册）。 */

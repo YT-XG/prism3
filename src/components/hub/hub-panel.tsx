@@ -1,29 +1,88 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  Activity,
+  Bluetooth,
+  ClipboardList,
+  Clock,
+  FolderGit2,
+  NotebookPen,
+  Search,
+  Triangle,
+  X,
+  type LucideIcon,
+} from "lucide-react";
 
+import { ClockCard } from "@/components/home/cards/clock";
+import { MonitorCard } from "@/components/home/cards/monitor";
+import { HubEarbudsWidget } from "@/components/hub/hub-widgets";
 import { QuickPanelClipboard } from "@/components/quick-panel/quick-panel-clipboard";
 import { QuickPanelNotes } from "@/components/quick-panel/quick-panel-notes";
 import { QuickPanelProjects } from "@/components/quick-panel/quick-panel-projects";
 import { QuickPanelSearch } from "@/components/quick-panel/quick-panel-search";
+import { ThemeProvider } from "@/components/theme-provider";
+import { Button } from "@/components/ui/button";
+import { Toaster } from "@/components/ui/sonner";
+import { useAppVersion } from "@/hooks/use-app-version";
+import { useConfig } from "@/hooks/use-config";
 import { ipc } from "@/lib/ipc";
+import { cn } from "@/lib/utils";
+import { useAppStore } from "@/stores/app-store";
 
 /** 收起组合窗口（Rust 侧统一处理，避免各页各自调窗口 API）。 */
 function hideHub() {
   void ipc.hideHub();
 }
 
+/** 主视图 id：就是顶部按钮条里那排按钮，点哪个就把右边的大区域换成哪一页。 */
+type HubViewId = "search" | "notes" | "clipboard" | "projects";
+
+const HUB_VIEWS: { id: HubViewId; label: string; icon: LucideIcon }[] = [
+  { id: "search", label: "搜索", icon: Search },
+  { id: "notes", label: "速记", icon: NotebookPen },
+  { id: "clipboard", label: "剪贴板", icon: ClipboardList },
+  { id: "projects", label: "项目", icon: FolderGit2 },
+];
+
+/** 记忆当前主视图的 localStorage 键（与快捷小窗分页器同一套做法）。 */
+const VIEW_STORAGE_KEY = "prism3:hub:view";
+
+/** 读取上次停留的主视图；没写过或值已失效时回到第一页。 */
+function readStoredView(): HubViewId {
+  try {
+    const stored = window.localStorage.getItem(VIEW_STORAGE_KEY);
+    if (HUB_VIEWS.some((view) => view.id === stored)) return stored as HubViewId;
+  } catch {
+    // 隐私模式等场景下读不到，用默认页。
+  }
+  return HUB_VIEWS[0].id;
+}
+
 /**
- * 组合窗口（窗口 label = `hub`）：一个透明大窗口里并排放四张卡片，
- * 看起来像四个独立小窗，实际共用同一个 WebView。
+ * 组合窗口（窗口 label = `hub`）：铺满整屏的透明悬浮窗 + 一层变灰蒙版，
+ * 结构参照 Windows Game Bar / Win+G —— **整屏压暗，蒙版上放顶部按钮条 + 左侧小视图 + 主视图**。
  *
- * 内容直接复用快捷小窗的四页组件：它们本身只依赖 `active` / `focused`，
- * 不关心自己跑在哪个窗口。组合窗口是正常可聚焦窗口，因此 `focused` 就是
- * 真实的窗口焦点：失焦时 Rust 会隐藏窗口，这里同时把各页切回 `active=false`
- * 以停止轮询。
+ * - 变灰蒙版：根节点整屏半透明黑底（窗口本身铺满光标所在屏幕，见 `hub.rs`），
+ *   点空白处即收起——和 Win+G 一样用「整屏变灰」把注意力压到悬浮内容上；
+ * - 顶部按钮条：左侧品牌，中间四个按钮切换主视图，右侧快捷键提示与「收起」；
+ * - 左侧小视图：常驻的系统资源 / 时钟 / 耳机摘要，直接复用首页卡片的数据源；
+ * - 右侧主视图：复用快捷小窗的搜索 / 速记 / 剪贴板 / 项目四页（它们只依赖
+ *   `active` / `focused`，不关心自己跑在哪个窗口；项目页额外内嵌命令输出）。
+ *
+ * 组合窗口是正常可聚焦窗口，因此 `focused` 就是真实的窗口焦点：失焦时 Rust 会隐藏
+ * 窗口，这里同时把各页切回 `active=false` 以停止轮询。主视图四页**全部常驻挂载**、
+ * 只把非当前页 `display:none`（见 `HubMainView`），否则切页会把速记页没写完的草稿丢掉。
  */
 export function HubPanel() {
+  // 本窗口没有主题引导脚本（见 quick-panel.html），配置也是异步读回来的：
+  // 主动拉一次交给 ThemeProvider，并让它**只应用不落盘**——写 localStorage 的职责
+  // 归主窗口，否则本窗口挂载瞬间的默认值会覆盖掉主窗口存下的外观偏好。
+  useConfig();
+  const shortcut = useAppStore((state) => state.config?.hubShortcut ?? "");
+
   const [focused, setFocused] = useState(true);
+  const [view, setView] = useState<HubViewId>(readStoredView);
 
   useEffect(() => {
     let disposed = false;
@@ -53,9 +112,18 @@ export function HubPanel() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  // 四页都按「窗口有焦点」理解：组合窗口没有临时聚焦模式。
-  const pageProps = {
-    active: focused,
+  const selectView = useCallback((id: HubViewId) => {
+    setView(id);
+    try {
+      window.localStorage.setItem(VIEW_STORAGE_KEY, id);
+    } catch {
+      // 写不进去也不影响本次切换。
+    }
+  }, []);
+
+  // `active` = 窗口有焦点 **且** 当前显示的就是这一页：只有当前页该轮询 / 该发起查询。
+  const isActive = (id: HubViewId) => focused && view === id;
+  const commonProps = {
     focused,
     onRequestFocus: async () => true,
     onReleaseFocus: async () => {},
@@ -63,36 +131,188 @@ export function HubPanel() {
   };
 
   return (
-    <div
-      className="h-full w-full p-4"
-      onMouseDown={(event) => {
-        // 点透明背景 = 收起；点卡片内部的空白区域不触发。
-        if (event.target === event.currentTarget) hideHub();
-      }}
-    >
-      <div className="grid h-full min-h-0 grid-cols-4 gap-3">
-        <HubPane>
-          <QuickPanelSearch {...pageProps} />
-        </HubPane>
-        <HubPane>
-          <QuickPanelNotes {...pageProps} />
-        </HubPane>
-        <HubPane>
-          <QuickPanelClipboard {...pageProps} />
-        </HubPane>
-        <HubPane>
-          <QuickPanelProjects active={focused} />
-        </HubPane>
+    <ThemeProvider persist={false}>
+      <div
+        // 整屏变灰蒙版（参照 Win+G）：窗口本身铺满光标所在的屏幕（见 `hub.rs`），
+        // 这一层把桌面压暗，卡片再浮在蒙版上居中排布；点蒙版空白处即收起。
+        className="flex h-full w-full items-center justify-center bg-black/45 p-6 dark:bg-black/55"
+        onMouseDown={(event) => {
+          // 点蒙版 = 收起；点卡片内部的空白区域不触发。
+          if (event.target === event.currentTarget) hideHub();
+        }}
+      >
+        <div className="flex h-full max-h-[900px] w-full max-w-[1440px] min-h-0 flex-col gap-3">
+          <HubTopBar active={view} shortcut={shortcut} onSelect={selectView} />
+
+          <div className="flex min-h-0 flex-1 gap-3">
+            <aside className="flex w-64 shrink-0 flex-col gap-3 overflow-y-auto">
+              <HubSmallView icon={Activity} title="系统资源">
+                {/* 小视图常驻可见（不随主视图切换），所以按真实窗口焦点停表。 */}
+                <MonitorCard enabled={focused} />
+              </HubSmallView>
+              <HubSmallView icon={Clock} title="时钟">
+                <ClockCard />
+              </HubSmallView>
+              <HubSmallView icon={Bluetooth} title="耳机">
+                <HubEarbudsWidget />
+              </HubSmallView>
+            </aside>
+
+            <main className="min-w-0 flex-1">
+              <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border/70 bg-background shadow-xl">
+                <HubMainView visible={view === "search"} scroll>
+                  <QuickPanelSearch active={isActive("search")} {...commonProps} />
+                </HubMainView>
+                <HubMainView visible={view === "notes"} scroll>
+                  <QuickPanelNotes active={isActive("notes")} {...commonProps} />
+                </HubMainView>
+                <HubMainView visible={view === "clipboard"} scroll>
+                  <QuickPanelClipboard active={isActive("clipboard")} {...commonProps} />
+                </HubMainView>
+                {/* 项目页自己排版（列表 + 就地看输出），交给外层滚动会把控制台挤没。 */}
+                <HubMainView visible={view === "projects"} scroll={false}>
+                  <QuickPanelProjects active={isActive("projects")} withOutput />
+                </HubMainView>
+              </div>
+            </main>
+          </div>
+        </div>
       </div>
-    </div>
+      <Toaster />
+    </ThemeProvider>
   );
 }
 
-/** 单张卡片外壳：透明窗口里靠圆角与边框让它看起来是独立小窗。 */
-function HubPane({ children }: { children: ReactNode }) {
+/**
+ * 顶部按钮条：左侧品牌，中间切换主视图的按钮组，右侧快捷键提示与收起。
+ * 按钮组做成「内凹底 + 选中项浮起」的胶囊，与快捷小窗分页器的选中样式同源。
+ */
+function HubTopBar({
+  active,
+  shortcut,
+  onSelect,
+}: {
+  active: HubViewId;
+  shortcut: string;
+  onSelect: (id: HubViewId) => void;
+}) {
+  const version = useAppVersion();
+
   return (
-    <section className="flex h-full min-h-0 min-w-0 flex-col overflow-y-auto rounded-xl border border-border/70 bg-background px-3.5 py-3 text-sm">
+    <header className="flex h-11 shrink-0 items-center gap-2 rounded-xl border border-border/70 bg-background px-2.5 shadow-xl">
+      <span className="flex shrink-0 items-baseline gap-1.5 pl-1">
+        <Triangle className="size-3.5 shrink-0 self-center text-brand" strokeWidth={1.5} aria-hidden />
+        <span className="font-heading text-[0.7rem] font-semibold tracking-[0.14em] uppercase">
+          Prism3
+        </span>
+        {version && (
+          <span className="text-[0.65rem] font-medium text-muted-foreground tabular-nums">
+            v{version}
+          </span>
+        )}
+      </span>
+
+      <span className="mx-0.5 h-5 w-px shrink-0 bg-border" aria-hidden />
+
+      <nav
+        role="tablist"
+        aria-orientation="horizontal"
+        aria-label="主视图"
+        className="flex items-center gap-0.5 rounded-lg bg-muted/60 p-0.5"
+      >
+        {HUB_VIEWS.map(({ id, label, icon: Icon }) => {
+          const on = id === active;
+          return (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={on}
+              onClick={() => onSelect(id)}
+              className={cn(
+                "flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors focus-visible:outline-none",
+                on
+                  ? "bg-background text-foreground shadow-sm ring-1 ring-black/5 dark:ring-white/10"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Icon className="size-3.5 shrink-0" aria-hidden />
+              {label}
+            </button>
+          );
+        })}
+      </nav>
+
+      <div className="ml-auto flex shrink-0 items-center gap-1.5 pl-3">
+        {shortcut && (
+          <span className="rounded-md bg-muted/60 px-2 py-1 text-[0.65rem] text-muted-foreground">
+            {shortcut} 唤起 / 收起
+          </span>
+        )}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="收起"
+          title="收起（Esc）"
+          onClick={hideHub}
+        >
+          <X className="size-3.5" />
+        </Button>
+      </div>
+    </header>
+  );
+}
+
+/** 左侧小视图外壳：与主视图同一套卡片外观，标题行带图标。 */
+function HubSmallView({
+  icon: Icon,
+  title,
+  children,
+}: {
+  icon: LucideIcon;
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="flex shrink-0 flex-col gap-2 rounded-xl border border-border/70 bg-background px-3.5 py-3 text-sm shadow-xl">
+      <header className="flex items-center gap-2">
+        <Icon className="size-3.5 shrink-0 text-brand" aria-hidden />
+        <h2 className="min-w-0 truncate font-heading text-[0.8125rem] font-semibold">{title}</h2>
+      </header>
       {children}
     </section>
+  );
+}
+
+/**
+ * 主视图里的一页容器。
+ *
+ * 非当前页只 `display:none`、**不卸载**：速记页靠 `active` 由 true 变 false 落盘草稿
+ * （见 `QuickPanelNotes` 的 `flush`），卸载会让最后一次输入直接消失；同理，
+ * 搜索 / 剪贴板页的输入内容也会随卸载清空。
+ *
+ * `scroll = false` 交给页面自己排版（项目页要把控制台放在列表下方的剩余高度里，
+ * 外层再套一层滚动会把它的高度吃掉）。
+ */
+function HubMainView({
+  visible,
+  scroll = true,
+  children,
+}: {
+  visible: boolean;
+  scroll?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      aria-hidden={!visible}
+      className={cn(
+        "min-h-0 flex-1 px-3.5 py-3",
+        scroll ? "overflow-x-hidden overflow-y-auto" : "overflow-hidden",
+        !visible && "hidden",
+      )}
+    >
+      {children}
+    </div>
   );
 }

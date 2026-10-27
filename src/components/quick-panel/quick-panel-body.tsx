@@ -7,6 +7,7 @@ import { QuickPanelClipboard } from "@/components/quick-panel/quick-panel-clipbo
 import { QuickPanelNotes } from "@/components/quick-panel/quick-panel-notes";
 import { QuickPanelProjects } from "@/components/quick-panel/quick-panel-projects";
 import { QuickPanelSearch } from "@/components/quick-panel/quick-panel-search";
+import { useAppVersion } from "@/hooks/use-app-version";
 import { useQuickPanelBody, CLIP_BY_EDGE } from "@/hooks/use-quick-panel-body";
 import {
   PANEL_WIDTH,
@@ -29,7 +30,6 @@ import {
   Search,
 } from "lucide-react";
 
-const APP_VERSION = "0.3.1";
 /** 搜索页的页面 id（分页器按 id 记忆停留页，改名会丢记忆）。 */
 const SEARCH_PAGE_ID = "search";
 /** 蓝牙页的页面 id（同上：改名会丢停留页记忆）。 */
@@ -389,9 +389,14 @@ function HelpPage() {
 }
 
 function AboutPage() {
+  const version = useAppVersion();
+
   return (
     <div className="flex flex-col gap-3.5">
-      <PageHeading title="关于" hint={`Prism3 桌面脚手架 · v${APP_VERSION}`} />
+      <PageHeading
+        title="关于"
+        hint={version ? `Prism3 桌面脚手架 · v${version}` : "Prism3 桌面脚手架"}
+      />
       <p className="text-xs leading-relaxed text-muted-foreground">
         快捷小窗是屏幕边缘的常驻入口：灰条始终可见，悬停时面板从灰条旁展开、离开自动收起。
         拖动灰条即可换边；左侧图标栏直达各页，内容纵向逐页滑过，底部宫格可一键跳转并记忆停留页面。

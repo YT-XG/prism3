@@ -9,8 +9,9 @@ function percentOf(used: number, total: number): number {
 }
 
 /** 首页「系统资源」卡片：CPU / 内存 / 网络 / 首块磁盘，1s 轮询，离开首页即停。 */
-export function MonitorCard() {
-  const { snapshot } = useSystemMonitor({ trackHistory: false });
+export function MonitorCard({ enabled = true }: { enabled?: boolean } = {}) {
+  // 组合窗口里这张卡与主视图无关、常驻可见，窗口失焦（Rust 随即隐藏窗口）时必须停表。
+  const { snapshot } = useSystemMonitor({ trackHistory: false, enabled });
 
   if (!snapshot) {
     return <HomeCardHint>正在读取系统状态…</HomeCardHint>;

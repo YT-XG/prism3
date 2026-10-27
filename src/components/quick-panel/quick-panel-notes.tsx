@@ -1,16 +1,31 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+} from "react";
 
 import { emitTo } from "@tauri-apps/api/event";
-import { NotebookPen, Save } from "lucide-react";
+import { ExternalLink, NotebookPen, Save } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { useNotesRevision } from "@/hooks/use-notes-state";
 import { formatTimeAgo } from "@/lib/format";
+import { ipc } from "@/lib/ipc";
 import { deriveNoteTitle, markdownPlainText } from "@/lib/notes/markdown-text";
 import { cn } from "@/lib/utils";
 import { useNotesStore } from "@/stores/notes-store";
+
+/** 正文编辑器与主窗口同款（Milkdown Crepe）；懒加载，避免常驻面板白白拖进大 chunk。 */
+const MilkdownEditor = lazy(() =>
+  import("@/components/notes/milkdown-editor").then((module) => ({
+    default: module.MilkdownEditor,
+  })),
+);
 
 /** 主窗口监听的事件名（与 `App.tsx` 中的订阅一致）。 */
 const OPEN_NOTE_EVENT = "notes:open";
@@ -31,12 +46,11 @@ interface QuickPanelNotesProps {
 }
 
 /**
- * 快捷小窗的「速记」页 = 快记：标题 + 源码正文，输入后 600ms 防抖自动保存，
- * 下方是最近速记。点「保存」表示这一条写完了：立即落库并清空，开始下一条。
+ * 快捷小窗的「速记」页 = 快记：标题 + Markdown 正文（与主窗口同款 Milkdown 编辑器）。
+ * 正文输入 600ms 防抖自动保存；点「保存」表示这一条写完了：立即落库并清空，开始下一条。
  *
- * **不挂 Milkdown**：面板页常驻挂载且窗口宽固定（内容 474px），把富文本编辑器常驻挂进去
- * 既挤又费（见实施方案 §二）。完整编辑在主窗口速记页。
- * 只有点输入框才临时接管键盘焦点；点列表条目绝不抢焦点。
+ * 编辑器只在页面可见时挂载（懒加载 chunk），收起即卸载，草稿留在本地 state 里；
+ * 面板平时不可聚焦，只有点输入区才临时接管键盘焦点。
  */
 export function QuickPanelNotes({
   active,
@@ -54,8 +68,13 @@ export function QuickPanelNotes({
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
+  /** 编辑器重挂载代号：点「保存」清空草稿后 +1，让编辑器以空内容重建。 */
+  const [draftKey, setDraftKey] = useState(0);
+  /** 正在接着改的已有速记 id；null = 这是一条还没落库的新草稿。 */
+  const [editingId, setEditingId] = useState<number | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
   /** 自动保存建好的速记 id：第一条防抖落库后，后续输入改为更新这一条。 */
   const noteIdRef = useRef<number | null>(null);
   /** 与输入框同步的最新值：防抖回调 / 收起时的兜底保存都读这里。 */
@@ -144,8 +163,15 @@ export function QuickPanelNotes({
   const handleInputMouseDown = (event: MouseEvent<HTMLDivElement>) => {
     if (focused) return;
     event.preventDefault();
+    // 面板平时不可聚焦：先让 Rust 把窗口切成可聚焦，再把焦点交给被点的输入区。
+    const inEditor = editorRef.current?.contains(event.target as Node) ?? false;
     void onRequestFocus().then((ok) => {
-      if (ok) inputRef.current?.focus();
+      if (!ok) return;
+      if (inEditor) {
+        editorRef.current?.querySelector<HTMLElement>(".ProseMirror")?.focus();
+      } else {
+        inputRef.current?.focus();
+      }
     });
   };
 
@@ -162,15 +188,46 @@ export function QuickPanelNotes({
     contentRef.current = "";
     setTitle("");
     setContent("");
+    // 编辑器以空内容重建（它不监听 initialContent 变化）。
+    setDraftKey((value) => value + 1);
     noteIdRef.current = null;
+    setEditingId(null);
     setFeedback("已保存为速记");
     if (focused) void onReleaseFocus();
   };
 
-  const openNote = (id: number) => {
+  /**
+   * 点「最近速记」里的一条：把正文读回来填进上面的输入框，就地接着改
+   * （不再跳到主窗口——那样面板一收，用户还得再切回来）。
+   *
+   * 换一条之前先 `flush()`：否则当前草稿会连同它刚建好的 noteId 一起被覆盖掉。
+   */
+  const loadNote = async (id: number) => {
+    if (!(await flush())) return;
+    try {
+      const note = await ipc.getNote(id);
+      if (!note) {
+        setFeedback("这条速记已经不在了，列表可能还没刷新");
+        return;
+      }
+      noteIdRef.current = note.id;
+      titleRef.current = note.title;
+      contentRef.current = note.content;
+      setTitle(note.title);
+      setContent(note.content);
+      setEditingId(note.id);
+      // 编辑器不监听 `initialContent` 变化，换内容必须让它重建实例。
+      setDraftKey((value) => value + 1);
+      setFeedback(`正在接着改《${note.title || "无标题笔记"}》，改动会存回这一条`);
+    } catch (cause) {
+      setFeedback(`读取速记失败：${String(cause)}`);
+    }
+  };
+
+  /** 在主窗口打开某条速记（面板/悬浮窗收起后自己看不到它）。 */
+  const openInMainWindow = (id: number) => {
     // 切走前先把草稿落库（防抖可能还没到点）。
     void flush();
-    // 打开动作交给主窗口（面板收起后自己看不到）。
     void emitTo("main", OPEN_NOTE_EVENT, id);
     onDismiss();
   };
@@ -187,7 +244,7 @@ export function QuickPanelNotes({
         <p className="text-xs text-muted-foreground">
           {focused
             ? "输入即自动保存（600ms 防抖）· 点保存开始下一条 · Esc 退出"
-            : "点输入框开始记；点下方条目在主窗口打开"}
+            : "点输入框开始记；点下方条目把它读上来接着改（↗ 在主窗口打开）"}
         </p>
       </div>
 
@@ -212,16 +269,8 @@ export function QuickPanelNotes({
           }}
           className={cn("h-8 text-xs", !focused && "cursor-pointer")}
         />
-        <Textarea
-          value={content}
-          readOnly={!focused}
-          spellCheck={false}
-          placeholder="正文（Markdown）"
-          onChange={(event) => {
-            const next = event.target.value;
-            setContent(next);
-            scheduleAutosave(titleRef.current, next);
-          }}
+        <div
+          ref={editorRef}
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.preventDefault();
@@ -229,8 +278,34 @@ export function QuickPanelNotes({
               onDismiss();
             }
           }}
-          className={cn("h-24 resize-none font-mono text-xs", !focused && "cursor-pointer")}
-        />
+          className="flex h-48 min-h-32 resize-y flex-col overflow-hidden rounded-lg border border-input bg-transparent select-text focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 xl:h-64"
+        >
+          {active ? (
+            <Suspense
+              fallback={
+                <p className="px-2.5 py-2 text-xs text-muted-foreground">正在载入编辑器…</p>
+              }
+            >
+              <MilkdownEditor
+                key={draftKey}
+                noteId={editingId ?? 0}
+                initialContent={content}
+                editable={focused}
+                onChange={(markdown) => {
+                  setContent(markdown);
+                  scheduleAutosave(titleRef.current, markdown);
+                }}
+                // 正文里的 `[标题](note/12)` 双链：跳去主窗口打开，不要覆盖当前草稿。
+                onOpenNote={openInMainWindow}
+                notes={notes}
+              />
+            </Suspense>
+          ) : (
+            <p className="px-2.5 py-2 text-xs text-muted-foreground">
+              点击开始记，支持 Markdown（标题可留空，取正文首行）
+            </p>
+          )}
+        </div>
       </div>
 
       <div className="flex items-center justify-between gap-2">
@@ -251,11 +326,20 @@ export function QuickPanelNotes({
         ) : (
           <ul className="flex max-h-40 flex-col gap-0.5 overflow-y-auto">
             {recent.map((note) => (
-              <li key={note.id}>
+              <li
+                key={note.id}
+                className={cn(
+                  "group/note flex items-center gap-0.5 rounded-md",
+                  editingId === note.id && "bg-brand-soft",
+                )}
+              >
                 <button
                   type="button"
-                  onClick={() => openNote(note.id)}
-                  className="flex w-full flex-col rounded-md px-2 py-1 text-left hover:bg-muted/70"
+                  title="点一下把这篇读进上面的输入框接着改"
+                  // 按下不抢焦点：键盘留在输入框里，接着打字不会断。
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => void loadNote(note.id)}
+                  className="flex min-w-0 flex-1 flex-col rounded-md px-2 py-1 text-left hover:bg-muted/70"
                 >
                   <span className="flex items-center gap-1">
                     <span className="truncate text-xs font-medium">
@@ -268,6 +352,16 @@ export function QuickPanelNotes({
                   <span className="truncate text-[0.65rem] text-muted-foreground">
                     {markdownPlainText(note.content, 40) || "空白笔记"}
                   </span>
+                </button>
+                <button
+                  type="button"
+                  title="在主窗口打开"
+                  aria-label={`在主窗口打开 ${note.title || "无标题笔记"}`}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => openInMainWindow(note.id)}
+                  className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/note:opacity-100"
+                >
+                  <ExternalLink className="size-3.5" />
                 </button>
               </li>
             ))}

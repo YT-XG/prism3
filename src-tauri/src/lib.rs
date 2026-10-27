@@ -319,6 +319,7 @@ pub fn run() {
             commands::close_quick_panel_body,
             commands::hide_quick_panel_body,
             commands::hide_hub_window,
+            commands::get_hotkey_state,
             commands::focus_main_window,
             commands::get_system_snapshot,
             commands::get_system_statics,
