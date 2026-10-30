@@ -345,14 +345,61 @@ fn decode_line(raw: &[u8]) -> String {
         Some(position) => &cleaned[position + 1..],
         None => &cleaned[..],
     };
-    let text = String::from_utf8_lossy(body);
+    let text = decode_text(body);
     if text.chars().count() > MAX_LINE_CHARS {
         let mut truncated: String = text.chars().take(MAX_LINE_CHARS).collect();
         truncated.push('…');
         truncated
     } else {
-        text.into_owned()
+        text
     }
+}
+
+/// 原始字节 → 文本。
+///
+/// 子进程的编码不由我们决定：`spawn_shell` 已用 `chcp 65001` 让 cmd 自身走 UTF-8，
+/// Node / cargo 这类工具也是 UTF-8；但 **Python 在管道上按系统 ANSI 代码页输出**
+/// （中文 Windows 是 936/GBK），Java 的 `System.out` 同理——一律按 UTF-8 硬解就会变成
+/// 「」这种替换字符，也就是界面上的「中文乱码」。所以先按 UTF-8 严格解，失败再按
+/// 系统 ANSI 代码页解，两者都不行才退回有损 UTF-8（宁可显示替换字符也不丢行）。
+fn decode_text(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_string(),
+        Err(_) => {
+            decode_ansi(bytes).unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned())
+        }
+    }
+}
+
+/// 按系统 ANSI 代码页解码（中文 Windows 即 GBK / 936）。
+#[cfg(windows)]
+fn decode_ansi(bytes: &[u8]) -> Option<String> {
+    use windows::Win32::Globalization::{
+        MultiByteToWideChar, CP_ACP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS,
+    };
+
+    if bytes.is_empty() {
+        return Some(String::new());
+    }
+
+    // SAFETY: 先问所需长度；缓冲区由调用方提供且长度足够，系统只读源切片。
+    let flags = MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0);
+    let needed = unsafe { MultiByteToWideChar(CP_ACP, flags, bytes, None) };
+    if needed <= 0 {
+        return None;
+    }
+    let mut buffer = vec![0u16; needed as usize];
+    let written = unsafe { MultiByteToWideChar(CP_ACP, flags, bytes, Some(&mut buffer)) };
+    if written <= 0 {
+        return None;
+    }
+    Some(String::from_utf16_lossy(&buffer[..written as usize]))
+}
+
+/// 非 Windows 没有「系统 ANSI 代码页」这一说（本项目只发布 Windows，仅为可编译性保留）。
+#[cfg(not(windows))]
+fn decode_ansi(_bytes: &[u8]) -> Option<String> {
+    None
 }
 
 /// 逐块读取管道，按 `\n` 切行后成批广播（一块 8KB 大约就是一批，避免逐行发事件）。
@@ -742,6 +789,18 @@ mod tests {
         assert!(resolve_workdir(None, "..").is_err());
         assert!(resolve_workdir(Some(&project), "prism3-definitely-missing-subdir").is_err());
         assert!(prepare("", "echo hi", "prism3-definitely-missing-subdir").is_err());
+    }
+
+    /// 子进程按系统 ANSI 代码页（中文 Windows = GBK）输出的中文必须能读出来，
+    /// 否则界面上一整行长中文全变成 ``（见 `decode_text` 的注释）。
+    #[test]
+    fn decode_text_falls_back_to_system_ansi_codepage() {
+        // 「中文」的 GBK 字节；同一段字节不是合法 UTF-8，必然走到 ANSI 分支。
+        assert_eq!(decode_text(&[0xD6, 0xD0, 0xCE, 0xC4]), "中文");
+        // UTF-8 优先：同样的字换成 UTF-8 字节也照常读出。
+        assert_eq!(decode_text("中文".as_bytes()), "中文");
+        // 纯 ASCII 两种编码一致，不该被 ANSI 分支改坏。
+        assert_eq!(decode_text(b"uvicorn running on http://127.0.0.1:8000"), "uvicorn running on http://127.0.0.1:8000");
     }
 
     #[test]

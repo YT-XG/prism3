@@ -7,19 +7,20 @@ import {
   type MouseEvent,
 } from "react";
 
-import { MousePointerClick, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, MousePointerClick, Search } from "lucide-react";
 
 import { ClipboardEditDialog } from "@/components/clipboard/clipboard-edit-dialog";
 import { ClipboardList } from "@/components/clipboard/clipboard-list";
 import { ClipboardStatus } from "@/components/clipboard/clipboard-status";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useClipboardList, type ClipboardFeedback } from "@/hooks/use-clipboard-list";
 import type { ClipEntryMeta, ClipKindFilter } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
-/** 面板一屏展示的条数（面板高度固定，靠 ↑↓ 与滚动容器浏览）。 */
-const RESULT_LIMIT = 10;
+/** 面板一屏展示的条数（面板高度固定，靠 ↑↓ 与翻页浏览）。 */
+const DEFAULT_PAGE_SIZE = 10;
 /** 内联提示的停留时间。 */
 const FEEDBACK_MS = 4000;
 
@@ -28,6 +29,8 @@ interface QuickPanelClipboardProps {
   active: boolean;
   /** 是否已进入输入聚焦模式（窗口可聚焦并持有键盘焦点）。 */
   focused: boolean;
+  /** 每页条数。组合窗口空间大，传更大值让一屏多放几条，其余靠翻页。 */
+  pageSize?: number;
   /** 请求进入输入聚焦模式；返回是否成功。 */
   onRequestFocus: () => Promise<boolean>;
   /** 退出输入聚焦模式并把键盘焦点还给原应用。 */
@@ -52,6 +55,7 @@ interface QuickPanelClipboardProps {
 export function QuickPanelClipboard({
   active,
   focused,
+  pageSize = DEFAULT_PAGE_SIZE,
   onRequestFocus,
   onReleaseFocus,
   onDismiss,
@@ -60,15 +64,41 @@ export function QuickPanelClipboard({
   const [kind, setKind] = useState<ClipKindFilter>("all");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<ClipboardFeedback | null>(null);
+  /** 当前页码（0 起）：只取这一页，其余靠翻页，不再把整份历史塞进面板。 */
+  const [page, setPage] = useState(0);
 
-  const { entries, state, activeIndex, setActiveIndex, moveActive, paste, copy, remove, togglePin } =
-    useClipboardList({
-      enabled: active,
-      query,
-      kind,
-      limit: RESULT_LIMIT,
-      onFeedback: setFeedback,
-    });
+  const {
+    entries,
+    total,
+    state,
+    activeIndex,
+    setActiveIndex,
+    moveActive,
+    paste,
+    copy,
+    remove,
+    togglePin,
+  } = useClipboardList({
+    enabled: active,
+    query,
+    kind,
+    limit: pageSize,
+    offset: page * pageSize,
+    onFeedback: setFeedback,
+  });
+
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+
+  // 换关键词 / 换筛选就是换了一份列表，回到第一页。
+  useEffect(() => setPage(0), [query, kind]);
+  // 条目变少（删除 / 清理 / 换页后越界）时把页码夹回最后一页，避免停在空页上。
+  useEffect(() => setPage((current) => Math.min(current, pageCount - 1)), [pageCount]);
+
+  const prevPage = useCallback(() => setPage((current) => Math.max(0, current - 1)), []);
+  const nextPage = useCallback(
+    () => setPage((current) => Math.min(pageCount - 1, current + 1)),
+    [pageCount],
+  );
 
   const inputRef = useRef<HTMLInputElement>(null);
   /** 这次编辑是不是「为了让弹窗能打字」才临时接管焦点的（是则关闭时得还回去）。 */
@@ -160,6 +190,12 @@ export function QuickPanelClipboard({
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       moveActive(-1);
+    } else if (event.key === "PageDown") {
+      event.preventDefault();
+      nextPage();
+    } else if (event.key === "PageUp") {
+      event.preventDefault();
+      prevPage();
     } else if (event.key === "Enter" && current) {
       event.preventDefault();
       void handlePaste(current);
@@ -178,21 +214,22 @@ export function QuickPanelClipboard({
   };
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-col gap-0.5">
+    // 撑满宿主给的高度：列表自己滚，翻页条钉在底部，头部（标题 / 搜索 / 筛选）始终可见。
+    <div className="flex h-full min-h-0 flex-col gap-2">
+      <div className="flex shrink-0 flex-col gap-0.5">
         <h2 className="font-heading text-sm font-medium">剪贴板</h2>
         <p className="text-xs text-muted-foreground">
           {focused
             ? pasteOnClick
-              ? "↑↓ 选择 · Enter 粘贴 · Esc 收起"
-              : "↑↓ 选择 · Enter 复制 · Esc 收起"
+              ? "↑↓ 选择 · Enter 粘贴 · PgUp/PgDn 翻页 · Esc 收起"
+              : "↑↓ 选择 · Enter 复制 · PgUp/PgDn 翻页 · Esc 收起"
             : pasteOnClick
               ? "点一条记录即可粘到刚才那个窗口；点输入框可搜索"
               : "点一条记录即复制到剪贴板；点输入框可搜索"}
         </p>
       </div>
 
-      <div className="relative" onMouseDown={handleInputMouseDown}>
+      <div className="relative shrink-0" onMouseDown={handleInputMouseDown}>
         <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
         <Input
           ref={inputRef}
@@ -213,7 +250,7 @@ export function QuickPanelClipboard({
         </p>
       ) : (
         <>
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex shrink-0 items-center justify-between gap-2">
             <Tabs value={kind} onValueChange={(value) => setKind(value as ClipKindFilter)}>
               <TabsList>
                 <TabsTrigger value="all">全部</TabsTrigger>
@@ -226,14 +263,16 @@ export function QuickPanelClipboard({
             )}
           </div>
 
-          <ClipboardStatus state={state} compact />
+          <div className="shrink-0">
+            <ClipboardStatus state={state} compact />
+          </div>
 
           {feedback && (
             // 两行而不是单行截断：失败原因（尤其后端带上来的具体错误）单行会被切掉一半，
             // 只剩「粘贴失败：剪贴板错误: Unknown error while intera…」这种没法用的信息。
             <p
               className={cn(
-                "line-clamp-2 break-words text-[11px] leading-snug",
+                "line-clamp-2 shrink-0 break-words text-[11px] leading-snug",
                 feedback.tone === "error" ? "text-destructive" : "text-muted-foreground",
               )}
             >
@@ -241,24 +280,53 @@ export function QuickPanelClipboard({
             </p>
           )}
 
-          <ClipboardList
-            entries={entries}
-            activeIndex={activeIndex}
-            variant="compact"
-            onActivate={setActiveIndex}
-            onPaste={(entry) => void handlePaste(entry)}
-            onCopy={(entry) => void copy(entry.id)}
-            onEdit={(entry) => void handleEdit(entry)}
-            onDelete={(entry) => void remove(entry.id)}
-            onTogglePin={(entry) => void togglePin(entry.id, !entry.pinned)}
-            empty={
-              query.trim()
-                ? `没有匹配「${query.trim()}」的记录`
-                : kind === "image"
-                  ? "还没有记录过图片"
-                  : "还没有记录，复制点什么试试"
-            }
-          />
+          {/* 列表吃掉剩余高度：一页放不下时自己滚，不把翻页条顶出可视区。 */}
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <ClipboardList
+              entries={entries}
+              activeIndex={activeIndex}
+              variant="compact"
+              onActivate={setActiveIndex}
+              onPaste={(entry) => void handlePaste(entry)}
+              onCopy={(entry) => void copy(entry.id)}
+              onEdit={(entry) => void handleEdit(entry)}
+              onDelete={(entry) => void remove(entry.id)}
+              onTogglePin={(entry) => void togglePin(entry.id, !entry.pinned)}
+              empty={
+                query.trim()
+                  ? `没有匹配「${query.trim()}」的记录`
+                  : kind === "image"
+                    ? "还没有记录过图片"
+                    : "还没有记录，复制点什么试试"
+              }
+            />
+          </div>
+
+          <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border/60 pt-1.5">
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={page === 0}
+              title="上一页（PageUp）"
+              onClick={prevPage}
+            >
+              <ChevronLeft data-icon="inline-start" />
+              上一页
+            </Button>
+            <span className="text-[11px] text-muted-foreground tabular-nums">
+              第 {page + 1} / {pageCount} 页 · 共 {total} 条
+            </span>
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={page >= pageCount - 1}
+              title="下一页（PageDown）"
+              onClick={nextPage}
+            >
+              下一页
+              <ChevronRight data-icon="inline-end" />
+            </Button>
+          </div>
         </>
       )}
 

@@ -134,6 +134,14 @@ pub enum ClipKindFilter {
     Image,
 }
 
+/// 一页剪贴板历史：当前页的条目 + 同一筛选条件下的总条数（前端算页数用）。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipPage {
+    pub entries: Vec<ClipEntryMeta>,
+    pub total: usize,
+}
+
 impl ClipKindFilter {
     /// 解析前端传来的筛选值；无法识别一律当作「全部」。
     pub fn parse(raw: Option<&str>) -> Self {
@@ -375,22 +383,27 @@ impl ClipboardState {
     /// 查询历史元数据。空关键词返回「最近入库」的条目。
     ///
     /// **收藏的记录始终排在前面**（收藏组内仍按最近入库排序），这样收藏才真正「找得到」。
+    /// 返回当前页的条目 + 同一筛选条件下的总条数，供前端分页。
     pub fn query(
         &self,
         app: &AppHandle,
         raw_query: &str,
         kind: ClipKindFilter,
         limit: Option<usize>,
-    ) -> Vec<ClipEntryMeta> {
+        offset: Option<usize>,
+    ) -> ClipPage {
         let needle = raw_query.trim().to_lowercase();
         let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+        let offset = offset.unwrap_or(0);
         let db = app.state::<DbState>();
         let conn = db.lock();
-        clip_repo::query(&conn, &needle, kind, limit)
+        let total = clip_repo::count(&conn, &needle, kind).unwrap_or_default();
+        let entries = clip_repo::query(&conn, &needle, kind, limit, offset)
             .unwrap_or_default()
             .iter()
             .map(ClipEntryMeta::from)
-            .collect()
+            .collect();
+        ClipPage { entries, total }
     }
 
     /// 删除一条历史（图片条目连文件一起删）。

@@ -367,6 +367,13 @@ export type ClipKind = "text" | "image";
 /** 剪贴板列表的类型筛选（`all` 表示不筛）。 */
 export type ClipKindFilter = "all" | "text" | "image";
 
+/** 一页剪贴板历史（与 Rust 侧 `ClipPage` 一一对应）。 */
+export interface ClipPage {
+  entries: ClipEntryMeta[];
+  /** 同一筛选条件下的总条数（前端据此算页数）。 */
+  total: number;
+}
+
 /**
  * 与 Rust 侧 `ClipState` 一一对应：命令返回值与 `clipboard:state` 事件载荷同构。
  *
@@ -567,9 +574,9 @@ export const ipc = {
   removeBleDevice: (address: string) => invoke<void>("remove_ble_device", { address }),
   /** 读取剪贴板历史状态（窗口挂载后兜底拉取；变化由 `clipboard:state` 事件广播）。 */
   getClipboardState: () => invoke<ClipState>("get_clipboard_state"),
-  /** 查询剪贴板历史；空关键词返回「最近入库」的条目。 */
-  searchClipboard: (query: string, kind: ClipKindFilter, limit?: number) =>
-    invoke<ClipEntryMeta[]>("search_clipboard", { query, kind, limit }),
+  /** 查询剪贴板历史（一页）；空关键词返回「最近入库」的条目。 */
+  searchClipboard: (query: string, kind: ClipKindFilter, limit?: number, offset?: number) =>
+    invoke<ClipPage>("search_clipboard", { query, kind, limit, offset }),
   /** 取一条文本记录的完整正文（列表只拿预览）。 */
   getClipboardText: (id: number) => invoke<string>("get_clipboard_text", { id }),
   /** 取一条图片记录（默认缩略图），返回 data URL。 */
@@ -647,6 +654,12 @@ export const ipc = {
   /** 导入图片（base64），返回正文应插入的 URL。 */
   importNoteImage: (dataB64: string, ext: string) =>
     invoke<string>("import_note_image", { dataB64, ext }),
+  /**
+   * 把笔记正文里的一张图片写进系统剪贴板（位图），供「右键复制图片」使用：
+   * 编辑器默认复制的是 Markdown 文本，粘到别处就只是一行字。
+   * `src` 传正文里的图片地址（笔记协议 URL 或 data URL）。
+   */
+  copyNoteImage: (src: string) => invoke<void>("copy_note_image", { src }),
   /** 孤儿图片扫描 / 清理（`dryRun = true` 只报告）。 */
   gcOrphanNoteImages: (dryRun: boolean) =>
     invoke<NoteImageGcReport>("gc_orphan_note_images", { dryRun }),

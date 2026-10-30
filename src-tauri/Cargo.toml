@@ -1,6 +1,6 @@
 [package]
 name = "prism3"
-version = "0.3.2"
+version = "0.3.3"
 description = "Prism3 desktop application"
 authors = ["you"]
 edition = "2021"
@@ -69,10 +69,12 @@ semver = "1"
 # DataExchange 读剪贴板序列号/格式/数据块、开合剪贴板，Memory 锁住那块 HGLOBAL
 # （剪贴板历史自己解 CF_DIB —— arboard 只认 CF_DIBV5，见 clipboard.rs 的 capture 模块），
 # Gdi 把只有 CF_BITMAP 的图片经 GetDIBits 转成像素，Input_KeyboardAndMouse 发 Ctrl+V，
-# Threading 取当前线程 id（焦点归还时的 AttachThreadInput）。
+# Threading 取当前线程 id（焦点归还时的 AttachThreadInput），
+# Globalization 用 MultiByteToWideChar 按系统 ANSI 代码页解子进程输出（见 projects.rs）。
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "Win32_Foundation",
+    "Win32_Globalization",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",

@@ -20,8 +20,10 @@ interface UseClipboardListOptions {
   enabled: boolean;
   query: string;
   kind: ClipKindFilter;
-  /** 返回条数上限，由 Rust 侧再夹到硬上限。 */
+  /** 一页返回条数上限，由 Rust 侧再夹到硬上限。 */
   limit?: number;
+  /** 跳过前面多少条（分页用：`offset = page * limit`）。 */
+  offset?: number;
   /**
    * 反馈通道。不传就按主窗口的习惯弹 toast；快捷小窗传自己的一行内联提示——
    * **面板点一条就收起，toast 会跟着面板一起消失**，等于没提示。
@@ -41,9 +43,12 @@ export function useClipboardList({
   query,
   kind,
   limit,
+  offset = 0,
   onFeedback,
 }: UseClipboardListOptions) {
   const [entries, setEntries] = useState<ClipEntryMeta[]>([]);
+  /** 当前筛选条件下的总条数（分页算页数用）。 */
+  const [total, setTotal] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
   const [loading, setLoading] = useState(false);
 
@@ -76,10 +81,11 @@ export function useClipboardList({
 
     const timer = window.setTimeout(() => {
       void ipc
-        .searchClipboard(query, kind, limit)
-        .then((next) => {
+        .searchClipboard(query, kind, limit, offset)
+        .then((page) => {
           if (request !== requestRef.current) return;
-          setEntries(next);
+          setEntries(page.entries);
+          setTotal(page.total);
           setActiveIndex(0);
         })
         .catch((cause) => {
@@ -93,7 +99,7 @@ export function useClipboardList({
 
     return () => window.clearTimeout(timer);
     // `revision` 变化 = 历史刚被改写（采集 / 编辑 / 删除），此时重查一次拿新列表。
-  }, [enabled, query, kind, limit, revision]);
+  }, [enabled, query, kind, limit, offset, revision]);
 
   /** 上下移动选中项（循环）。 */
   const moveActive = useCallback(
@@ -171,6 +177,8 @@ export function useClipboardList({
 
   return {
     entries,
+    /** 当前筛选条件下的总条数（分页算页数用）。 */
+    total,
     loading,
     state,
     activeIndex,

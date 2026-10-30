@@ -393,6 +393,7 @@ pub fn run() {
             commands::set_note_tags,
             commands::list_note_tags,
             commands::import_note_image,
+            commands::copy_note_image,
             commands::gc_orphan_note_images,
             commands::export_notes,
             commands::import_notes,

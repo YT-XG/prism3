@@ -47,6 +47,8 @@ const HUB_VIEWS: { id: HubViewId; label: string; icon: LucideIcon }[] = [
 
 /** 记忆当前主视图的 localStorage 键（与快捷小窗分页器同一套做法）。 */
 const VIEW_STORAGE_KEY = "prism3:hub:view";
+/** 组合窗口里剪贴板一页放多少条：主视图比右缘面板高得多，一屏能放二十来条。 */
+const CLIPBOARD_PAGE_SIZE = 20;
 
 /** 读取上次停留的主视图；没写过或值已失效时回到第一页。 */
 function readStoredView(): HubViewId {
@@ -134,11 +136,14 @@ export function HubPanel() {
     <ThemeProvider persist={false}>
       <div
         // 整屏变灰蒙版（参照 Win+G）：窗口本身铺满光标所在的屏幕（见 `hub.rs`），
-        // 这一层把桌面压暗，卡片再浮在蒙版上居中排布；点蒙版空白处即收起。
+        // 这一层把桌面压暗，卡片再浮在蒙版上居中排布。
         className="flex h-full w-full items-center justify-center bg-black/45 p-6 dark:bg-black/55"
         onMouseDown={(event) => {
-          // 点蒙版 = 收起；点卡片内部的空白区域不触发。
-          if (event.target === event.currentTarget) hideHub();
+          // 点**任何一张卡片之外**的地方都收起：整屏蒙版、卡片之间的空隙，以及左侧小视图
+          // 下方那片空白（它露出的就是蒙版，视觉上等同空白）。只判断 `event.target ===
+          // currentTarget` 不够——那些空白处命中的是中间的布局容器，点下去毫无反应。
+          const target = event.target as Element | null;
+          if (!target?.closest("[data-hub-surface]")) hideHub();
         }}
       >
         <div className="flex h-full max-h-[900px] w-full max-w-[1440px] min-h-0 flex-col gap-3">
@@ -159,15 +164,23 @@ export function HubPanel() {
             </aside>
 
             <main className="min-w-0 flex-1">
-              <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border/70 bg-background shadow-xl">
+              <div
+                data-hub-surface=""
+                className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border/70 bg-background shadow-xl"
+              >
                 <HubMainView visible={view === "search"} scroll>
                   <QuickPanelSearch active={isActive("search")} {...commonProps} />
                 </HubMainView>
                 <HubMainView visible={view === "notes"} scroll>
                   <QuickPanelNotes active={isActive("notes")} {...commonProps} />
                 </HubMainView>
-                <HubMainView visible={view === "clipboard"} scroll>
-                  <QuickPanelClipboard active={isActive("clipboard")} {...commonProps} />
+                {/* 剪贴板页自己滚列表（翻页条要钉在底部），不让外层再套一层滚动。 */}
+                <HubMainView visible={view === "clipboard"} scroll={false}>
+                  <QuickPanelClipboard
+                    active={isActive("clipboard")}
+                    pageSize={CLIPBOARD_PAGE_SIZE}
+                    {...commonProps}
+                  />
                 </HubMainView>
                 {/* 项目页自己排版（列表 + 就地看输出），交给外层滚动会把控制台挤没。 */}
                 <HubMainView visible={view === "projects"} scroll={false}>
@@ -199,7 +212,10 @@ function HubTopBar({
   const version = useAppVersion();
 
   return (
-    <header className="flex h-11 shrink-0 items-center gap-2 rounded-xl border border-border/70 bg-background px-2.5 shadow-xl">
+    <header
+      data-hub-surface=""
+      className="flex h-11 shrink-0 items-center gap-2 rounded-xl border border-border/70 bg-background px-2.5 shadow-xl"
+    >
       <span className="flex shrink-0 items-baseline gap-1.5 pl-1">
         <Triangle className="size-3.5 shrink-0 self-center text-brand" strokeWidth={1.5} aria-hidden />
         <span className="font-heading text-[0.7rem] font-semibold tracking-[0.14em] uppercase">
@@ -274,7 +290,10 @@ function HubSmallView({
   children: ReactNode;
 }) {
   return (
-    <section className="flex shrink-0 flex-col gap-2 rounded-xl border border-border/70 bg-background px-3.5 py-3 text-sm shadow-xl">
+    <section
+      data-hub-surface=""
+      className="flex shrink-0 flex-col gap-2 rounded-xl border border-border/70 bg-background px-3.5 py-3 text-sm shadow-xl"
+    >
       <header className="flex items-center gap-2">
         <Icon className="size-3.5 shrink-0 text-brand" aria-hidden />
         <h2 className="min-w-0 truncate font-heading text-[0.8125rem] font-semibold">{title}</h2>

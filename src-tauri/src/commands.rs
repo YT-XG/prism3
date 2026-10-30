@@ -8,7 +8,7 @@ use crate::ble::{
     self, AncGradient, BatteryReading, BleCandidate, BleState, BleStateSnapshot, EqPreset,
     NoiseMode,
 };
-use crate::clipboard::{self, ClipEntryMeta, ClipKindFilter, ClipState, ClipboardState};
+use crate::clipboard::{self, ClipKindFilter, ClipState, ClipboardState};
 use crate::config::{AppConfig, AppState, DockEdge};
 use crate::db::DbState;
 use crate::error::{AppError, AppResult};
@@ -1003,8 +1003,9 @@ pub fn get_clipboard_state(app: AppHandle, state: State<'_, ClipboardState>) -> 
     state.snapshot(&app)
 }
 
-/// 查询剪贴板历史。空关键词返回「最近入库」的条目。
+/// 查询剪贴板历史（一页）。空关键词返回「最近入库」的条目。
 ///
+/// `offset` 与 `limit` 一起分页：返回值里带 `total`，前端据此画「第 x / y 页」。
 /// 走 worker 线程（`async`）：历史虽小，但图片条目多时线性扫描 + 预览拼接也不该压在主线程上。
 #[tauri::command(async)]
 pub fn search_clipboard(
@@ -1013,8 +1014,15 @@ pub fn search_clipboard(
     query: String,
     kind: Option<String>,
     limit: Option<usize>,
-) -> Vec<ClipEntryMeta> {
-    state.query(&app, &query, ClipKindFilter::parse(kind.as_deref()), limit)
+    offset: Option<usize>,
+) -> clipboard::ClipPage {
+    state.query(
+        &app,
+        &query,
+        ClipKindFilter::parse(kind.as_deref()),
+        limit,
+        offset,
+    )
 }
 
 /// 取一条文本记录的完整正文（列表只拿预览，编辑 / 展开时才按需拉全文）。
@@ -1469,6 +1477,63 @@ pub fn import_note_image(app: AppHandle, data_b64: String, ext: String) -> AppRe
         .decode(data_b64.trim())
         .map_err(|err| AppError::Other(format!("图片解码失败：{err}")))?;
     note_image::save(&app, &bytes, &ext)
+}
+
+/// 把一张笔记图片写进系统剪贴板（速记里右键「复制」图片时前端调用）。
+///
+/// 编辑器默认把图片节点序列化成 Markdown 文本（`![alt](http://prism3-note.localhost/<name>)`），
+/// 粘到微信 / 文档里就只是一行字；这里改成写真正的位图，粘到别处就是图片。
+/// 写入复用剪贴板历史那条已验证过的链路（`paste::copy`，`arboard` 的 set_image 在
+/// 真机上会失败，见 `paste.rs`）。
+///
+/// `src` 是正文里的图片地址，只接受笔记协议 URL（文件名必须是 16 位哈希 + 白名单扩展，
+/// 与协议处理器同一套校验，杜绝路径穿越）与内联 `data:image/...;base64,` 两种。
+#[tauri::command(async)]
+pub fn copy_note_image(app: AppHandle, src: String) -> AppResult<()> {
+    let bytes = read_note_image_bytes(&app, &src)?;
+    let rgba = image::load_from_memory(&bytes)
+        .map_err(|err| AppError::Other(format!("解码图片失败：{err}")))?
+        .to_rgba8();
+    let (width, height) = rgba.dimensions();
+    paste::copy(&paste::PasteContent::Image {
+        width,
+        height,
+        rgba: rgba.into_raw(),
+    })?;
+    Ok(())
+}
+
+/// 按正文里的图片地址取回图片字节。
+///
+/// 只认两种来源：`src` 是笔记协议 URL 时直接读本地文件（原样字节，不重新编码）；
+/// 是内联 `data:image/...;base64,` 时解 base64。外链图片读不到像素（画布会被跨源
+/// 污染），直接报错让用户先下载。
+fn read_note_image_bytes(app: &AppHandle, src: &str) -> AppResult<Vec<u8>> {
+    let src = src.trim();
+
+    if let Some(rest) = src.strip_prefix(note_image::NOTE_URL_PREFIX) {
+        let name = rest.split(['?', '#']).next().unwrap_or("");
+        if !note_image::valid_note_image_name(name) {
+            return Err(AppError::Other("不是可识别的笔记图片".into()));
+        }
+        let path = note_image::image_dir(app)?.join(name);
+        return Ok(std::fs::read(path)?);
+    }
+
+    if let Some(rest) = src.strip_prefix("data:image/") {
+        use base64::Engine;
+        let data = rest
+            .split_once("base64,")
+            .map(|(_, data)| data.trim())
+            .ok_or_else(|| AppError::Other("无法解析图片 data URL".into()))?;
+        return base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|err| AppError::Other(format!("图片解码失败：{err}")));
+    }
+
+    Err(AppError::Other(
+        "只支持复制笔记内的图片；外链图片请先下载到本地".into(),
+    ))
 }
 
 /// 孤儿图片扫描 / 清理（`dry_run = true` 只报告；`false` 真删）。

@@ -133,13 +133,9 @@ pub fn all(conn: &Connection) -> Result<Vec<ClipEntry>> {
     rows.collect()
 }
 
-/// 查询历史（**收藏置顶**，组内按最近入库；空关键词返回最近条目）。
-pub fn query(
-    conn: &Connection,
-    needle: &str,
-    kind: ClipKindFilter,
-    limit: usize,
-) -> Result<Vec<ClipEntry>> {
+/// 关键词 + 类型筛选拼成的 WHERE 片段，以及转义后的 LIKE 模式（无关键词时 `None`）。
+/// `query` 与 `count` 共用，避免两处的筛选口径走样。
+fn filters(needle: &str, kind: ClipKindFilter) -> (String, Option<String>) {
     let kind_cond = match kind {
         ClipKindFilter::All => "",
         ClipKindFilter::Text => " AND kind = 'text'",
@@ -156,19 +152,45 @@ pub fn query(
     } else {
         ""
     };
+    (
+        format!("{kind_cond}{text_cond}"),
+        has_needle.then(|| format!("%{escaped}%")),
+    )
+}
+
+/// 查询历史（**收藏置顶**，组内按最近入库；空关键词返回最近条目）。
+///
+/// `offset` 供分页用：配合 [`count`] 先拿总条数再算页数，只取当前页的条目。
+pub fn query(
+    conn: &Connection,
+    needle: &str,
+    kind: ClipKindFilter,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<ClipEntry>> {
+    let (where_clause, pattern) = filters(needle, kind);
     let sql = format!(
         "SELECT {CLIP_COLS} FROM clipboard_history
-         WHERE 1 = 1{kind_cond}{text_cond}
-         ORDER BY pinned DESC, created_at DESC, id DESC LIMIT {limit}"
+         WHERE 1 = 1{where_clause}
+         ORDER BY pinned DESC, created_at DESC, id DESC LIMIT {limit} OFFSET {offset}"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let pattern = format!("%{escaped}%");
-    let rows = if has_needle {
-        stmt.query_map(params![pattern], row_to_entry)?
-    } else {
-        stmt.query_map([], row_to_entry)?
+    let rows = match pattern {
+        Some(pattern) => stmt.query_map(params![pattern], row_to_entry)?,
+        None => stmt.query_map([], row_to_entry)?,
     };
     rows.collect()
+}
+
+/// 同一套筛选条件下的总条数（分页算页数用）。
+pub fn count(conn: &Connection, needle: &str, kind: ClipKindFilter) -> Result<usize> {
+    let (where_clause, pattern) = filters(needle, kind);
+    let sql = format!("SELECT COUNT(*) FROM clipboard_history WHERE 1 = 1{where_clause}");
+    let total: i64 = match pattern {
+        Some(pattern) => conn.query_row(&sql, params![pattern], |row| row.get(0))?,
+        None => conn.query_row(&sql, [], |row| row.get(0))?,
+    };
+    Ok(total as usize)
 }
 
 /// 统计：`(总条数, 收藏条数, 占用字节)`。
@@ -344,7 +366,7 @@ mod tests {
         let pinned = text(&conn, "t4", "pinned", 5);
         set_pinned(&conn, pinned, true).unwrap();
 
-        let all: Vec<u64> = query(&conn, "", ClipKindFilter::All, 100)
+        let all: Vec<u64> = query(&conn, "", ClipKindFilter::All, 100, 0)
             .unwrap()
             .iter()
             .map(|e| e.id)
@@ -354,7 +376,7 @@ mod tests {
             vec![pinned as u64, b as u64, a as u64, image_id as u64]
         );
 
-        let matched: Vec<u64> = query(&conn, "WORLD", ClipKindFilter::All, 100)
+        let matched: Vec<u64> = query(&conn, "WORLD", ClipKindFilter::All, 100, 0)
             .unwrap()
             .iter()
             .map(|e| e.id)
@@ -365,7 +387,7 @@ mod tests {
             "大小写不敏感，图片不参与"
         );
 
-        let images: Vec<u64> = query(&conn, "", ClipKindFilter::Image, 100)
+        let images: Vec<u64> = query(&conn, "", ClipKindFilter::Image, 100, 0)
             .unwrap()
             .iter()
             .map(|e| e.id)
@@ -373,7 +395,7 @@ mod tests {
         assert_eq!(images, vec![image_id as u64]);
 
         // 关键词里的 % 不当通配符
-        assert!(query(&conn, "%", ClipKindFilter::All, 100)
+        assert!(query(&conn, "%", ClipKindFilter::All, 100, 0)
             .unwrap()
             .is_empty());
     }
@@ -384,11 +406,40 @@ mod tests {
         for i in 1..=10 {
             text(&conn, &format!("t{i}"), &format!("text {i}"), i);
         }
-        assert_eq!(query(&conn, "", ClipKindFilter::All, 3).unwrap().len(), 3);
+        assert_eq!(query(&conn, "", ClipKindFilter::All, 3, 0).unwrap().len(), 3);
         assert_eq!(
-            query(&conn, "", ClipKindFilter::All, 100).unwrap().len(),
+            query(&conn, "", ClipKindFilter::All, 100, 0).unwrap().len(),
             10
         );
+    }
+
+    /// 分页：`offset` 逐页切片不重不漏，`count` 与当前筛选条件的总条数一致。
+    #[test]
+    fn pagination_slices_pages_and_count_matches_filters() {
+        let conn = init_in_memory().unwrap();
+        for i in 1..=10 {
+            text(&conn, &format!("t{i}"), &format!("text {i}"), i);
+        }
+
+        let ids = |limit: usize, offset: usize| -> Vec<u64> {
+            query(&conn, "", ClipKindFilter::All, limit, offset)
+                .unwrap()
+                .iter()
+                .map(|entry| entry.id as u64)
+                .collect()
+        };
+
+        // 最近入库在前：4 + 4 + 2 正好覆盖全部 10 条，且顺序连续。
+        assert_eq!(ids(4, 0), vec![10, 9, 8, 7]);
+        assert_eq!(ids(4, 4), vec![6, 5, 4, 3]);
+        assert_eq!(ids(4, 8), vec![2, 1]);
+        // 越界页返回空页，总数不受影响（前端据此把页码夹回最后一页）。
+        assert!(ids(4, 100).is_empty());
+        assert_eq!(count(&conn, "", ClipKindFilter::All).unwrap(), 10);
+
+        // count 必须和 query 用同一套筛选：关键词命中 2 条（text 1 / text 10），图片为 0。
+        assert_eq!(count(&conn, "text 1", ClipKindFilter::All).unwrap(), 2);
+        assert_eq!(count(&conn, "", ClipKindFilter::Image).unwrap(), 0);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent } from "react";
 
 import "@milkdown/crepe/theme/common/style.css";
 import "@milkdown/crepe/theme/frame.css";
@@ -6,10 +6,18 @@ import "@/milkdown.css";
 
 import { Crepe } from "@milkdown/crepe";
 import { editorViewCtx } from "@milkdown/kit/core";
+import { NodeSelection, type EditorState } from "@milkdown/kit/prose/state";
 import type { EditorView } from "@milkdown/kit/prose/view";
+import { error as logError } from "@tauri-apps/plugin-log";
+import { toast } from "sonner";
 
 import { saveNoteImageFile } from "@/lib/notes/image-upload";
-import type { Note } from "@/lib/ipc";
+import { ipc, type Note } from "@/lib/ipc";
+
+/** 笔记图片协议 URL 前缀（与 Rust `note_image::NOTE_URL_PREFIX` 保持一致）。 */
+const NOTE_IMAGE_URL_PREFIX = "http://prism3-note.localhost/";
+/** 合法笔记图片文件名：16 位十六进制哈希 + 白名单扩展（与 Rust 侧同一口径）。 */
+const NOTE_IMAGE_NAME = /^[0-9a-f]{16}\.(png|jpe?g|webp|bmp|gif)$/i;
 
 interface MilkdownEditorProps {
   /** 当前笔记 id：变化即销毁重建（不同笔记不能共用实例）。 */
@@ -131,6 +139,29 @@ export function MilkdownEditor({
     setSuggest(null);
   }, []);
 
+  /**
+   * 右键「复制」一张笔记图片：接管剪贴板，写真正的位图而不是 Markdown 文本。
+   *
+   * 编辑器默认把图片节点序列化成 `![alt](url)`，粘到微信 / 文档里只是一行字。这里在
+   * **捕获阶段**拦住「选中内容恰好是一张笔记图片」的复制：`preventDefault` 挡掉浏览器
+   * 默认复制，`stopPropagation` 挡掉 ProseMirror 自己的 copy 处理（否则它仍会把 Markdown
+   * 写进剪贴板，把位图覆盖掉）。混了文字的选择不干预。
+   */
+  const handleCopy = (event: ClipboardEvent<HTMLDivElement>) => {
+    const view = viewRef.current;
+    if (!view) return;
+    const src =
+      selectedNoteImageSrc(view.state.selection) ?? selectedNoteImageSrcFromDom();
+    if (!src) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void ipc.copyNoteImage(src).catch((cause) => {
+      const message = `复制图片失败：${String(cause)}`;
+      void logError(message);
+      toast.error(message);
+    });
+  };
+
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
@@ -232,7 +263,7 @@ export function MilkdownEditor({
   }, [editable]);
 
   return (
-    <div className="relative min-h-0 flex-1">
+    <div className="relative min-h-0 flex-1" onCopyCapture={handleCopy}>
       <div ref={rootRef} className="prism-note-editor h-full overflow-y-auto" />
       {suggest && (
         <ul
@@ -262,4 +293,37 @@ export function MilkdownEditor({
       )}
     </div>
   );
+}
+
+/** 图片 URL 是否是「后端能取到字节」的那两种：笔记协议图片、内联 data URL。 */
+function copyableImageSrc(src: string): string | null {
+  const trimmed = src.trim();
+  if (trimmed.startsWith("data:image/")) return trimmed;
+  if (!trimmed.startsWith(NOTE_IMAGE_URL_PREFIX)) return null;
+  const name = trimmed.slice(NOTE_IMAGE_URL_PREFIX.length).split(/[?#]/)[0];
+  return NOTE_IMAGE_NAME.test(name) ? trimmed : null;
+}
+
+/** ProseMirror 里选中了一张图片节点：点图片选中整块后右键复制就是这种情况。 */
+function selectedNoteImageSrc(selection: EditorState["selection"]): string | null {
+  if (!(selection instanceof NodeSelection)) return null;
+  const node = selection.node;
+  // Crepe 的图片块是 `image-block`，行内图片是 `image`，两种都要认。
+  if (!node.type.name.startsWith("image")) return null;
+  const src = node.attrs.src;
+  return typeof src === "string" ? copyableImageSrc(src) : null;
+}
+
+/**
+ * DOM 侧兜底：拖选 / 双击选中的内容里**恰好只有一张**笔记图片、且没有文字。
+ * 与 `selectedNoteImageSrc` 互补——不产生 NodeSelection 的那种选中只在这里命中。
+ */
+function selectedNoteImageSrcFromDom(): string | null {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
+  const fragment = selection.getRangeAt(0).cloneContents();
+  if ((fragment.textContent ?? "").trim()) return null;
+  const images = fragment.querySelectorAll("img");
+  if (images.length !== 1) return null;
+  return copyableImageSrc(images[0].getAttribute("src") ?? "");
 }
