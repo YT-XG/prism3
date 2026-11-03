@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   FolderGit2,
   FolderOpen,
   FolderPlus,
+  GitBranch,
   Pencil,
   Play,
   Plus,
@@ -21,9 +22,23 @@ import { ProjectConsole } from "@/components/projects/project-console";
 import { Button } from "@/components/ui/button";
 import { projectCommandKey, useProjectRuns } from "@/hooks/use-project-runs";
 import { useProjects } from "@/hooks/use-projects";
-import type { ProjectEntry } from "@/lib/ipc";
+import { ipc, type ProjectEntry, type ProjectGitState, type ProjectRun } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/stores/app-store";
+
+/**
+ * 从命令行里粗略提取端口：`--port 3000` / `--port=3000` / `-p 3000` / `PORT=3000`。
+ * 只用于启动前提醒，不参与真正的启动参数解析。
+ */
+function commandPort(command: string): number | null {
+  for (const pattern of [/(?:--port[=\s]+|-p\s+)(\d{2,5})/i, /\bPORT=(\d{2,5})/i]) {
+    const match = command.match(pattern);
+    if (!match) continue;
+    const port = Number(match[1]);
+    if (Number.isInteger(port) && port > 0 && port <= 65535) return port;
+  }
+  return null;
+}
 
 /**
  * 主窗口「项目」页：左列项目列表，右列选中项目的命令与实时输出。
@@ -54,6 +69,12 @@ export function ProjectsPanel() {
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   /** 左列选中的项目；被删除后自动回落到第一个。 */
   const [activeId, setActiveId] = useState<string | null>(null);
+  /** 当前项目的 Git 状态（15 秒刷新一次）。 */
+  const [gitState, setGitState] = useState<ProjectGitState | null>(null);
+  /** 已提示过「服务已就绪」的地址：`runId + url`，避免同一次运行重复弹。 */
+  const announcedUrls = useRef<Set<string>>(new Set());
+  /** 上一轮运行状态：用于识别「运行中 → 已结束」和「新出现的 URL」。 */
+  const previousRuns = useRef<Map<string, ProjectRun> | null>(null);
 
   const activeProject = projects.find((project) => project.id === activeId) ?? projects[0] ?? null;
   /** 控制台只显示当前项目自己的运行记录，避免左列切换后串台。 */
@@ -61,6 +82,10 @@ export function ProjectsPanel() {
     selectedRun && activeProject && selectedRun.projectId === activeProject.id
       ? selectedRun
       : null;
+  const activeProjectRuns = activeProject
+    ? runs.filter((run) => run.projectId === activeProject.id)
+    : [];
+  const activeRunningCount = activeProjectRuns.filter((run) => run.running).length;
 
   // 首页项目卡点「查看输出」：切过来时选中对应项目并展开那条记录的控制台。
   useEffect(() => {
@@ -70,6 +95,83 @@ export function ProjectsPanel() {
     if (pending.runId) void openRun(pending.runId);
     else closeRun();
   }, [closeRun, openRun]);
+
+  // 当前项目的 Git 状态：只在有项目目录时查询，15 秒轮询一次（git status 很便宜）。
+  useEffect(() => {
+    const path = activeProject?.path.trim() ?? "";
+    if (path === "") {
+      setGitState(null);
+      return;
+    }
+    let cancelled = false;
+    const load = () => {
+      void ipc
+        .getProjectGitState(path)
+        .then((next) => {
+          if (!cancelled) setGitState(next);
+        })
+        .catch(() => {
+          if (!cancelled) setGitState(null);
+        });
+    };
+    load();
+    const timer = window.setInterval(load, 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeProject?.path]);
+
+  // 运行状态变化：异常退出给提示；日志里出现新的本机地址时提示「服务已就绪」。
+  useEffect(() => {
+    const previous = previousRuns.current;
+    if (!previous) {
+      // 首轮只建立基线：主窗口刚打开时后端已有的运行记录不应该被当成「刚刚结束」。
+      previousRuns.current = new Map(runs.map((run) => [run.runId, run]));
+      for (const run of runs) {
+        for (const url of run.urls) announcedUrls.current.add(`${run.runId}|${url}`);
+      }
+      return;
+    }
+
+    for (const run of runs) {
+      const before = previous.get(run.runId);
+      if (
+        before?.running &&
+        !run.running &&
+        !run.stopping &&
+        run.exitCode !== null &&
+        run.exitCode !== 0
+      ) {
+        toast.error(`${run.projectName} · ${run.commandName} 异常退出`, {
+          description: `退出码 ${run.exitCode}`,
+          action: {
+            label: "查看输出",
+            onClick: () => void openRun(run.runId),
+          },
+        });
+      }
+
+      for (const url of run.urls) {
+        const key = `${run.runId}|${url}`;
+        const known = announcedUrls.current.has(key);
+        announcedUrls.current.add(key);
+        if (known || before?.urls.includes(url)) continue;
+        toast.success("服务已就绪", {
+          description: url,
+          action: {
+            label: "打开",
+            onClick: () => {
+              void ipc.openProjectUrl(url).catch((cause) =>
+                toast.error(`打开失败：${String(cause)}`),
+              );
+            },
+          },
+        });
+      }
+    }
+    previousRuns.current = new Map(runs.map((run) => [run.runId, run]));
+  }, [openRun, runs]);
 
   const handleSave = async (draft: ProjectDraft) => {
     if (editor) {
@@ -100,19 +202,73 @@ export function ProjectsPanel() {
   };
 
   /** 同一个按钮：没跑就启动，在跑就停止。 */
-  const handleRun = (project: ProjectEntry, index: number) => {
+  const handleRun = async (project: ProjectEntry, index: number) => {
     const command = project.commands[index];
     if (!command) return;
     const running = findRunning(projectCommandKey(project.id, index));
     if (running) {
-      void stop(running.runId).catch((cause) =>
-        toast.error(`停止失败：${String(cause)}`),
-      );
+      try {
+        await stop(running.runId);
+      } catch (cause) {
+        toast.error(`停止失败：${String(cause)}`);
+      }
       return;
     }
-    void start(project, command, index).catch((cause) =>
-      toast.error(`启动失败：${String(cause)}`),
+
+    // 启动前看一眼命令里声明的端口：被占用时先提醒，避免用户对着满屏报错排查。
+    const port = commandPort(command.command);
+    if (port !== null) {
+      try {
+        const status = await ipc.checkProjectPort(port);
+        if (status.inUse) {
+          toast.warning(`端口 ${port} 已被占用`, {
+            description: "启动可能失败；如果是这条命令自己占用的，可以忽略。",
+          });
+        }
+      } catch {
+        // 预检失败不影响启动本身。
+      }
+    }
+
+    try {
+      await start(project, command, index);
+    } catch (cause) {
+      toast.error(`启动失败：${String(cause)}`);
+    }
+  };
+
+  /** 启动当前项目所有还没运行的命令。 */
+  const startAll = async () => {
+    if (!activeProject) return;
+    const pending = activeProject.commands
+      .map((command, index) => ({ command, index }))
+      .filter(({ index }) => !findRunning(projectCommandKey(activeProject.id, index)));
+    if (pending.length === 0) {
+      toast.info("所有命令都已在运行");
+      return;
+    }
+    const results = await Promise.allSettled(
+      pending.map(({ command, index }) => start(activeProject, command, index)),
     );
+    const failed = results.filter((result) => result.status === "rejected").length;
+    if (failed > 0) toast.error(`${failed} 条命令启动失败`);
+    else toast.success(`已启动 ${pending.length} 条命令`);
+  };
+
+  /** 停止当前项目所有运行中的命令。 */
+  const stopAll = async () => {
+    if (!activeProject) return;
+    const running = runs.filter(
+      (run) => run.projectId === activeProject.id && run.running,
+    );
+    if (running.length === 0) {
+      toast.info("当前没有运行中的命令");
+      return;
+    }
+    const results = await Promise.allSettled(running.map((run) => stop(run.runId)));
+    const failed = results.filter((result) => result.status === "rejected").length;
+    if (failed > 0) toast.error(`${failed} 条命令停止失败`);
+    else toast.success(`已停止 ${running.length} 条命令`);
   };
 
   return (
@@ -209,6 +365,21 @@ export function ProjectsPanel() {
                     </p>
                   </div>
 
+                  {gitState?.isRepo && (
+                    <span
+                      className="flex shrink-0 items-center gap-1 rounded-md bg-muted/40 px-1.5 py-0.5 text-[0.68rem] text-muted-foreground"
+                      title={`${gitState.branch} · ${
+                        gitState.dirty ? `${gitState.changes} 个未提交改动` : "工作区干净"
+                      }`}
+                    >
+                      <GitBranch className="size-3" aria-hidden="true" />
+                      <span className="max-w-36 truncate">{gitState.branch}</span>
+                      {gitState.dirty && (
+                        <span className="size-1.5 rounded-full bg-amber-500" aria-hidden="true" />
+                      )}
+                    </span>
+                  )}
+
                   {activeProject.path.trim() !== "" && (
                     <Button
                       variant="outline"
@@ -285,7 +456,7 @@ export function ProjectsPanel() {
                                 ? `${command.command}\n工作目录：${command.dir}`
                                 : command.command
                           }
-                          onClick={() => handleRun(activeProject, index)}
+                          onClick={() => void handleRun(activeProject, index)}
                         >
                           {running ? (
                             <Square data-icon="inline-start" />
@@ -314,6 +485,30 @@ export function ProjectsPanel() {
                   {activeProject.commands.length === 0 && (
                     <span className="text-[0.7rem] text-muted-foreground">
                       未配置启动命令，点右上角铅笔添加
+                    </span>
+                  )}
+
+                  {activeProject.commands.length > 1 && (
+                    <span className="ml-auto flex shrink-0 items-center gap-1">
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        title="启动所有还没运行的命令"
+                        onClick={() => void startAll()}
+                      >
+                        <Play data-icon="inline-start" />
+                        全部启动
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        disabled={activeRunningCount === 0}
+                        title="停止当前项目所有运行中的命令"
+                        onClick={() => void stopAll()}
+                      >
+                        <Square data-icon="inline-start" />
+                        全部停止
+                      </Button>
                     </span>
                   )}
                 </div>

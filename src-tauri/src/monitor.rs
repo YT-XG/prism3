@@ -1,15 +1,29 @@
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use sysinfo::{DiskKind, Disks, NetworkData, Networks, System};
+use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_notification::NotificationExt;
 
 #[cfg(windows)]
 use serde::Deserialize;
 
 /// 磁盘列表的最小刷新间隔，降低采集开销。
 const DISK_REFRESH_SECS: u64 = 5;
+
+/// 托盘 tooltip 与阈值告警的采样间隔。5 秒足够及时，也比 1 秒轮询省 CPU。
+const WATCHDOG_INTERVAL: Duration = Duration::from_secs(5);
+/// 内存占用持续超过该值才告警（连续两个采样点，避免瞬时峰值）。
+const ALERT_MEMORY_PERCENT: f32 = 90.0;
+/// 磁盘已用超过该值才告警。
+const ALERT_DISK_PERCENT: f32 = 90.0;
+/// 同类告警的最短间隔，避免在阈值附近反复弹通知。
+const ALERT_COOLDOWN: Duration = Duration::from_secs(10 * 60);
+/// GPU 温度超过该值时告警（仅 NVIDIA 提供温度时生效）。
+const ALERT_GPU_TEMP: f32 = 85.0;
 
 /// 单个磁盘分区的用量信息。
 #[derive(Clone, Serialize)]
@@ -59,6 +73,14 @@ pub struct SystemSnapshot {
     pub net_tx_per_sec: f64,
     pub uptime_secs: u64,
     pub disks: Vec<DiskInfo>,
+    /// GPU 全局占用率（0-100，按最忙的引擎统计）；读不到时为 `None`。
+    pub gpu_usage: Option<f32>,
+    /// 主显卡专用显存的已用量 / 预算（字节，读不到时为 0）。
+    pub gpu_memory_used: u64,
+    pub gpu_memory_total: u64,
+    /// GPU 温度（℃）与风扇转速（%）；只有 NVIDIA 驱动提供 `nvidia-smi` 时才有值。
+    pub gpu_temperature: Option<f32>,
+    pub gpu_fan_speed: Option<u32>,
 }
 
 /// 不随时间变化的静态系统信息，构造时算一次；供前端缓存后与动态快照合并。
@@ -90,6 +112,8 @@ struct MonitorInner {
     cpu_warmed: bool,
     last_net_refresh: Option<Instant>,
     last_disk_refresh: Option<Instant>,
+    gpu_utilization: GpuUtilization,
+    nvidia: NvidiaCache,
 }
 
 /// 由 Tauri 托管的系统监控状态。
@@ -134,6 +158,8 @@ impl MonitorState {
                 cpu_warmed: false,
                 last_net_refresh: None,
                 last_disk_refresh: None,
+                gpu_utilization: GpuUtilization::new(),
+                nvidia: NvidiaCache::new(),
             }),
             statics,
         }
@@ -206,6 +232,33 @@ impl MonitorState {
             })
             .collect();
 
+        // GPU：PDH 统计所有引擎的占用（取最忙的引擎），DXGI 读主显卡显存预算；
+        // 温度 / 风扇只有装了 NVIDIA 驱动时才能从 nvidia-smi 取到。
+        let nvidia = inner.nvidia.get();
+        let gpu_usage = inner
+            .gpu_utilization
+            .sample()
+            .or_else(|| nvidia.as_ref().and_then(|sample| sample.utilization));
+        let (memory_used, memory_total) = query_gpu_memory();
+        let gpu_memory_used = if memory_used > 0 {
+            memory_used
+        } else {
+            nvidia
+                .as_ref()
+                .map(|sample| sample.memory_used)
+                .unwrap_or(0)
+        };
+        let gpu_memory_total = if memory_total > 0 {
+            memory_total
+        } else {
+            nvidia
+                .as_ref()
+                .map(|sample| sample.memory_total)
+                .unwrap_or(0)
+        };
+        let gpu_temperature = nvidia.as_ref().and_then(|sample| sample.temperature);
+        let gpu_fan_speed = nvidia.as_ref().and_then(|sample| sample.fan_speed);
+
         SystemSnapshot {
             cpu_usage,
             mem_used: inner.system.used_memory(),
@@ -214,6 +267,11 @@ impl MonitorState {
             net_tx_per_sec,
             uptime_secs: System::uptime(),
             disks,
+            gpu_usage,
+            gpu_memory_used,
+            gpu_memory_total,
+            gpu_temperature,
+            gpu_fan_speed,
         }
     }
 
@@ -221,6 +279,426 @@ impl MonitorState {
     pub fn statics(&self) -> SystemStatics {
         self.statics.clone()
     }
+}
+
+/// GPU 占用率来源：Windows PDH 的 `GPU Engine` 计数器（不依赖厂商 SDK）。
+#[cfg(windows)]
+struct GpuUtilization {
+    /// `PDH_HQUERY` 的原始指针；`Send` 约束要求存成整数（访问都在 `Mutex` 里）。
+    query: isize,
+    counter: isize,
+    primed: bool,
+}
+
+#[cfg(windows)]
+impl GpuUtilization {
+    fn new() -> Self {
+        use windows::core::HSTRING;
+        use windows::Win32::System::Performance::{
+            PdhAddEnglishCounterW, PdhCloseQuery, PdhOpenQueryW, PDH_HCOUNTER, PDH_HQUERY,
+        };
+
+        let mut query = PDH_HQUERY::default();
+        // SAFETY: 打开一个本地 PDH 查询；失败时句柄保持空值，后续采样直接返回 None。
+        let status = unsafe { PdhOpenQueryW(&HSTRING::from(""), 0, &mut query) };
+        if status != 0 {
+            return Self {
+                query: 0,
+                counter: 0,
+                primed: false,
+            };
+        }
+
+        let mut counter = PDH_HCOUNTER::default();
+        let path = HSTRING::from(r"\GPU Engine(*)\Utilization Percentage");
+        // 英文计数器名避免中文系统上本地化名称不一致。
+        let status = unsafe { PdhAddEnglishCounterW(query, &path, 0, &mut counter) };
+        if status != 0 {
+            unsafe { PdhCloseQuery(query) };
+            return Self {
+                query: 0,
+                counter: 0,
+                primed: false,
+            };
+        }
+
+        Self {
+            query: query.0 as isize,
+            counter: counter.0 as isize,
+            primed: false,
+        }
+    }
+
+    /// 采样一次；PDH 需要两个时间点才能算出速率，首次返回 `None`。
+    fn sample(&mut self) -> Option<f32> {
+        use windows::Win32::System::Performance::{
+            PdhCollectQueryData, PdhGetFormattedCounterArrayW, PDH_FMT_COUNTERVALUE_ITEM_W,
+            PDH_FMT_DOUBLE, PDH_HCOUNTER, PDH_HQUERY, PDH_MORE_DATA,
+        };
+
+        if self.query == 0 || self.counter == 0 {
+            return None;
+        }
+        let query = PDH_HQUERY(self.query as *mut _);
+        let counter = PDH_HCOUNTER(self.counter as *mut _);
+
+        // SAFETY: 句柄由 `new` 打开且在本结构生命周期内有效；缓冲区按 API 返回的
+        // 字节数分配，第二次调用只写入这块内存；所有字符串读取都先检查空指针。
+        unsafe {
+            if PdhCollectQueryData(query) != 0 {
+                return None;
+            }
+            if !self.primed {
+                self.primed = true;
+                return None;
+            }
+
+            let mut size = 0u32;
+            let mut count = 0u32;
+            let status =
+                PdhGetFormattedCounterArrayW(counter, PDH_FMT_DOUBLE, &mut size, &mut count, None);
+            if status != PDH_MORE_DATA || size == 0 {
+                return None;
+            }
+            let mut buffer = vec![0u8; size as usize];
+            let status = PdhGetFormattedCounterArrayW(
+                counter,
+                PDH_FMT_DOUBLE,
+                &mut size,
+                &mut count,
+                Some(buffer.as_mut_ptr() as *mut PDH_FMT_COUNTERVALUE_ITEM_W),
+            );
+            if status != 0 {
+                return None;
+            }
+
+            let items = buffer.as_ptr() as *const PDH_FMT_COUNTERVALUE_ITEM_W;
+            // 同一引擎上各进程的占用相加就是该引擎的总占用；再取最忙的引擎
+            // （3D / Copy / VideoDecode…）作为「GPU 占用」，与任务管理器口径接近。
+            let mut engines: HashMap<String, f64> = HashMap::new();
+            for index in 0..count as usize {
+                let item = &*items.add(index);
+                if item.szName.0.is_null() || item.FmtValue.CStatus != 0 {
+                    continue;
+                }
+                let name = pwstr_to_string(item.szName);
+                let value = item.FmtValue.Anonymous.doubleValue;
+                if !value.is_finite() || value <= 0.0 {
+                    continue;
+                }
+                let Some(engine) = name.rsplit("engtype_").next() else {
+                    continue;
+                };
+                if engine.is_empty() {
+                    continue;
+                }
+                *engines.entry(engine.to_string()).or_default() += value;
+            }
+            let busiest = engines.values().copied().fold(0.0, f64::max);
+            (busiest > 0.0).then(|| (busiest as f32).clamp(0.0, 100.0))
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for GpuUtilization {
+    fn drop(&mut self) {
+        if self.query != 0 {
+            use windows::Win32::System::Performance::{PdhCloseQuery, PDH_HQUERY};
+            // SAFETY: 只关闭本结构持有的查询句柄。
+            unsafe { PdhCloseQuery(PDH_HQUERY(self.query as *mut _)) };
+        }
+    }
+}
+
+#[cfg(not(windows))]
+struct GpuUtilization;
+
+#[cfg(not(windows))]
+impl GpuUtilization {
+    fn new() -> Self {
+        Self
+    }
+
+    fn sample(&mut self) -> Option<f32> {
+        None
+    }
+}
+
+#[cfg(windows)]
+unsafe fn pwstr_to_string(value: windows::core::PWSTR) -> String {
+    if value.0.is_null() {
+        return String::new();
+    }
+    let len = (0..).take_while(|&index| *value.0.add(index) != 0).count();
+    String::from_utf16_lossy(std::slice::from_raw_parts(value.0, len))
+}
+
+/// 主显卡显存：DXGI `QueryVideoMemoryInfo`（本地段 = 专用显存）。
+#[cfg(windows)]
+fn query_gpu_memory() -> (u64, u64) {
+    use windows::core::Interface;
+    use windows::Win32::Graphics::Dxgi::{
+        CreateDXGIFactory1, IDXGIAdapter3, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE,
+        DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_QUERY_VIDEO_MEMORY_INFO,
+    };
+
+    // SAFETY: 只读枚举适配器并查询显存预算；任一步失败即返回 0，不影响其它监控项。
+    unsafe {
+        let Ok(factory) = CreateDXGIFactory1::<IDXGIFactory1>() else {
+            return (0, 0);
+        };
+        let mut index = 0u32;
+        while let Ok(adapter) = factory.EnumAdapters1(index) {
+            index += 1;
+            let Ok(desc) = adapter.GetDesc1() else {
+                continue;
+            };
+            if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32) != 0 {
+                continue;
+            }
+            let Ok(adapter3) = adapter.cast::<IDXGIAdapter3>() else {
+                continue;
+            };
+            let mut info = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
+            if adapter3
+                .QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut info)
+                .is_ok()
+            {
+                let total = if info.Budget > 0 {
+                    info.Budget
+                } else {
+                    desc.DedicatedVideoMemory as u64
+                };
+                return (info.CurrentUsage, total);
+            }
+        }
+    }
+    (0, 0)
+}
+
+#[cfg(not(windows))]
+fn query_gpu_memory() -> (u64, u64) {
+    (0, 0)
+}
+
+#[derive(Clone, Default)]
+struct NvidiaSample {
+    utilization: Option<f32>,
+    temperature: Option<f32>,
+    fan_speed: Option<u32>,
+    memory_used: u64,
+    memory_total: u64,
+}
+
+/// `nvidia-smi` 每次调用约几十毫秒：有值就缓存 5 秒，没装驱动时隔 30 秒再试。
+struct NvidiaCache {
+    sample: Option<NvidiaSample>,
+    last_attempt: Option<Instant>,
+}
+
+impl NvidiaCache {
+    fn new() -> Self {
+        Self {
+            sample: None,
+            last_attempt: None,
+        }
+    }
+
+    fn get(&mut self) -> Option<NvidiaSample> {
+        let due = self
+            .last_attempt
+            .map(|last| {
+                last.elapsed()
+                    >= if self.sample.is_some() {
+                        Duration::from_secs(5)
+                    } else {
+                        Duration::from_secs(30)
+                    }
+            })
+            .unwrap_or(true);
+        if due {
+            self.last_attempt = Some(Instant::now());
+            self.sample = query_nvidia();
+        }
+        self.sample.clone()
+    }
+}
+
+#[cfg(windows)]
+fn query_nvidia() -> Option<NvidiaSample> {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let output = std::process::Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=utilization.gpu,temperature.gpu,fan.speed,memory.used,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line = text.lines().find(|line| !line.trim().is_empty())?;
+    let fields: Vec<&str> = line.split(',').map(str::trim).collect();
+    if fields.len() < 5 {
+        return None;
+    }
+    Some(NvidiaSample {
+        utilization: fields[0].parse().ok(),
+        temperature: fields[1].parse().ok(),
+        fan_speed: fields[2].parse().ok(),
+        memory_used: fields[3]
+            .parse::<u64>()
+            .map(|mib| mib.saturating_mul(1024 * 1024))
+            .unwrap_or(0),
+        memory_total: fields[4]
+            .parse::<u64>()
+            .map(|mib| mib.saturating_mul(1024 * 1024))
+            .unwrap_or(0),
+    })
+}
+
+#[cfg(not(windows))]
+fn query_nvidia() -> Option<NvidiaSample> {
+    None
+}
+
+/// 后台看门狗：每 5 秒采一次负载，更新托盘 tooltip，并在内存 / 磁盘 / GPU 温度
+/// 超过阈值时发系统通知。只在应用运行期间存在一条线程，开销固定。
+pub fn spawn_watchdog(app: AppHandle) {
+    std::thread::spawn(move || {
+        // 启动阶段先让主窗口与数据库初始化完成，避免和启动维护抢 CPU。
+        std::thread::sleep(Duration::from_secs(5));
+        let mut memory_streak = 0u8;
+        let mut last_alert: HashMap<String, Instant> = HashMap::new();
+
+        loop {
+            let snapshot = app.state::<MonitorState>().snapshot();
+            update_tray_tooltip(&app, &snapshot);
+
+            let memory_percent = if snapshot.mem_total > 0 {
+                snapshot.mem_used as f32 / snapshot.mem_total as f32 * 100.0
+            } else {
+                0.0
+            };
+            if memory_percent >= ALERT_MEMORY_PERCENT {
+                memory_streak = memory_streak.saturating_add(1);
+            } else {
+                memory_streak = 0;
+            }
+            if memory_streak >= 2 {
+                alert(
+                    &app,
+                    &mut last_alert,
+                    "memory",
+                    format!("内存占用持续偏高（{memory_percent:.0}%），可以检查一下后台进程。"),
+                );
+            }
+
+            for disk in &snapshot.disks {
+                let used = disk.total.saturating_sub(disk.available);
+                let percent = if disk.total > 0 {
+                    used as f32 / disk.total as f32 * 100.0
+                } else {
+                    0.0
+                };
+                if percent >= ALERT_DISK_PERCENT {
+                    alert(
+                        &app,
+                        &mut last_alert,
+                        &format!("disk:{}", disk.mount_point),
+                        format!(
+                            "磁盘 {} 已用 {percent:.0}%，剩余空间不足 10%。",
+                            disk.mount_point
+                        ),
+                    );
+                }
+            }
+
+            if let Some(temperature) = snapshot.gpu_temperature {
+                if temperature >= ALERT_GPU_TEMP {
+                    alert(
+                        &app,
+                        &mut last_alert,
+                        "gpu-temp",
+                        format!("GPU 温度达到 {temperature:.0}℃。"),
+                    );
+                }
+            }
+
+            std::thread::sleep(WATCHDOG_INTERVAL);
+        }
+    });
+}
+
+fn update_tray_tooltip(app: &AppHandle, snapshot: &SystemSnapshot) {
+    let Some(tray) = app.tray_by_id("main-tray") else {
+        return;
+    };
+    let cpu = snapshot
+        .cpu_usage
+        .map(|value| format!("{value:.0}%"))
+        .unwrap_or_else(|| "—".to_string());
+    let memory = if snapshot.mem_total > 0 {
+        format!(
+            "{:.0}%",
+            snapshot.mem_used as f32 / snapshot.mem_total as f32 * 100.0
+        )
+    } else {
+        "—".to_string()
+    };
+    let mut text = format!("Prism3 · CPU {cpu} · 内存 {memory}");
+    if let Some(gpu) = snapshot.gpu_usage {
+        text.push_str(&format!(" · GPU {gpu:.0}%"));
+    }
+    if let Err(err) = tray.set_tooltip(Some(text)) {
+        log::debug!("更新托盘 tooltip 失败：{err}");
+    }
+}
+
+fn alert(app: &AppHandle, last_alert: &mut HashMap<String, Instant>, key: &str, message: String) {
+    let due = last_alert
+        .get(key)
+        .map(|last| last.elapsed() >= ALERT_COOLDOWN)
+        .unwrap_or(true);
+    if !due {
+        return;
+    }
+    last_alert.insert(key.to_string(), Instant::now());
+
+    if let Err(err) = app
+        .notification()
+        .builder()
+        .title("Prism3 系统提醒")
+        .body(&message)
+        .show()
+    {
+        log::warn!("发送系统通知失败：{err}");
+    }
+    if let Err(err) = app.emit(
+        "monitor:alert",
+        AlertPayload {
+            kind: key.to_string(),
+            message,
+        },
+    ) {
+        log::warn!("广播监控告警失败：{err}");
+    }
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AlertPayload {
+    kind: String,
+    message: String,
 }
 
 /// 硬件型号集合：进程内只采集一次。
@@ -488,5 +966,20 @@ fn probe_local_ipv4() -> Option<Ipv4Addr> {
     match socket.local_addr().ok()?.ip() {
         IpAddr::V4(addr) if !addr.is_loopback() => Some(addr),
         _ => None,
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gpu_sampling_does_not_panic_without_a_gpu() {
+        // PDH 计数器不是每台机器都有（虚拟机 / 无显卡环境）：只要求不 panic、失败时返回 None。
+        let mut gpu = GpuUtilization::new();
+        let _ = gpu.sample();
+        std::thread::sleep(Duration::from_millis(50));
+        let _ = gpu.sample();
+        let _ = query_gpu_memory();
     }
 }

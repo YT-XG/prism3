@@ -131,6 +131,11 @@ mod tests {
             net_tx_per_sec: 0.0,
             uptime_secs: 0,
             disks: Vec::new(),
+            gpu_usage: None,
+            gpu_memory_used: 0,
+            gpu_memory_total: 0,
+            gpu_temperature: None,
+            gpu_fan_speed: None,
         }
     }
 

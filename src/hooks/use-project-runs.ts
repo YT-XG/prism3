@@ -108,6 +108,7 @@ export function useProjectRuns() {
         path: project.path,
         command: command.command,
         dir: command.dir ?? "",
+        env: command.env ?? "",
       });
       // 后端可能已经吐了几行：回放一次，避免「先占位再收事件」漏掉开头。
       try {

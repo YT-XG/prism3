@@ -783,6 +783,7 @@ pub fn run_project_command(
     path: String,
     command: String,
     dir: String,
+    env: Option<String>,
 ) -> AppResult<crate::projects::ProjectRun> {
     crate::projects::start(
         &app,
@@ -794,7 +795,34 @@ pub fn run_project_command(
         &path,
         &command,
         &dir,
+        env.as_deref().unwrap_or(""),
     )
+}
+
+/// 从项目的 `package.json` 生成命令预设（按锁文件推断 pnpm / npm / yarn / bun）。
+#[tauri::command(async)]
+pub fn suggest_project_commands(
+    path: String,
+) -> AppResult<Vec<crate::projects::ProjectCommandSuggestion>> {
+    crate::projects::suggest_commands(&path)
+}
+
+/// 读取项目的 Git 分支与未提交改动（不是仓库或没装 git 时返回 `isRepo = false`）。
+#[tauri::command(async)]
+pub fn get_project_git_state(path: String) -> crate::projects::ProjectGitState {
+    crate::projects::git_state(&path)
+}
+
+/// 启动前的端口预检（本机 IPv4 回环）。
+#[tauri::command(async)]
+pub fn check_project_port(port: u16) -> crate::projects::PortStatus {
+    crate::projects::check_port(port)
+}
+
+/// 用系统浏览器打开从命令输出里识别到的本机地址。
+#[tauri::command]
+pub fn open_project_url(app: AppHandle, url: String) -> AppResult<()> {
+    crate::projects::open_url(&app, &url)
 }
 
 /// 停止一条运行中的项目命令（结束整棵进程树）。
@@ -856,6 +884,22 @@ pub fn get_system_statics(
     state: State<'_, crate::monitor::MonitorState>,
 ) -> crate::monitor::SystemStatics {
     state.statics()
+}
+
+/// 读取按 CPU / 内存排序的进程列表（监控页每 3 秒轮询一次）。
+#[tauri::command(async)]
+pub fn get_process_list(
+    state: State<'_, crate::process::ProcessState>,
+    sort: crate::process::ProcessSort,
+    limit: Option<u32>,
+) -> Vec<crate::process::ProcessInfo> {
+    crate::process::list(&state, sort, limit.unwrap_or(20) as usize)
+}
+
+/// 结束一个进程（本应用与系统关键进程受保护）。
+#[tauri::command(async)]
+pub fn kill_process(state: State<'_, crate::process::ProcessState>, pid: u32) -> AppResult<()> {
+    crate::process::kill(&state, pid)
 }
 
 /// 读取当前运行状态（窗口挂载 / 热重载后兜底拉取：事件不缓存）。

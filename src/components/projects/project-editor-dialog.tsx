@@ -1,7 +1,8 @@
 import { useState } from "react";
 
 import { open as openDirectoryDialog } from "@tauri-apps/plugin-dialog";
-import { FolderOpen, Plus, Trash2 } from "lucide-react";
+import { FileJson, FolderOpen, LoaderCircle, Plus, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -14,7 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import type { ProjectCommand, ProjectEntry } from "@/lib/ipc";
+import { ipc, type ProjectCommand, type ProjectEntry } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
 /** 对话框产出的草稿：id 与持久化由调用方决定（新建 / 编辑共用）。 */
@@ -40,12 +41,17 @@ export function ProjectEditorDialog({ project, onClose, onSave }: ProjectEditorD
   // 项目根目录是**可选**的：留空时靠每条命令自己的工作目录启动；
   // 填写后既用于「打开目录」，也是命令没单独选目录时的默认工作目录。
   const [path, setPath] = useState(project?.path ?? "");
-  // 老配置里没有 `dir`：补空串，避免受控输入拿到 undefined。
+  // 老配置里没有 `dir` / `env`：补空串，避免受控输入拿到 undefined。
   const [commands, setCommands] = useState<ProjectCommand[]>(
     () =>
-      project?.commands.map((command) => ({ ...command, dir: command.dir ?? "" })) ?? [],
+      project?.commands.map((command) => ({
+        ...command,
+        dir: command.dir ?? "",
+        env: command.env ?? "",
+      })) ?? [],
   );
   const [saving, setSaving] = useState(false);
+  const [importing, setImporting] = useState(false);
 
   const nameOk = name.trim() !== "";
   // 整行留空视为「不要这条」，保存时丢弃；只填了一半则拦下来。
@@ -94,6 +100,29 @@ export function ProjectEditorDialog({ project, onClose, onSave }: ProjectEditorD
       ...(commands[index]?.name.trim() === "" ? { name: folderNameOf(picked) } : {}),
     });
     if (!name.trim()) setName(folderNameOf(picked));
+  };
+
+  /** 从项目根目录的 package.json 导入 scripts；已存在的同名命令不重复添加。 */
+  const importPackageScripts = async () => {
+    if (path.trim() === "" || importing) return;
+    setImporting(true);
+    try {
+      const suggestions = await ipc.suggestProjectCommands(path);
+      const existing = new Set(commands.map((command) => `${command.name}|${command.command}`));
+      const additions = suggestions
+        .filter((item) => !existing.has(`${item.name}|${item.command}`))
+        .map((item) => ({ name: item.name, command: item.command, dir: item.dir, env: "" }));
+      if (additions.length === 0) {
+        toast.info("没有可导入的新脚本");
+        return;
+      }
+      setCommands((current) => [...current, ...additions]);
+      toast.success(`已导入 ${additions.length} 个脚本`);
+    } catch (cause) {
+      toast.error(`导入失败：${String(cause)}`);
+    } finally {
+      setImporting(false);
+    }
   };
 
   const handleSave = async () => {
@@ -173,20 +202,41 @@ export function ProjectEditorDialog({ project, onClose, onSave }: ProjectEditorD
               <span className="text-xs font-medium text-muted-foreground">
                 启动命令（可选，可加多条）
               </span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="xs"
-                onClick={() =>
-                  setCommands((current) => [
-                    ...current,
-                    { name: "", command: "", dir: "" },
-                  ])
-                }
-              >
-                <Plus data-icon="inline-start" />
-                添加命令
-              </Button>
+              <div className="flex items-center gap-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  disabled={path.trim() === "" || importing}
+                  title={
+                    path.trim() === ""
+                      ? "先选择项目目录"
+                      : "读取 package.json 的 scripts（按锁文件推断 pnpm / npm / yarn / bun）"
+                  }
+                  onClick={() => void importPackageScripts()}
+                >
+                  {importing ? (
+                    <LoaderCircle data-icon="inline-start" className="animate-spin" />
+                  ) : (
+                    <FileJson data-icon="inline-start" />
+                  )}
+                  导入脚本
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  onClick={() =>
+                    setCommands((current) => [
+                      ...current,
+                      { name: "", command: "", dir: "", env: "" },
+                    ])
+                  }
+                >
+                  <Plus data-icon="inline-start" />
+                  添加命令
+                </Button>
+              </div>
             </div>
 
             {commands.length === 0 ? (
@@ -250,6 +300,15 @@ export function ProjectEditorDialog({ project, onClose, onSave }: ProjectEditorD
                       onChange={(event) =>
                         updateCommand(index, { command: event.target.value })
                       }
+                    />
+                    <Textarea
+                      value={command.env}
+                      spellCheck={false}
+                      rows={1}
+                      placeholder={"环境变量（可选）：KEY=VALUE，每行一条"}
+                      aria-label="环境变量"
+                      className="min-h-0 resize-y font-mono text-[11px] leading-relaxed"
+                      onChange={(event) => updateCommand(index, { env: event.target.value })}
                     />
                   </div>
                 ))}

@@ -47,12 +47,14 @@ pub struct BleDeviceEntry {
 ///
 /// `command` 可以有多行（每行一条，按顺序执行）；`dir` 是这条命令的工作目录，
 /// 空 = 项目目录，相对路径按项目目录解析 —— 同一项目的「前端 / 后端」因此能共用一个条目。
+/// `env` 是这条命令额外注入的环境变量，每行一条 `KEY=VALUE`（空行与 `#` 注释忽略）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ProjectCommand {
     pub name: String,
     pub command: String,
     pub dir: String,
+    pub env: String,
 }
 
 /// 一个本地项目：目录 + 可一键执行的启动命令预设。
@@ -324,6 +326,7 @@ mod tests {
                     name: "dev".into(),
                     command: "pnpm tauri dev".into(),
                     dir: "frontend".into(),
+                    env: "NODE_ENV=development".into(),
                 }],
             }],
             ..AppConfig::default()
@@ -335,6 +338,7 @@ mod tests {
         assert_eq!(entry["commands"][0]["name"], "dev");
         assert_eq!(entry["commands"][0]["command"], "pnpm tauri dev");
         assert_eq!(entry["commands"][0]["dir"], "frontend");
+        assert_eq!(entry["commands"][0]["env"], "NODE_ENV=development");
 
         // 老配置里没有这个键：必须回落到空列表，而不是整份配置反序列化失败。
         let config: AppConfig =
@@ -346,6 +350,13 @@ mod tests {
             serde_json::from_str(r#"{"name":"Prism3"}"#).expect("缺省字段的项目应当可读");
         assert_eq!(entry.path, "");
         assert!(entry.commands.is_empty());
+
+        // 老配置里的命令没有 `env`：缺省为空串，启动时按「不注入额外环境变量」处理。
+        let command: ProjectCommand =
+            serde_json::from_str(r#"{"name":"dev","command":"pnpm dev"}"#)
+                .expect("缺省字段的命令应当可读");
+        assert_eq!(command.dir, "");
+        assert_eq!(command.env, "");
     }
 
     #[test]

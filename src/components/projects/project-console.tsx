@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 
-import { Copy, Eraser, Square, Terminal, Trash2, X } from "lucide-react";
+import { Copy, Eraser, ExternalLink, Square, Terminal, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import type { ProjectOutputLine, ProjectRun } from "@/lib/ipc";
+import { ipc, type ProjectOutputLine, type ProjectRun } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
 interface ProjectConsoleProps {
@@ -84,6 +84,12 @@ export function ProjectConsole({
     );
   };
 
+  const openUrl = (url: string) => {
+    void ipc.openProjectUrl(url).catch((cause) =>
+      toast.error(`打开失败：${String(cause)}`),
+    );
+  };
+
   return (
     <div
       className={cn(
@@ -103,6 +109,19 @@ export function ProjectConsole({
             {run.workdir}
           </p>
         </div>
+
+        {run.urls.slice(0, 3).map((url) => (
+          <Button
+            key={url}
+            variant="outline"
+            size="xs"
+            title={url}
+            onClick={() => openUrl(url)}
+          >
+            <ExternalLink data-icon="inline-start" />
+            <span className="max-w-36 truncate">{url.replace(/^https?:\/\//, "")}</span>
+          </Button>
+        ))}
 
         <span
           className={cn(

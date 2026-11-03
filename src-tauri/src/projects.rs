@@ -14,6 +14,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io::Read;
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -54,6 +55,8 @@ pub struct ProjectRun {
     pub command_name: String,
     pub command: String,
     pub workdir: String,
+    /// 从输出里识别到的本机服务地址（去重，最多 8 个）。
+    pub urls: Vec<String>,
     pub running: bool,
     /// 是否是用户点了「停止」（用于把结束文案写成「已停止」）。
     pub stopping: bool,
@@ -174,6 +177,35 @@ fn resolve_workdir(project: Option<&Path>, dir: &str) -> AppResult<PathBuf> {
     Ok(target)
 }
 
+/// 解析环境变量输入（每行 `KEY=VALUE`，空行与 `#` 注释忽略）。
+///
+/// 只做最基本的格式校验：键不能为空、必须含 `=`。值不展开变量，也不去引号——
+/// 需要复杂 shell 语义时用户可以直接把 `set ...` 写进命令里。
+fn parse_env(raw: &str) -> AppResult<Vec<(String, String)>> {
+    let mut env = Vec::new();
+    for (index, line) in raw.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            return Err(AppError::Other(format!(
+                "环境变量第 {} 行缺少等号：{line}",
+                index + 1
+            )));
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(AppError::Other(format!(
+                "环境变量第 {} 行的键为空",
+                index + 1
+            )));
+        }
+        env.push((key.to_string(), value.trim().to_string()));
+    }
+    Ok(env)
+}
+
 /// 校验命令并算出工作目录；真正创建进程之前就该失败的情况都在这里拦下。
 fn prepare(path: &str, command: &str, dir: &str) -> AppResult<(String, PathBuf)> {
     let command = normalize_command(command);
@@ -190,6 +222,141 @@ pub fn open_folder(app: &AppHandle, path: &str) -> AppResult<()> {
     app.opener()
         .open_path(target.to_string_lossy().into_owned(), None::<&str>)
         .map_err(|err| AppError::Other(format!("打开目录失败：{err}")))
+}
+
+/// 用系统浏览器打开一条本机服务地址（只允许 http/https）。
+pub fn open_url(app: &AppHandle, url: &str) -> AppResult<()> {
+    let url = url.trim();
+    if url.len() > 2048 || !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(AppError::Other("只能打开 http/https 地址".into()));
+    }
+    app.opener()
+        .open_url(url.to_string(), None::<&str>)
+        .map_err(|err| AppError::Other(format!("打开地址失败：{err}")))
+}
+
+/// 从 `package.json` 的 `scripts` 生成命令预设（按锁文件推断包管理器）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectCommandSuggestion {
+    pub name: String,
+    pub command: String,
+    pub dir: String,
+}
+
+pub fn suggest_commands(path: &str) -> AppResult<Vec<ProjectCommandSuggestion>> {
+    let root = validate_path(path)?;
+    let package_json = root.join("package.json");
+    if !package_json.is_file() {
+        return Err(AppError::Other("项目根目录没有 package.json".into()));
+    }
+    let text = std::fs::read_to_string(&package_json)
+        .map_err(|err| AppError::Other(format!("读取 package.json 失败：{err}")))?;
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|err| AppError::Other(format!("解析 package.json 失败：{err}")))?;
+    let Some(scripts) = value.get("scripts").and_then(|scripts| scripts.as_object()) else {
+        return Err(AppError::Other("package.json 里没有 scripts".into()));
+    };
+
+    // 只按仓库根目录的锁文件判断；不向上找，避免把父目录的包管理器带进来。
+    let manager = if root.join("pnpm-lock.yaml").exists() {
+        "pnpm"
+    } else if root.join("bun.lockb").exists() || root.join("bun.lock").exists() {
+        "bun"
+    } else if root.join("yarn.lock").exists() {
+        "yarn"
+    } else {
+        "npm"
+    };
+
+    let mut suggestions: Vec<ProjectCommandSuggestion> = scripts
+        .keys()
+        .map(|name| ProjectCommandSuggestion {
+            name: name.clone(),
+            command: format!("{manager} run {name}"),
+            dir: String::new(),
+        })
+        .collect();
+    suggestions.sort_by(|left, right| left.name.cmp(&right.name));
+    if suggestions.is_empty() {
+        return Err(AppError::Other("package.json 的 scripts 是空的".into()));
+    }
+    Ok(suggestions)
+}
+
+/// 项目的 Git 状态（分支 + 未提交改动数）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectGitState {
+    pub is_repo: bool,
+    pub branch: String,
+    pub dirty: bool,
+    pub changes: u32,
+}
+
+pub fn git_state(path: &str) -> ProjectGitState {
+    let empty = ProjectGitState {
+        is_repo: false,
+        branch: String::new(),
+        dirty: false,
+        changes: 0,
+    };
+    let Ok(root) = validate_path(path) else {
+        return empty;
+    };
+    if run_git(root, &["rev-parse", "--is-inside-work-tree"]).as_deref() != Some("true") {
+        return empty;
+    }
+
+    let branch = run_git(root, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .filter(|branch| !branch.is_empty())
+        .unwrap_or_else(|| "（无分支）".to_string());
+    let status = run_git(
+        root,
+        &["status", "--porcelain=v1", "--untracked-files=normal"],
+    )
+    .unwrap_or_default();
+    let changes = status
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count() as u32;
+    ProjectGitState {
+        is_repo: true,
+        branch,
+        dirty: changes > 0,
+        changes,
+    }
+}
+
+fn run_git(root: &Path, args: &[&str]) -> Option<String> {
+    use std::os::windows::process::CommandExt;
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// 端口预检结果：`inUse = true` 表示本机 IPv4 回环已经监听该端口。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortStatus {
+    pub port: u16,
+    pub in_use: bool,
+}
+
+pub fn check_port(port: u16) -> PortStatus {
+    let in_use = TcpListener::bind(("127.0.0.1", port)).is_err();
+    PortStatus { port, in_use }
 }
 
 fn now_secs() -> u64 {
@@ -257,24 +424,137 @@ fn emit_output(app: &AppHandle, run_id: &str, lines: Vec<OutputLine>) {
 }
 
 /// 追加输出：先落内存缓冲（供重新打开控制台时回放），再广播增量。
+///
+/// 顺带从输出里识别本机服务地址（Vite / uvicorn / Spring Boot 都会打印
+/// `http://localhost:xxxx`）。发现新地址时额外广播一次运行状态，前端据此显示
+/// 「打开浏览器」按钮，不必轮询整个日志。
 fn push_output(app: &AppHandle, state: &ProjectRuns, run_id: &str, lines: Vec<OutputLine>) {
     if lines.is_empty() {
         return;
     }
-    {
+    let urls_changed = {
         let mut guard = state.lock();
         let Some(record) = guard.get_mut(run_id) else {
             // 记录已被清理（用户点了「清除」）：丢弃迟到的输出。
             return;
         };
+        let mut changed = false;
         for line in &lines {
             record.lines.push_back(line.clone());
+            for url in extract_local_urls(&line.text) {
+                if record.run.urls.len() < MAX_RUN_URLS && !record.run.urls.contains(&url) {
+                    record.run.urls.push(url);
+                    changed = true;
+                }
+            }
         }
         while record.lines.len() > MAX_LOG_LINES {
             record.lines.pop_front();
         }
-    }
+        changed
+    };
     emit_output(app, run_id, lines);
+    if urls_changed {
+        emit_runs(app, state);
+    }
+}
+
+/// 最多记住几个识别到的地址：够覆盖前后端 + 文档站，避免异常输出无限增长。
+const MAX_RUN_URLS: usize = 8;
+
+/// 从一行输出里提取本机服务地址并归一化。
+///
+/// 只认 `localhost` / `127.0.0.1` / `0.0.0.0` / `[::1]`：公网 URL 不在这里处理，
+/// 避免把日志里的外链也变成「打开服务」按钮。`0.0.0.0` 是监听地址，浏览器打不开，
+/// 统一换成 `localhost`。
+fn extract_local_urls(text: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    let mut index = 0;
+    while index < text.len() {
+        let Some(offset) = text[index..].find("http") else {
+            break;
+        };
+        let start = index + offset;
+        let rest = &text[start..];
+        let scheme_len = if rest.starts_with("https://") {
+            8
+        } else if rest.starts_with("http://") {
+            7
+        } else {
+            index = start + 4;
+            continue;
+        };
+
+        let mut end = text.len();
+        for (offset, ch) in rest[scheme_len..].char_indices() {
+            // 方括号不能当分隔符：IPv6 地址写作 `http://[::1]:8080`。
+            if ch.is_whitespace() || "\"'<>(){},;，。；、）】".contains(ch) {
+                end = start + scheme_len + offset;
+                break;
+            }
+        }
+        let candidate = text[start..end].trim_end_matches(['.', ',', ';', ')', ']']);
+        if let Some(url) = normalize_local_url(candidate) {
+            if !urls.contains(&url) {
+                urls.push(url);
+            }
+        }
+        index = end.max(start + 1);
+    }
+    urls
+}
+
+/// 校验候选串是否为本机地址；返回可直接打开的 URL（`0.0.0.0` 换成 `localhost`）。
+fn normalize_local_url(candidate: &str) -> Option<String> {
+    let (scheme, rest) = if let Some(rest) = candidate.strip_prefix("https://") {
+        ("https", rest)
+    } else {
+        ("http", candidate.strip_prefix("http://")?)
+    };
+
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    if authority.contains('@') || authority.is_empty() {
+        return None;
+    }
+
+    // 端口可选；IPv6 用 `[::1]` 形式。
+    let (host, port) = if let Some(stripped) = authority.strip_prefix('[') {
+        let (host, tail) = stripped.split_once(']')?;
+        (format!("[{host}]"), tail.strip_prefix(':').unwrap_or(""))
+    } else {
+        match authority.rsplit_once(':') {
+            Some((host, port)) if !host.contains(':') => (host.to_string(), port),
+            Some(_) => return None,
+            None => (authority.to_string(), ""),
+        }
+    };
+
+    if !port.is_empty() {
+        let port: u16 = port.parse().ok()?;
+        if port == 0 {
+            return None;
+        }
+    }
+
+    let host = match host.to_ascii_lowercase().as_str() {
+        "localhost" | "127.0.0.1" | "0.0.0.0" | "[::1]" | "[::]" => {
+            if host.starts_with("0.0.0.0") {
+                "localhost".to_string()
+            } else {
+                host.to_ascii_lowercase()
+            }
+        }
+        _ => return None,
+    };
+
+    let tail = &rest[authority_end..];
+    let port_part = if port.is_empty() {
+        String::new()
+    } else {
+        format!(":{port}")
+    };
+    Some(format!("{scheme}://{host}{port_part}{tail}"))
 }
 
 /// 去掉 ANSI 控制序列（颜色 / 光标移动 / 清行 / 窗口标题等）。
@@ -365,9 +645,7 @@ fn decode_line(raw: &[u8]) -> String {
 fn decode_text(bytes: &[u8]) -> String {
     match std::str::from_utf8(bytes) {
         Ok(text) => text.to_string(),
-        Err(_) => {
-            decode_ansi(bytes).unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned())
-        }
+        Err(_) => decode_ansi(bytes).unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned()),
     }
 }
 
@@ -535,7 +813,7 @@ fn kill_tree(pid: u32) {
 /// 并把参数内部的 `"` 转义成 `\"`，而 `cmd.exe` 不认这种转义——`set "VAR=value"`、
 /// 带空格的引号路径都会被拆坏（`JAVA_HOME` 设不上，Maven 就会报「JRE rather than a JDK」）。
 /// `raw_arg` 原样拼接，交给 cmd 自己解析引号。
-fn spawn_shell(workdir: &Path, command: &str) -> AppResult<Child> {
+fn spawn_shell(workdir: &Path, command: &str, env: &[(String, String)]) -> AppResult<Child> {
     use std::os::windows::process::CommandExt;
     let mut cmd = Command::new("cmd");
     // `/d` 跳过 AutoRun 注册表命令；`chcp 65001` 让 cmd 自己的输出走 UTF-8。
@@ -547,6 +825,9 @@ fn spawn_shell(workdir: &Path, command: &str) -> AppResult<Child> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .creation_flags(CREATE_NO_WINDOW);
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
     cmd.spawn()
         .map_err(|err| AppError::Other(format!("启动命令失败：{err}")))
 }
@@ -563,8 +844,10 @@ pub fn start(
     path: &str,
     command: &str,
     dir: &str,
+    env: &str,
 ) -> AppResult<ProjectRun> {
     let (command, workdir) = prepare(path, command, dir)?;
+    let env = parse_env(env)?;
 
     // 同一个按钮重复点击不该起两份（端口冲突时用户只会看到一堆报错）。
     {
@@ -580,7 +863,7 @@ pub fn start(
         }
     }
 
-    let mut child = spawn_shell(&workdir, &command)?;
+    let mut child = spawn_shell(&workdir, &command, &env)?;
 
     let pid = child.id();
     let stdout = child.stdout.take();
@@ -598,6 +881,7 @@ pub fn start(
         command_name,
         command: command.clone(),
         workdir: workdir_text.clone(),
+        urls: Vec::new(),
         running: true,
         stopping: false,
         exit_code: None,
@@ -724,6 +1008,86 @@ mod tests {
     use super::*;
 
     #[test]
+    fn local_service_urls_are_detected_and_normalized() {
+        let urls = extract_local_urls(
+            "Local:   http://localhost:5173/\nNetwork: http://0.0.0.0:8000/api\nURL: http://127.0.0.1:3000/dashboard).",
+        );
+        assert_eq!(
+            urls,
+            vec![
+                "http://localhost:5173/",
+                "http://localhost:8000/api",
+                "http://127.0.0.1:3000/dashboard",
+            ]
+        );
+        assert_eq!(
+            extract_local_urls("https://example.com/docs"),
+            Vec::<String>::new()
+        );
+        // 同一个地址在一行里出现两次只保留一个。
+        assert_eq!(
+            extract_local_urls("http://localhost:1420 http://localhost:1420"),
+            vec!["http://localhost:1420"]
+        );
+        // IPv6 回环保留方括号形式，端口不能是 0。
+        assert_eq!(
+            extract_local_urls("[::1] http://[::1]:8080/ http://localhost:0"),
+            vec!["http://[::1]:8080/"]
+        );
+    }
+
+    #[test]
+    fn package_scripts_are_suggested_with_the_detected_package_manager() {
+        // 临时目录名带进程 id + 纳秒，避免并行测试互相覆盖。
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|value| value.as_nanos())
+            .unwrap_or(0);
+        let root =
+            std::env::temp_dir().join(format!("prism3-suggest-{}-{stamp}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("创建临时目录失败");
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"scripts":{"dev":"vite","build":"vite build","test":"vitest"}}"#,
+        )
+        .expect("写入 package.json 失败");
+        std::fs::write(root.join("pnpm-lock.yaml"), "").expect("写入锁文件失败");
+
+        let suggestions = suggest_commands(&root.to_string_lossy()).expect("应能读取 scripts");
+        let names: Vec<&str> = suggestions.iter().map(|item| item.name.as_str()).collect();
+        assert_eq!(names, vec!["build", "dev", "test"]);
+        assert_eq!(suggestions[0].command, "pnpm run build");
+        assert_eq!(suggestions[0].dir, "");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn port_check_reports_listeners() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("绑定临时端口失败");
+        let port = listener.local_addr().expect("读取本地地址失败").port();
+        assert!(check_port(port).in_use, "正在监听的端口应报告占用");
+        drop(listener);
+        assert!(!check_port(port).in_use, "释放后的端口应报告可用");
+    }
+
+    #[test]
+    fn env_lines_are_parsed_and_invalid_lines_rejected() {
+        let env = parse_env("NODE_ENV=development\n# 注释\n\nAPI_URL=http://localhost:8000\n")
+            .expect("合法环境变量应当可解析");
+        assert_eq!(
+            env,
+            vec![
+                ("NODE_ENV".to_string(), "development".to_string()),
+                ("API_URL".to_string(), "http://localhost:8000".to_string()),
+            ]
+        );
+        assert!(parse_env("MISSING_EQUALS").is_err());
+        assert!(parse_env("=value").is_err());
+        assert_eq!(parse_env("").unwrap(), Vec::new());
+    }
+
+    #[test]
     fn empty_or_missing_paths_are_rejected() {
         assert!(validate_path("").is_err());
         assert!(validate_path("   ").is_err());
@@ -800,7 +1164,10 @@ mod tests {
         // UTF-8 优先：同样的字换成 UTF-8 字节也照常读出。
         assert_eq!(decode_text("中文".as_bytes()), "中文");
         // 纯 ASCII 两种编码一致，不该被 ANSI 分支改坏。
-        assert_eq!(decode_text(b"uvicorn running on http://127.0.0.1:8000"), "uvicorn running on http://127.0.0.1:8000");
+        assert_eq!(
+            decode_text(b"uvicorn running on http://127.0.0.1:8000"),
+            "uvicorn running on http://127.0.0.1:8000"
+        );
     }
 
     #[test]
@@ -849,6 +1216,7 @@ mod tests {
         let child = spawn_shell(
             &std::env::temp_dir(),
             r#"set "PRISM3_TEST=hello world" & set PRISM3_TEST"#,
+            &[],
         )
         .expect("启动 cmd 失败");
         let output = child.wait_with_output().expect("等待 cmd 结束失败");

@@ -90,6 +90,8 @@ export interface ProjectCommand {
    * 同一项目的前端 / 后端因此可以各配一条命令、共用一个项目条目。
    */
   dir: string;
+  /** 额外注入的环境变量：每行 `KEY=VALUE`（空行与 `#` 注释忽略）。 */
+  env: string;
 }
 
 /** 一个本地项目：目录 + 可一键执行的启动命令预设（命令可以为空 = 只打开文件夹）。 */
@@ -115,6 +117,8 @@ export interface ProjectRun {
   commandName: string;
   command: string;
   workdir: string;
+  /** 从命令输出里识别到的本机服务地址（最多 8 个，去重）。 */
+  urls: string[];
   running: boolean;
   /** 是否由用户点了「停止」（结束文案随之不同）。 */
   stopping: boolean;
@@ -128,6 +132,43 @@ export interface ProjectOutputLine {
   /** `stdout` / `stderr` / `system`（命令回显、目录、退出提示）。 */
   stream: "stdout" | "stderr" | "system";
   text: string;
+}
+
+/** 从 package.json scripts 生成的命令预设。 */
+export interface ProjectCommandSuggestion {
+  name: string;
+  command: string;
+  dir: string;
+}
+
+/** 项目的 Git 状态；`isRepo = false` 时不展示分支。 */
+export interface ProjectGitState {
+  isRepo: boolean;
+  branch: string;
+  dirty: boolean;
+  changes: number;
+}
+
+/** 端口预检结果。 */
+export interface PortStatus {
+  port: number;
+  inUse: boolean;
+}
+
+/** 监控页的进程排序维度。 */
+export type ProcessSort = "cpu" | "memory";
+
+/** 与 Rust 侧 `ProcessInfo` 一一对应。 */
+export interface ProcessInfo {
+  pid: number;
+  name: string;
+  /** 占整机 CPU 的百分比（0-100）。 */
+  cpuUsage: number;
+  /** 常驻内存（字节）。 */
+  memory: number;
+  exe: string;
+  /** 本应用 / 系统关键进程：前端禁用结束按钮。 */
+  protected: boolean;
 }
 
 /** 速记编辑器模式：实时预览 / 分屏 / 源码 / 仅预览（与 Rust 侧配置字符串一一对应）。 */
@@ -494,6 +535,11 @@ export const ipc = {
   getSystemSnapshot: () => invoke<DynamicSnapshot>("get_system_snapshot"),
   /** 不随时间变化的静态信息（硬件型号/OS/主机名），进程启动时采集一次。 */
   getSystemStatics: () => invoke<SystemStatics>("get_system_statics"),
+  /** 读取按 CPU / 内存排序的进程列表。 */
+  getProcessList: (sort: ProcessSort, limit?: number) =>
+    invoke<ProcessInfo[]>("get_process_list", { sort, limit }),
+  /** 结束一个进程（本应用与系统关键进程受保护）。 */
+  killProcess: (pid: number) => invoke<void>("kill_process", { pid }),
   /** 查询文件名索引；空关键词返回最近修改的文件。 */
   searchFiles: (query: string, limit?: number) =>
     invoke<SearchHit[]>("search_files", { query, limit }),
@@ -520,7 +566,19 @@ export const ipc = {
     path: string;
     command: string;
     dir: string;
+    env?: string;
   }) => invoke<ProjectRun>("run_project_command", args),
+  /** 从 package.json scripts 生成命令预设（按锁文件推断包管理器）。 */
+  suggestProjectCommands: (path: string) =>
+    invoke<ProjectCommandSuggestion[]>("suggest_project_commands", { path }),
+  /** 读取项目的 Git 分支与未提交改动。 */
+  getProjectGitState: (path: string) =>
+    invoke<ProjectGitState>("get_project_git_state", { path }),
+  /** 启动前检查本机端口是否已被占用。 */
+  checkProjectPort: (port: number) =>
+    invoke<PortStatus>("check_project_port", { port }),
+  /** 用系统浏览器打开命令输出里识别到的本机地址。 */
+  openProjectUrl: (url: string) => invoke<void>("open_project_url", { url }),
   /** 停止一条运行中的项目命令（结束整棵进程树）。 */
   stopProjectCommand: (runId: string) =>
     invoke<void>("stop_project_command", { runId }),
@@ -729,6 +787,14 @@ export interface DynamicSnapshot {
   netTxPerSec: number;
   uptimeSecs: number;
   disks: DiskInfo[];
+  /** GPU 全局占用率（0-100，按最忙的引擎统计）；读不到时为 null。 */
+  gpuUsage: number | null;
+  /** 主显卡专用显存已用 / 预算（字节，读不到时为 0）。 */
+  gpuMemoryUsed: number;
+  gpuMemoryTotal: number;
+  /** GPU 温度（℃）与风扇转速（%）；仅 NVIDIA（nvidia-smi）可读。 */
+  gpuTemperature: number | null;
+  gpuFanSpeed: number | null;
 }
 
 /** 与 Rust 侧 `SystemStatics` 一一对应：进程启动时采集一次的静态信息。 */

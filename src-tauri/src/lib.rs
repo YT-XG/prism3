@@ -14,6 +14,7 @@ mod monitor;
 mod note_image;
 mod note_io;
 mod paste;
+mod process;
 mod projects;
 mod repo;
 mod status;
@@ -74,6 +75,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        // 系统通知只在 Rust 侧用（监控阈值告警），前端不申请通知权限。
+        .plugin(tauri_plugin_notification::init())
         // 开机自启（Windows 即 HKCU 的 Run 项）；真正的注册由 `autostart::sync` 按配置执行。
         // 启动项带 `--autostart` 参数：`setup` 据此判断本次是开机拉起，只驻留托盘不弹主窗口。
         .plugin(tauri_plugin_autostart::init(
@@ -155,8 +158,11 @@ pub fn run() {
                 }
             }
 
-            // 系统监控状态：前端在监控页按需轮询时才会真正采集。
+            // 系统监控状态：前端在监控页按需轮询时才会真正采集；
+            // 此外后台看门狗每 5 秒采一次，用于托盘 tooltip 与阈值告警。
             app.manage(monitor::MonitorState::new());
+            // 进程列表独立采集，只在监控页轮询时才刷新。
+            app.manage(process::ProcessState::new());
 
             // 项目命令的运行记录：内存态，不落盘（见 projects.rs）。
             app.manage(projects::ProjectRuns::new());
@@ -195,6 +201,9 @@ pub fn run() {
             updater::schedule_startup_check(&handle);
 
             tray::init(app)?;
+            // 托盘 tooltip + 内存/磁盘/GPU 温度告警。放在托盘初始化之后，
+            // 保证线程第一次更新时 `main-tray` 已经存在。
+            monitor::spawn_watchdog(handle.clone());
 
             // 速记启动维护（启动 15s 后跑，避开启动期与其它 DB 操作撞车）：
             // ① 按保留天数清理回收站；② 全库双链索引重建（幂等）。都不阻塞启动。
@@ -328,6 +337,8 @@ pub fn run() {
             commands::focus_main_window,
             commands::get_system_snapshot,
             commands::get_system_statics,
+            commands::get_process_list,
+            commands::kill_process,
             commands::get_app_status,
             commands::refresh_app_status,
             commands::search_files,
@@ -336,6 +347,10 @@ pub fn run() {
             commands::cancel_file_index,
             commands::open_search_result,
             commands::open_project_folder,
+            commands::suggest_project_commands,
+            commands::get_project_git_state,
+            commands::check_project_port,
+            commands::open_project_url,
             commands::run_project_command,
             commands::stop_project_command,
             commands::get_project_runs,

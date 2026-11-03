@@ -1,6 +1,6 @@
 [package]
 name = "prism3"
-version = "0.3.3"
+version = "0.3.4"
 description = "Prism3 desktop application"
 authors = ["you"]
 edition = "2021"
@@ -28,6 +28,8 @@ tauri-plugin-single-instance = "2"
 # 开机自启：只在 Rust 侧调用（见 autostart.rs），不给前端开 JS 权限，
 # 因此 capabilities 无需改动。
 tauri-plugin-autostart = "2"
+# 系统通知：只在 Rust 侧使用（监控阈值告警），不给前端开通知权限。
+tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sysinfo = { version = "0.39", default-features = false, features = ["system", "disk", "network"] }
@@ -80,6 +82,7 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Gdi",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
+    "Win32_System_Performance",
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",

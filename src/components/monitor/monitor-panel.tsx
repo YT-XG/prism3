@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 
+import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
+import { X } from "lucide-react";
+import { toast } from "sonner";
+
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -9,9 +14,10 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { useTheme } from "@/components/theme-provider";
+import { useProcessList } from "@/hooks/use-process-list";
 import { useSystemMonitor } from "@/hooks/use-system-monitor";
 import { formatBytes, formatPercent, formatRate, formatUptime } from "@/lib/format";
-import type { DiskInfo } from "@/lib/ipc";
+import type { DiskInfo, ProcessInfo } from "@/lib/ipc";
 
 import { MetricChart, type ChartSeries } from "./metric-chart";
 
@@ -23,12 +29,14 @@ const PALETTE = {
   light: {
     cpu: { color: "#3b82f6", fill: "#3b82f624" },
     mem: { color: "#8b5cf6", fill: "#8b5cf624" },
+    gpu: { color: "#f97316", fill: "#f9731624" },
     rx: { color: "#10b981", fill: "#10b98124" },
     tx: { color: "#f59e0b", fill: "#f59e0b24" },
   },
   dark: {
     cpu: { color: "#60a5fa", fill: "#60a5fa2e" },
     mem: { color: "#a78bfa", fill: "#a78bfa2e" },
+    gpu: { color: "#fb923c", fill: "#fb923c2e" },
     rx: { color: "#34d399", fill: "#34d3992e" },
     tx: { color: "#fbbf24", fill: "#fbbf242e" },
   },
@@ -42,6 +50,20 @@ export function MonitorPanel() {
   const cpuUsage = snapshot?.cpuUsage ?? null;
   const memPercent =
     snapshot && snapshot.memTotal > 0 ? (snapshot.memUsed / snapshot.memTotal) * 100 : 0;
+  const gpu = snapshot?.gpus[0];
+  const gpuUsage = snapshot?.gpuUsage ?? null;
+  const gpuDetail = snapshot
+    ? [
+        snapshot.gpuTemperature !== null ? `${Math.round(snapshot.gpuTemperature)}℃` : "",
+        snapshot.gpuFanSpeed !== null ? `风扇 ${snapshot.gpuFanSpeed}%` : "",
+        snapshot.gpuMemoryTotal > 0
+          ? `${formatBytes(snapshot.gpuMemoryUsed)} / ${formatBytes(snapshot.gpuMemoryTotal)} 显存`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
+  const gpuHint = [gpu?.name ?? "未检测到独立显卡", gpuDetail].filter(Boolean).join(" · ");
   const osLabel = snapshot
     ? snapshot.osLongName || `${snapshot.osName} ${snapshot.osVersion}`.trim()
     : "—";
@@ -56,7 +78,7 @@ export function MonitorPanel() {
         每 1 秒采集一次，展示最近 60 秒的趋势；离开本页即停止采集。
       </p>
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <MetricCard
           title="CPU"
           hint="全局占用率"
@@ -78,6 +100,16 @@ export function MonitorPanel() {
           series={[{ label: "内存", ...palette.mem }]}
           xs={history.xs}
           ys={[history.mem]}
+          max={100}
+        />
+
+        <MetricCard
+          title="GPU"
+          hint={gpuHint}
+          value={gpuUsage === null ? "—" : formatPercent(gpuUsage)}
+          series={[{ label: "GPU", ...palette.gpu }]}
+          xs={history.xs}
+          ys={[history.gpu]}
           max={100}
         />
       </div>
@@ -102,6 +134,8 @@ export function MonitorPanel() {
           />
         </CardContent>
       </Card>
+
+      <ProcessListCard />
 
       <Card>
         <CardHeader>
@@ -197,6 +231,109 @@ export function MonitorPanel() {
         </Card>
       </div>
     </div>
+  );
+}
+
+/** 进程列表：CPU / 内存排序 + 结束进程（受保护进程禁用按钮）。 */
+function ProcessListCard() {
+  const { processes, sort, setSort, kill, error } = useProcessList();
+  const [killing, setKilling] = useState<number | null>(null);
+
+  const handleKill = async (process: ProcessInfo) => {
+    if (process.protected || killing !== null) return;
+    const confirmed = await confirmDialog(
+      `结束 ${process.name}（PID ${process.pid}）？未保存的数据可能丢失。`,
+      { title: "结束进程", kind: "warning" },
+    );
+    if (!confirmed) return;
+    setKilling(process.pid);
+    try {
+      await kill(process.pid);
+      toast.success(`已结束 ${process.name}`);
+    } catch (cause) {
+      toast.error(`结束失败：${String(cause)}`);
+    } finally {
+      setKilling(null);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <CardTitle>进程</CardTitle>
+            <CardDescription>
+              按{sort === "cpu" ? " CPU " : "内存 "}占用排序，每 3 秒刷新，最多 20 个。
+            </CardDescription>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              variant={sort === "cpu" ? "secondary" : "outline"}
+              size="xs"
+              onClick={() => setSort("cpu")}
+            >
+              CPU
+            </Button>
+            <Button
+              variant={sort === "memory" ? "secondary" : "outline"}
+              size="xs"
+              onClick={() => setSort("memory")}
+            >
+              内存
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2">
+        {error && <p className="text-xs text-destructive">读取进程失败：{error}</p>}
+        {processes.length === 0 ? (
+          <p className="text-sm text-muted-foreground">正在读取进程…</p>
+        ) : (
+          <div className="flex flex-col divide-y divide-border/50">
+            {processes.map((process) => (
+              <div key={process.pid} className="flex items-center gap-3 py-1.5">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate text-sm font-medium">{process.name}</span>
+                    {process.protected && <Badge variant="outline">受保护</Badge>}
+                  </div>
+                  <p
+                    className="truncate text-[0.65rem] text-muted-foreground"
+                    title={process.exe || undefined}
+                  >
+                    PID {process.pid}
+                    {process.exe ? ` · ${process.exe}` : ""}
+                  </p>
+                </div>
+                <span
+                  className="w-16 shrink-0 text-right text-xs tabular-nums"
+                  title="占整机 CPU 的百分比"
+                >
+                  {process.cpuUsage < 10
+                    ? process.cpuUsage.toFixed(1)
+                    : Math.round(process.cpuUsage)}
+                  %
+                </span>
+                <span className="w-20 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                  {formatBytes(process.memory)}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  disabled={process.protected || killing === process.pid}
+                  title={process.protected ? "系统关键进程，不能结束" : `结束 ${process.name}`}
+                  aria-label={`结束 ${process.name}`}
+                  onClick={() => void handleKill(process)}
+                >
+                  <X />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

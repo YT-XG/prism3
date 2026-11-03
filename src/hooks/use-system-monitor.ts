@@ -20,9 +20,17 @@ export interface MonitorHistory {
   mem: number[];
   rx: number[];
   tx: number[];
+  gpu: (number | null)[];
 }
 
-const createHistory = (): MonitorHistory => ({ xs: [], cpu: [], mem: [], rx: [], tx: [] });
+const createHistory = (): MonitorHistory => ({
+  xs: [],
+  cpu: [],
+  mem: [],
+  rx: [],
+  tx: [],
+  gpu: [],
+});
 
 function append<T>(list: T[], value: T): T[] {
   const next = [...list, value];
@@ -103,6 +111,7 @@ export function useSystemMonitor({
           mem: append(prev.mem, next.memTotal > 0 ? (next.memUsed / next.memTotal) * 100 : 0),
           rx: append(prev.rx, next.netRxPerSec),
           tx: append(prev.tx, next.netTxPerSec),
+          gpu: append(prev.gpu, next.gpuUsage),
         }));
       } catch (cause) {
         reportError("读取系统监控数据失败", cause);

@@ -24,6 +24,7 @@ export function normalizeProject(entry: ProjectEntry): ProjectEntry {
         name: command.name.trim(),
         command: command.command.trim(),
         dir: command.dir?.trim() ?? "",
+        env: command.env?.trim() ?? "",
       }))
       .filter((command) => command.name !== "" || command.command !== ""),
   };
