@@ -129,7 +129,7 @@ export function QuickPanelProjects({ active, withOutput = false }: QuickPanelPro
       )}
 
       {projects.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-border/70 px-3 py-3 text-xs leading-relaxed text-muted-foreground">
+        <p className="rounded-lg bg-muted/25 px-3 py-3 text-xs leading-relaxed text-muted-foreground">
           还没有项目。到主窗口的「项目」页添加名称、目录和启动命令后，这里就能一键启动。
         </p>
       ) : (
@@ -142,7 +142,7 @@ export function QuickPanelProjects({ active, withOutput = false }: QuickPanelPro
           {projects.map((project) => (
             <div
               key={project.id}
-              className="flex flex-col gap-1 rounded-lg border border-border/60 bg-muted/30 px-2.5 py-2"
+              className="flex flex-col gap-1 rounded-lg bg-muted/30 px-2.5 py-2"
             >
               <span className="truncate text-xs font-medium">{project.name}</span>
               <span
@@ -216,10 +216,11 @@ export function QuickPanelProjects({ active, withOutput = false }: QuickPanelPro
         </div>
       )}
 
+      {/* 控制台用 `ring-0`：整屏已压了一层蒙版，深色底足够分块，不再描边。 */}
       {withOutput &&
         (selectedRun ? (
           <ProjectConsole
-            className="min-h-48 flex-1"
+            className="ring-0 min-h-48 flex-1"
             run={selectedRun}
             lines={selectedLines}
             onClose={closeRun}
@@ -228,7 +229,7 @@ export function QuickPanelProjects({ active, withOutput = false }: QuickPanelPro
             onClearRun={(runId) => guard("删除记录", () => clearRun(runId))}
           />
         ) : (
-          <div className="flex min-h-48 shrink-0 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border/70 px-6 text-center">
+          <div className="flex min-h-48 shrink-0 flex-col items-center justify-center gap-2 rounded-xl bg-muted/25 px-6 text-center">
             <span className="flex size-10 items-center justify-center rounded-xl bg-brand-soft text-brand">
               <Terminal className="size-5" aria-hidden="true" />
             </span>

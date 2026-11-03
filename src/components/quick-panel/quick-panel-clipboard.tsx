@@ -231,6 +231,7 @@ export function QuickPanelClipboard({
 
       <div className="relative shrink-0" onMouseDown={handleInputMouseDown}>
         <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        {/* 输入框无边框：整屏已压了一层蒙版，靠浅底色当输入区就行，只留聚焦环做状态提示。 */}
         <Input
           ref={inputRef}
           value={query}
@@ -240,7 +241,10 @@ export function QuickPanelClipboard({
           disabled={!enabled}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={handleKeyDown}
-          className={cn("h-8 pr-2 pl-8 text-xs", !focused && "cursor-pointer")}
+          className={cn(
+            "h-8 border-0 bg-muted/40 pr-2 pl-8 text-xs",
+            !focused && "cursor-pointer",
+          )}
         />
       </div>
 
@@ -302,7 +306,7 @@ export function QuickPanelClipboard({
             />
           </div>
 
-          <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border/60 pt-1.5">
+          <div className="flex shrink-0 items-center justify-between gap-2 pt-1.5">
             <Button
               variant="ghost"
               size="xs"

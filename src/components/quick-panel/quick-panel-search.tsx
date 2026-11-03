@@ -114,6 +114,7 @@ export function QuickPanelSearch({
 
       <div className="relative">
         <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        {/* 与其他页一致：输入框无边框，靠浅底色当输入区，只留聚焦环。 */}
         <Input
           ref={inputRef}
           value={query}
@@ -123,7 +124,10 @@ export function QuickPanelSearch({
           disabled={!enabled}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={handleKeyDown}
-          className={cn("h-8 pr-2 pl-8 text-xs", !focused && "cursor-pointer")}
+          className={cn(
+            "h-8 border-0 bg-muted/40 pr-2 pl-8 text-xs",
+            !focused && "cursor-pointer",
+          )}
         />
       </div>
 

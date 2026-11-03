@@ -164,9 +164,13 @@ export function HubPanel() {
             </aside>
 
             <main className="min-w-0 flex-1">
+              {/*
+                卡片一律「无边框、无投影」：整屏已经压了一层变灰蒙版，靠底色 + 圆角就够
+                分层，再套边线 / 阴影反而像框里套框。
+              */}
               <div
                 data-hub-surface=""
-                className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border/70 bg-background shadow-xl"
+                className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl bg-background"
               >
                 <HubMainView visible={view === "search"} scroll>
                   <QuickPanelSearch active={isActive("search")} {...commonProps} />
@@ -214,7 +218,7 @@ function HubTopBar({
   return (
     <header
       data-hub-surface=""
-      className="flex h-11 shrink-0 items-center gap-2 rounded-xl border border-border/70 bg-background px-2.5 shadow-xl"
+      className="flex h-11 shrink-0 items-center gap-2 rounded-xl bg-background px-2.5"
     >
       <span className="flex shrink-0 items-baseline gap-1.5 pl-1">
         <Triangle className="size-3.5 shrink-0 self-center text-brand" strokeWidth={1.5} aria-hidden />
@@ -247,9 +251,7 @@ function HubTopBar({
               onClick={() => onSelect(id)}
               className={cn(
                 "flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors focus-visible:outline-none",
-                on
-                  ? "bg-background text-foreground shadow-sm ring-1 ring-black/5 dark:ring-white/10"
-                  : "text-muted-foreground hover:text-foreground",
+                on ? "bg-background text-foreground" : "text-muted-foreground hover:text-foreground",
               )}
             >
               <Icon className="size-3.5 shrink-0" aria-hidden />
@@ -292,7 +294,7 @@ function HubSmallView({
   return (
     <section
       data-hub-surface=""
-      className="flex shrink-0 flex-col gap-2 rounded-xl border border-border/70 bg-background px-3.5 py-3 text-sm shadow-xl"
+      className="flex shrink-0 flex-col gap-2 rounded-xl bg-background px-3.5 py-3 text-sm"
     >
       <header className="flex items-center gap-2">
         <Icon className="size-3.5 shrink-0 text-brand" aria-hidden />

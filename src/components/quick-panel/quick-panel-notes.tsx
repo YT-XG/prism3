@@ -267,8 +267,9 @@ export function QuickPanelNotes({
               onDismiss();
             }
           }}
-          className={cn("h-8 text-xs", !focused && "cursor-pointer")}
+          className={cn("h-8 border-0 bg-muted/40 text-xs", !focused && "cursor-pointer")}
         />
+        {/* 无边框（整屏已有蒙版，浅底色足够圈出编辑区），聚焦环仍保留做状态提示。 */}
         <div
           ref={editorRef}
           onKeyDown={(event) => {
@@ -278,7 +279,7 @@ export function QuickPanelNotes({
               onDismiss();
             }
           }}
-          className="flex h-48 min-h-32 resize-y flex-col overflow-hidden rounded-lg border border-input bg-transparent select-text focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 xl:h-64"
+          className="flex h-48 min-h-32 resize-y flex-col overflow-hidden rounded-lg bg-muted/25 select-text focus-within:ring-3 focus-within:ring-ring/50 xl:h-64"
         >
           {active ? (
             <Suspense
