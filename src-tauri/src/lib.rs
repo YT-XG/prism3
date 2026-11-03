@@ -276,7 +276,12 @@ pub fn run() {
             // 窗口被隐藏，都必须让窗口回到不可聚焦，否则会残留一个会抢焦点的常驻窗口。
             if let WindowEvent::Focused(false) = event {
                 // 组合窗口「失焦即收起」：它没有标题栏与关闭按钮，丢焦就是用户的收起动作。
-                if window.label() == hub::HUB_LABEL {
+                //
+                // 只在窗口此刻确实没有焦点时才收起：首次唤起要现场创建窗口，WebView2
+                // 初始化过程中会补发一次「假失焦」事件（事件到达时窗口仍在前台，
+                // `is_focused()` 仍为 true）。若照收，表现就是「第一次按快捷键窗口闪一下
+                // 就没了，得按第二次」，且第二次之后不会再出现（那一次只是初始化噪声）。
+                if window.label() == hub::HUB_LABEL && !window.is_focused().unwrap_or(false) {
                     let _ = window.hide();
                 }
                 if window.label() == "quick-panel-body" {
