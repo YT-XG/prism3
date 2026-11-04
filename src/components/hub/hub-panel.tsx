@@ -10,6 +10,7 @@ import {
   NotebookPen,
   Search,
   Triangle,
+  Workflow,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -17,6 +18,7 @@ import {
 import { ClockCard } from "@/components/home/cards/clock";
 import { MonitorCard } from "@/components/home/cards/monitor";
 import { HubDevicesWidget } from "@/components/hub/hub-widgets";
+import { MacrosPanel } from "@/components/macros/macros-panel";
 import { QuickPanelClipboard } from "@/components/quick-panel/quick-panel-clipboard";
 import { QuickPanelNotes } from "@/components/quick-panel/quick-panel-notes";
 import { QuickPanelProjects } from "@/components/quick-panel/quick-panel-projects";
@@ -36,13 +38,14 @@ function hideHub() {
 }
 
 /** 主视图 id：就是顶部按钮条里那排按钮，点哪个就把右边的大区域换成哪一页。 */
-type HubViewId = "search" | "notes" | "clipboard" | "projects";
+type HubViewId = "search" | "notes" | "clipboard" | "projects" | "macros";
 
 const HUB_VIEWS: { id: HubViewId; label: string; icon: LucideIcon }[] = [
   { id: "search", label: "搜索", icon: Search },
   { id: "notes", label: "速记", icon: NotebookPen },
   { id: "clipboard", label: "剪贴板", icon: ClipboardList },
   { id: "projects", label: "项目", icon: FolderGit2 },
+  { id: "macros", label: "宏", icon: Workflow },
 ];
 
 /** 记忆当前主视图的 localStorage 键（与快捷小窗分页器同一套做法）。 */
@@ -67,13 +70,13 @@ function readStoredView(): HubViewId {
  *
  * - 变灰蒙版：根节点整屏半透明黑底（窗口本身铺满光标所在屏幕，见 `hub.rs`），
  *   点空白处即收起——和 Win+G 一样用「整屏变灰」把注意力压到悬浮内容上；
- * - 顶部按钮条：左侧品牌，中间四个按钮切换主视图，右侧快捷键提示与「收起」；
+ * - 顶部按钮条：左侧品牌，中间五个按钮切换主视图，右侧快捷键提示与「收起」；
  * - 左侧小视图：常驻的系统资源 / 时钟 / 耳机摘要，直接复用首页卡片的数据源；
- * - 右侧主视图：复用快捷小窗的搜索 / 速记 / 剪贴板 / 项目四页（它们只依赖
+ * - 右侧主视图：复用快捷小窗的搜索 / 速记 / 剪贴板 / 项目四页，外加宏页（它们只依赖
  *   `active` / `focused`，不关心自己跑在哪个窗口；项目页额外内嵌命令输出）。
  *
  * 组合窗口是正常可聚焦窗口，因此 `focused` 就是真实的窗口焦点：失焦时 Rust 会隐藏
- * 窗口，这里同时把各页切回 `active=false` 以停止轮询。主视图四页**全部常驻挂载**、
+ * 窗口，这里同时把各页切回 `active=false` 以停止轮询。主视图五页**全部常驻挂载**、
  * 只把非当前页 `display:none`（见 `HubMainView`），否则切页会把速记页没写完的草稿丢掉。
  */
 export function HubPanel() {
@@ -189,6 +192,10 @@ export function HubPanel() {
                 {/* 项目页自己排版（列表 + 就地看输出），交给外层滚动会把控制台挤没。 */}
                 <HubMainView visible={view === "projects"} scroll={false}>
                   <QuickPanelProjects active={isActive("projects")} withOutput />
+                </HubMainView>
+                {/* 宏页两列自己排版；开始录制 / 从组合窗口回放时本窗口会被自动隐藏。 */}
+                <HubMainView visible={view === "macros"} scroll={false}>
+                  <MacrosPanel />
                 </HubMainView>
               </div>
             </main>

@@ -54,6 +54,7 @@ cargo fmt / cargo clippy
 | 内容 | 路径 |
 | --- | --- |
 | 配置文件 | `%APPDATA%\com.prism3.desktop\config.json` |
+| 宏列表 | `%APPDATA%\com.prism3.desktop\macros.json` |
 | 日志文件 | `%LOCALAPPDATA%\com.prism3.desktop\logs\prism3.log` |
 | 更新暂存 | `%LOCALAPPDATA%\com.prism3.desktop\cache\update-staging\<version>\`（下载中的 `.part` 与校验通过的 `*-setup.exe`） |
 
@@ -94,6 +95,7 @@ src-tauri/src/          Rust 后端
 - **系统托盘**：显示主窗口 / 退出，左键单击唤起窗口。
 - **窗口状态记忆**：`tauri-plugin-window-state` 记住位置与尺寸。
 - **单实例保护**：重复启动时唤起已有窗口。
+- **宏录制 / 回放**：Windows 全局键鼠录制（录制中按 F9 结束），会记录按住时长与键鼠并发（如按住 W 时点击鼠标）；按步骤回放（播放中按任意键停止）；步骤也支持拖拽编排。开始录制时自动隐藏发起窗口（主窗口 / 组合窗口均适用），结束后自动显示回来；组合窗口也内置了宏页。仅在本应用录制 / 播放时安装低级钩子，平时零开销，数据见 `src-tauri/src/macros.rs`。
 - **自动更新**：发布版启动 3s 后静默检查；Gitee 锚点只放「跳板指针」，真正的清单与安装包在第三方服务器（Cloudflare R2），下载后经 SHA-256 校验，用 NSIS `/S /UPDATE /R` 静默覆盖安装并自动重启；GitHub Release 的同名清单作兜底。开发模式不检查、也不安装（联调设 `PRISM3_UPDATE_ANCHOR`）。原理、清单格式、发版与排错见 [docs/自动更新.md](../docs/自动更新.md)。
 
 ## 发版（自动更新）

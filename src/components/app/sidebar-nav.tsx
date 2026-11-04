@@ -7,6 +7,7 @@ import {
   NotebookPen,
   Search,
   Settings,
+  Workflow,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ const items: { id: AppView; label: string; icon: typeof House }[] = [
   { id: "home", label: "首页", icon: House },
   { id: "search", label: "搜索", icon: Search },
   { id: "projects", label: "项目", icon: FolderGit2 },
+  { id: "macros", label: "宏", icon: Workflow },
   { id: "monitor", label: "监控", icon: Activity },
   { id: "devices", label: "设备", icon: MonitorSmartphone },
   { id: "clipboard", label: "剪贴板", icon: ClipboardList },

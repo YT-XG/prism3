@@ -9,6 +9,7 @@ mod file_index;
 mod focus;
 mod hotkey;
 mod hub;
+mod macros;
 mod models;
 mod monitor;
 mod mouse;
@@ -138,6 +139,9 @@ pub fn run() {
             app.manage(config::AppState {
                 config: RwLock::new(initial_config.clone()),
             });
+
+            // 宏列表独立于 config.json：录制出来的步骤可能很多，单独存取更干净。
+            app.manage(macros::MacroStore::new(macros::load(&handle)));
 
             // 组合窗口的全局快捷键（默认 Ctrl+Shift+V）：开机自启只驻留托盘时也要能唤起。
             hotkey::init(&handle, &initial_config.hub_shortcut);
@@ -328,6 +332,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
             commands::set_config,
+            macros::get_macros,
+            macros::save_macros,
+            macros::get_macro_state,
+            macros::start_macro_recording,
+            macros::stop_macro_recording,
+            macros::play_macro,
+            macros::stop_macro_playback,
             commands::reset_config,
             commands::read_wallpaper,
             commands::set_quick_panel_dock,

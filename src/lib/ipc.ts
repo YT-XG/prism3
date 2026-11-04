@@ -159,6 +159,62 @@ export interface ProjectCommandSuggestion {
   dir: string;
 }
 
+// ------------------------------ 宏（录制 / 回放） ------------------------------
+
+/** 宏里鼠标点击用的按键。 */
+export type MacroMouseButton = "left" | "right" | "middle";
+
+/**
+ * 一步操作的动作（与 Rust 侧 `MacroAction` 的 `type` 标签一一对应）。
+ *
+ * `key` / `mouseClick` 是一次性动作（手工编排用）；`keyDown` / `keyUp` /
+ * `mouseDown` / `mouseUp` 是录制出的物理按下 / 抬起事件。抬起步骤的 `delayMs`
+ * 是松开前的等待：中间没有其他操作时等于按住时长，与其他事件交错时则只等剩余时长。
+ */
+export type MacroAction =
+  | { type: "mouseClick"; x: number; y: number; button: MacroMouseButton }
+  | { type: "mouseDown"; x: number; y: number; button: MacroMouseButton }
+  | { type: "mouseUp"; button: MacroMouseButton }
+  | { type: "key"; combo: string }
+  | { type: "keyDown"; key: string }
+  | { type: "keyUp"; key: string }
+  | { type: "text"; text: string }
+  | { type: "wait"; ms: number };
+
+/** 一个宏步骤：`delayMs` 是执行动作之前的等待。 */
+export interface MacroStep {
+  delayMs: number;
+  action: MacroAction;
+}
+
+/** 与 Rust 侧 `MacroEntry` 一一对应。时间字段为秒级 unix 时间戳。 */
+export interface MacroEntry {
+  /** 前端生成的定位 id。 */
+  id: string;
+  name: string;
+  steps: MacroStep[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 录制结束时返回的草稿（尚未保存成宏）。 */
+export interface MacroRecording {
+  steps: MacroStep[];
+  /** 无法映射成回放按键的事件数。 */
+  skipped: number;
+}
+
+/** 当前录制 / 回放状态（`get_macro_state` 返回值）。 */
+export interface MacroState {
+  recording: boolean;
+  recordedSteps: number;
+  playing: boolean;
+  /** 有一段已结束、但还没取回的录制（例如在别的页面按了 F9）。 */
+  pendingRecording: boolean;
+  /** 发起录制的窗口 label（`main` / `hub`）；只有它能取回录制结果。 */
+  originLabel: string | null;
+}
+
 /** 项目的 Git 状态；`isRepo = false` 时不展示分支。 */
 export interface ProjectGitState {
   isRepo: boolean;
@@ -615,6 +671,22 @@ export const ipc = {
   /** 清空某条运行记录的输出缓冲（记录本身保留）。 */
   clearProjectRunLog: (runId: string) =>
     invoke<void>("clear_project_run_log", { runId }),
+
+  // ---- 宏（录制 / 回放） ----
+  /** 读取全部宏（窗口挂载时拉一次）。 */
+  getMacros: () => invoke<MacroEntry[]>("get_macros"),
+  /** 整份保存宏列表（增删改都走这一个命令）。 */
+  saveMacros: (macros: MacroEntry[]) => invoke<void>("save_macros", { macros }),
+  /** 当前是否在录制 / 播放（录制 / 播放期间前端轮询）。 */
+  getMacroState: () => invoke<MacroState>("get_macro_state"),
+  /** 开始全局键鼠录制；录制中按 F9 结束。 */
+  startMacroRecording: () => invoke<void>("start_macro_recording"),
+  /** 结束录制并取回步骤（F9 提前结束时同样走这里）。 */
+  stopMacroRecording: () => invoke<MacroRecording>("stop_macro_recording"),
+  /** 回放一组步骤（立即返回，实际执行在后台线程）。 */
+  playMacro: (steps: MacroStep[]) => invoke<void>("play_macro", { steps }),
+  /** 停止回放（幂等；播放中按任意键也会停止）。 */
+  stopMacroPlayback: () => invoke<void>("stop_macro_playback"),
   /** 让快捷小窗面板进入「输入聚焦」模式；返回是否真的聚焦成功。 */
   focusQuickPanelBody: () => invoke<boolean>("focus_quick_panel_body"),
   /** 退出「输入聚焦」模式并把焦点还给用户原来的应用。 */

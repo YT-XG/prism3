@@ -4,6 +4,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { DevicesPanel } from "@/components/devices/devices-panel";
 import { ClipboardPanel } from "@/components/clipboard/clipboard-panel";
 import { HomeDashboard } from "@/components/home/home-dashboard";
+import { MacrosPanel } from "@/components/macros/macros-panel";
 import { MonitorPanel } from "@/components/monitor/monitor-panel";
 import { NotesPanel } from "@/components/notes/notes-panel";
 import { ProjectsPanel } from "@/components/projects/projects-panel";
@@ -33,6 +34,7 @@ export function AppShell() {
     clipboard: "max-w-none",
     notes: "max-w-none",
     projects: "max-w-none",
+    macros: "max-w-none",
   }[activeView];
 
   return (
@@ -48,11 +50,11 @@ export function AppShell() {
             <HomeDashboard />
           ) : activeView === "notes" ||
             activeView === "clipboard" ||
-            activeView === "projects" ? (
-            // 整页数据视图（速记 / 剪贴板 / 项目）：**不进 ScrollArea**——Radix 的 Viewport
+            activeView === "projects" ||
+            activeView === "macros" ? (
+            // 整页数据视图（速记 / 剪贴板 / 项目 / 宏）：**不进 ScrollArea**——Radix 的 Viewport
             // 内部是 `display: table` 包装层，子元素的 `h-full` 撑不满视口（卡片会被内容
-            // 撑成一条、下方留一大片空白），故直接挂在有确定高度的 `main` 下，让两栏卡片
-            // 铺满整屏、由各栏自己滚动。
+            // 撑成一条、下方留一大片空白），故直接挂在有确定高度的 `main` 下，让各栏自己滚动。
             <div
               className={cn(
                 "mx-auto flex h-full min-h-0 w-full flex-col px-6 py-5 pb-8",
@@ -63,6 +65,8 @@ export function AppShell() {
                 <NotesPanel />
               ) : activeView === "clipboard" ? (
                 <ClipboardPanel />
+              ) : activeView === "macros" ? (
+                <MacrosPanel />
               ) : (
                 <ProjectsPanel />
               )}
