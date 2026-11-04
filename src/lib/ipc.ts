@@ -8,6 +8,24 @@ export type DockEdge = "left" | "right" | "top";
 /** 应用运行状态（与 Rust 侧 `AppStatus` 一一对应）：灰条据此决定色相与动画。 */
 export type AppStatus = "normal" | "busy" | "warn";
 
+/**
+ * 鼠标电量（与 Rust 侧 `MouseBattery` 一一对应）。
+ *
+ * 数据源是雷神 ML903 接收器的 HID feature report 私有协议（见 `src-tauri/src/mouse.rs`
+ * 与 `docs/逆向/雷神ML903-鼠标电量HID协议.md`）。`percent` 为 `null` 有两种情况：
+ * 没插接收器，或设备没上报（有线模式下设备回 0，官方驱动同样当作「无电量信息」）。
+ */
+export interface MouseBattery {
+  /** 是否找到并打开了电量接口。 */
+  connected: boolean;
+  /** 是否走 2.4G 接收器（有线模式下读不到电量）。 */
+  wireless: boolean;
+  /** 电量百分比 0-100；`null` = 未上报。 */
+  percent: number | null;
+  /** 是否正在充电。 */
+  charging: boolean;
+}
+
 /** 与 Rust 侧 `AppConfig` 一一对应。 */
 export interface AppConfig {
   theme: Theme;
@@ -531,6 +549,10 @@ export const ipc = {
   getAppStatus: () => invoke<AppStatus>("get_app_status"),
   /** 采样一次系统负载并返回（可能已更新的）运行状态；由灰条窗口按可见性驱动。 */
   refreshAppStatus: () => invoke<AppStatus>("refresh_app_status"),
+  /** 读一次鼠标电量（HID feature report 往返，几毫秒）；由首页卡片按可见性轮询。 */
+  readMouseBattery: () => invoke<MouseBattery>("read_mouse_battery"),
+  /** 读取缓存的鼠标电量（窗口挂载 / 热重载后兜底拉取）。 */
+  getMouseBattery: () => invoke<MouseBattery>("get_mouse_battery"),
   /** 每次轮询变化的动态量（CPU/内存/网络/磁盘）。 */
   getSystemSnapshot: () => invoke<DynamicSnapshot>("get_system_snapshot"),
   /** 不随时间变化的静态信息（硬件型号/OS/主机名），进程启动时采集一次。 */

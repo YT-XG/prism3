@@ -11,6 +11,7 @@ mod hotkey;
 mod hub;
 mod models;
 mod monitor;
+mod mouse;
 mod note_image;
 mod note_io;
 mod paste;
@@ -175,6 +176,9 @@ pub fn run() {
 
             // 蓝牙耳机：默认不扫描、不占链路，用户点「连接」才起会话线程（见 ble.rs）。
             app.manage(ble::BleState::new());
+
+            // 鼠标电量：无设备时不创建任何东西，读数是按需的（见 mouse.rs）。
+            app.manage(mouse::MouseState::new());
 
             // 剪贴板历史：与「启用与否」无关地先读一次落盘历史（几毫秒），
             // 这样「先禁用、之后重新启用」也能立刻看到旧记录。
@@ -375,6 +379,8 @@ pub fn run() {
             commands::set_eq_preset,
             commands::set_game_mode,
             commands::set_dual_device,
+            commands::read_mouse_battery,
+            commands::get_mouse_battery,
             commands::get_clipboard_state,
             commands::search_clipboard,
             commands::get_clipboard_text,

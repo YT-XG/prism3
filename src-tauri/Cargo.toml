@@ -72,14 +72,20 @@ semver = "1"
 # （剪贴板历史自己解 CF_DIB —— arboard 只认 CF_DIBV5，见 clipboard.rs 的 capture 模块），
 # Gdi 把只有 CF_BITMAP 的图片经 GetDIBits 转成像素，Input_KeyboardAndMouse 发 Ctrl+V，
 # Threading 取当前线程 id（焦点归还时的 AttachThreadInput），
-# Globalization 用 MultiByteToWideChar 按系统 ANSI 代码页解子进程输出（见 projects.rs）。
+# Globalization 用 MultiByteToWideChar 按系统 ANSI 代码页解子进程输出（见 projects.rs），
+# Devices_DeviceAndDriverInstallation / HumanInterfaceDevice + Storage_FileSystem
+# 用于鼠标电量（见 mouse.rs）：SetupDi 枚举 HID 接口、HidD_SetFeature/GetFeature
+# 读写 feature report，CreateFileW 打开设备路径。
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Devices_HumanInterfaceDevice",
     "Win32_Foundation",
     "Win32_Globalization",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
+    "Win32_Storage_FileSystem",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_Performance",

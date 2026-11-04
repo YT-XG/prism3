@@ -26,6 +26,7 @@ export const HOME_GAP_PX = 16;
 export type HomeModuleId =
   | "clock"
   | "monitor"
+  | "mouse"
   | "search"
   | "clipboard"
   | "notes"
@@ -57,6 +58,7 @@ export const HOME_MODULES: HomeModuleDef[] = [
   { id: "clock", title: "时钟", minW: 3, minH: 2, idealW: 4, idealH: 3 },
   { id: "monitor", title: "系统资源", minW: 3, minH: 2, idealW: 4, idealH: 3 },
   { id: "bluetooth", title: "蓝牙耳机", minW: 3, minH: 2, idealW: 4, idealH: 3 },
+  { id: "mouse", title: "鼠标电量", minW: 3, minH: 2, idealW: 4, idealH: 3 },
   { id: "clipboard", title: "剪贴板", minW: 3, minH: 3, idealW: 4, idealH: 5 },
   { id: "notes", title: "速记", minW: 3, minH: 3, idealW: 4, idealH: 5 },
   { id: "search", title: "快速搜索", minW: 3, minH: 3, idealW: 4, idealH: 5 },

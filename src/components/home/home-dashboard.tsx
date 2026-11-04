@@ -10,6 +10,7 @@ import {
 
 import {
   Activity,
+  BatteryCharging,
   Check,
   ClipboardList,
   Clock,
@@ -29,6 +30,7 @@ import { BluetoothCard } from "@/components/home/cards/bluetooth";
 import { ClipboardCard } from "@/components/home/cards/clipboard";
 import { ClockCard } from "@/components/home/cards/clock";
 import { MonitorCard } from "@/components/home/cards/monitor";
+import { MouseCard } from "@/components/home/cards/mouse";
 import { NotesCard } from "@/components/home/cards/notes";
 import { ProjectsCard } from "@/components/home/cards/projects";
 import { SearchCard } from "@/components/home/cards/search";
@@ -60,6 +62,7 @@ const MODULE_ICONS: Record<HomeModuleId, LucideIcon> = {
   clock: Clock,
   monitor: Activity,
   bluetooth: Bluetooth,
+  mouse: BatteryCharging,
   clipboard: ClipboardList,
   notes: NotebookPen,
   search: Search,
@@ -71,6 +74,7 @@ const MODULE_BODIES: Record<HomeModuleId, ComponentType> = {
   clock: ClockCard,
   monitor: MonitorCard,
   bluetooth: BluetoothCard,
+  mouse: MouseCard,
   clipboard: ClipboardCard,
   notes: NotesCard,
   search: SearchCard,

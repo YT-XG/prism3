@@ -14,6 +14,7 @@ use crate::db::DbState;
 use crate::error::{AppError, AppResult};
 use crate::file_index::{self, FileIndexState, IndexState, SearchHit};
 use crate::models::{Note, NoteFolder, NoteImageGcReport, NoteLinks, NoteTagRow, PurgeReport, Tag};
+use crate::mouse::{self, MouseBattery, MouseState};
 use crate::note_image;
 use crate::note_io::{self, ExportReport, ImportOptions, ImportReport};
 use crate::paste::{self, PasteOutcome};
@@ -930,6 +931,20 @@ pub fn refresh_app_status(
     next
 }
 
+/// 读一次鼠标电量（雷神 ML903 接收器，HID feature report；协议见 `mouse.rs`）。
+///
+/// 由前端卡片按可见性轮询调用：没有设备时也只是几毫秒的枚举，不占常驻线程。
+/// 读不到就回「未连接」，不报错（拔掉接收器不该让界面弹错误）。
+#[tauri::command(async)]
+pub fn read_mouse_battery(state: State<'_, MouseState>) -> AppResult<MouseBattery> {
+    Ok(state.store(mouse::read_battery()?))
+}
+
+/// 读取缓存的鼠标电量（窗口挂载 / 热重载后兜底拉取）。
+#[tauri::command]
+pub fn get_mouse_battery(state: State<'_, MouseState>) -> MouseBattery {
+    state.current()
+}
 /// 读取蓝牙耳机会话状态（窗口挂载时兜底拉取：事件不缓存）。
 #[tauri::command(async)]
 pub fn get_ble_state(state: State<'_, BleState>) -> AppResult<BleStateSnapshot> {
