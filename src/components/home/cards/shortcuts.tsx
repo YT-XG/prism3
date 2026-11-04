@@ -1,6 +1,6 @@
 import {
   Activity,
-  Bluetooth,
+  MonitorSmartphone,
   ClipboardList,
   Search,
   Settings,
@@ -15,7 +15,7 @@ import { useAppStore } from "@/stores/app-store";
 const LINKS: { view: AppView; label: string; icon: LucideIcon }[] = [
   { view: "search", label: "文件搜索", icon: Search },
   { view: "monitor", label: "系统监控", icon: Activity },
-  { view: "bluetooth", label: "蓝牙耳机", icon: Bluetooth },
+  { view: "devices", label: "设备", icon: MonitorSmartphone },
   { view: "clipboard", label: "剪贴板", icon: ClipboardList },
   { view: "settings", label: "设置", icon: Settings },
 ];

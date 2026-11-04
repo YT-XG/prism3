@@ -7,7 +7,7 @@ export type AppView =
   | "settings"
   | "monitor"
   | "search"
-  | "bluetooth"
+  | "devices"
   | "clipboard"
   | "notes"
   | "projects";

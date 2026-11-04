@@ -1,6 +1,6 @@
 import {
   Activity,
-  Bluetooth,
+  MonitorSmartphone,
   ClipboardList,
   FolderGit2,
   House,
@@ -18,7 +18,7 @@ const items: { id: AppView; label: string; icon: typeof House }[] = [
   { id: "search", label: "搜索", icon: Search },
   { id: "projects", label: "项目", icon: FolderGit2 },
   { id: "monitor", label: "监控", icon: Activity },
-  { id: "bluetooth", label: "蓝牙", icon: Bluetooth },
+  { id: "devices", label: "设备", icon: MonitorSmartphone },
   { id: "clipboard", label: "剪贴板", icon: ClipboardList },
   { id: "notes", label: "速记", icon: NotebookPen },
   { id: "settings", label: "设置", icon: Settings },

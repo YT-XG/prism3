@@ -122,7 +122,7 @@ export function BluetoothCard() {
         <span className="truncate text-[0.65rem] text-muted-foreground">
           {state.autoConnect ? "开仓自动连接已开启" : "开仓自动连接未开启"}
         </span>
-        <HomeCardLink onClick={() => setActiveView("bluetooth")}>蓝牙页</HomeCardLink>
+        <HomeCardLink onClick={() => setActiveView("devices")}>设备页</HomeCardLink>
       </div>
     </div>
   );

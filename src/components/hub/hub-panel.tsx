@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Activity,
-  Bluetooth,
+  MonitorSmartphone,
   ClipboardList,
   Clock,
   FolderGit2,
@@ -16,7 +16,7 @@ import {
 
 import { ClockCard } from "@/components/home/cards/clock";
 import { MonitorCard } from "@/components/home/cards/monitor";
-import { HubEarbudsWidget } from "@/components/hub/hub-widgets";
+import { HubDevicesWidget } from "@/components/hub/hub-widgets";
 import { QuickPanelClipboard } from "@/components/quick-panel/quick-panel-clipboard";
 import { QuickPanelNotes } from "@/components/quick-panel/quick-panel-notes";
 import { QuickPanelProjects } from "@/components/quick-panel/quick-panel-projects";
@@ -158,8 +158,8 @@ export function HubPanel() {
               <HubSmallView icon={Clock} title="时钟">
                 <ClockCard />
               </HubSmallView>
-              <HubSmallView icon={Bluetooth} title="耳机">
-                <HubEarbudsWidget />
+              <HubSmallView icon={MonitorSmartphone} title="设备">
+                <HubDevicesWidget active={focused} />
               </HubSmallView>
             </aside>
 

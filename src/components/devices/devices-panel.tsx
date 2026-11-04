@@ -4,7 +4,10 @@ import {
   ArrowLeft,
   Bluetooth,
   ChevronRight,
+  Headphones,
   Loader2,
+  MonitorSmartphone,
+  Mouse,
   Radar,
   RefreshCw,
   X,
@@ -24,7 +27,14 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useEarbuds } from "@/hooks/use-earbuds";
+import { useMouseBattery } from "@/hooks/use-mouse-battery";
 import { displayDeviceName, oneBudUnavailable } from "@/lib/ble-format";
+import {
+  connectedDevices,
+  earbudsBatterySummary,
+  mouseBatterySummary,
+  type ConnectedDevice,
+} from "@/lib/devices";
 import { formatTimeAgo } from "@/lib/format";
 import type {
   AncGradient,
@@ -55,20 +65,27 @@ const eqPresets: { value: EqPreset; label: string }[] = [
 ];
 
 /**
- * 「蓝牙」页：主窗口唯一的耳机管理入口，分两级。
+ * 「设备」页：主窗口唯一的设备管理入口，分两级。
  *
- * 一级是设备管理（已记住的耳机 + 自动连接 + 扫描添加）；点**已连接**的那一行进入二级，
+ * 一级是**已连接的设备列表**（耳机 + 2.4G 鼠标，只列真正连上的）与设备管理
+ * （已记住的耳机 + 自动连接 + 扫描添加）；点**已连接的耳机**那一行进入二级，
  * 二级是那台设备的功能设置（电量 / 降噪 / 音效 / 开关 / 断开），它不是独立的菜单入口。
  * 二级完全由广播状态推导：链路一断（或设备被移除）当帧就退回一级，绝不留过期控件。
  *
- * 控件只「发起意图」，显示值一律来自后端广播的 `ble:state`——设备侧会隐式改状态
- * （例如设置降噪梯度会顺带重新选中降噪），前端不做乐观更新；需要活动链路的控件在未连接时
- * 禁用，设备列表与自动连接不依赖链路，始终可用。
+ * 鼠标没有二级页：它只上报电量与充电状态（协议见 `src-tauri/src/mouse.rs`），
+ * 因此列表里一行就够，行内不再提供点击。
+ *
+ * 控件只「发起意图」，显示值一律来自后端广播的 `ble:state` 与鼠标读数——设备侧会隐式改
+ * 状态（例如设置降噪梯度会顺带重新选中降噪），前端不做乐观更新；需要活动链路的控件在
+ * 未连接时禁用，设备列表与自动连接不依赖链路，始终可用。
  */
-export function BluetoothPanel() {
+export function DevicesPanel() {
   // 控件袋整体下传给二级页，避免把十几个回调逐个穿参。
   const controls = useEarbuds();
   const { state } = controls;
+  // 鼠标电量：与首页卡片同一个数据源（可见时 30s 一轮，本页卸载即停）。
+  const mouse = useMouseBattery();
+  const devices = connectedDevices(state, mouse);
 
   /** 二级页选中的设备地址；`null` = 停留在一级设备列表。 */
   const [selectedAddress, setSelectedAddress] = useState<string | null>(null);
@@ -82,9 +99,17 @@ export function BluetoothPanel() {
   }, [phase, selectedAddress, state]);
 
   if (!state) {
+    // 耳机状态还没到（首帧）：鼠标是独立数据源，照样先把已连接设备列出来，
+    // 不要因为 BLE 慢一步就让整页停在「正在读取」。
     return (
       <div className="flex flex-col gap-4">
         <PanelHeader />
+        <ConnectedDevicesCard
+          devices={connectedDevices(null, mouse)}
+          controls={controls}
+          error={null}
+          onOpenEarbuds={() => {}}
+        />
         <p className="text-sm text-muted-foreground">正在读取耳机状态…</p>
       </div>
     );
@@ -112,13 +137,18 @@ export function BluetoothPanel() {
     <div className="flex flex-col gap-4">
       <PanelHeader />
 
-      <ConnectionCard state={state} controls={controls} />
+      <ConnectedDevicesCard
+        devices={devices}
+        controls={controls}
+        error={state.error}
+        onOpenEarbuds={() => setSelectedAddress(liveAddress)}
+      />
 
       <Card>
         <CardHeader>
-          <CardTitle>设备列表</CardTitle>
+          <CardTitle>已记住的耳机</CardTitle>
           <CardDescription>
-            点已连接的那一行进入设备设置；点其它行则是把它切换成当前设备。
+            耳机广播不带名字，这里的名字来自上次连接时读到的 GATT Device Name。点已连接的那一行进入设备设置；点其它行则是把它切换成当前设备。
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -237,71 +267,118 @@ export function BluetoothPanel() {
 function PanelHeader() {
   return (
     <div>
-      <h1 className="font-heading text-lg font-medium">蓝牙</h1>
+      <h1 className="font-heading text-lg font-medium">设备</h1>
       <p className="text-sm text-muted-foreground">
-        直连 BLE 耳机：管理已记住的设备并按设备调整降噪 / 音效；设备列表与自动连接不需要先连上。
+        已连接的耳机与鼠标在这里汇总：耳机可进二级页调降噪 / 音效，鼠标（ML903 接收器）只读电量；下方的已记住设备与自动连接不依赖链路。
       </p>
     </div>
   );
 }
 
-/** 一级页的「当前连接」：连接状态、地址与刷新 / 连接 / 断开。 */
-function ConnectionCard({
-  state,
+/**
+ * 一级页的「已连接的设备」：只列此刻真的连上的设备（耳机 + 鼠标）。
+ *
+ * 空态不是错误——耳机没取出、接收器没插都是常态，所以这里给的是「怎么让它出现」的
+ * 提示，而不是一个红色告警。耳机那一行可点进二级设置；鼠标只读，没有二级页。
+ */
+function ConnectedDevicesCard({
+  devices,
   controls,
+  error,
+  onOpenEarbuds,
 }: {
-  state: BleState;
+  devices: ConnectedDevice[];
   controls: ReturnType<typeof useEarbuds>;
+  /** 耳机链路的最近一次错误：一级页必须能看见，否则「连不上」会静默。 */
+  error: string | null;
+  onOpenEarbuds: () => void;
 }) {
-  const ready = state.phase === "ready";
-
   return (
     <Card>
       <CardHeader>
-        <CardTitle>当前连接</CardTitle>
+        <CardTitle>已连接的设备</CardTitle>
         <CardDescription>
-          耳机同一时刻只接受一个连接，厂商手机 App 占线时连接会失败。
+          只列此刻真正连上的设备。耳机同一时刻只接受一个连接，厂商手机 App 占线时连接会失败。
         </CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-col gap-1">
-            <span className="flex items-center gap-2 text-sm font-medium">
-              <span className="truncate">{headerTitle(state)}</span>
-              <Badge variant={phaseBadgeVariant(state.phase)}>{describePhase(state.phase)}</Badge>
-            </span>
-            <span className="truncate text-xs text-muted-foreground">
-              {state.address ?? "尚未获取设备地址"}
+      <CardContent>
+        {devices.length === 0 ? (
+          <div className="flex flex-col items-center gap-1 rounded-lg bg-muted/50 px-3 py-4 text-center">
+            <MonitorSmartphone className="size-4 text-muted-foreground" aria-hidden />
+            <span className="text-xs text-muted-foreground">还没有已连接的设备</span>
+            <span className="text-xs text-muted-foreground">
+              取出耳机（见下方「自动连接」）或插上鼠标的 2.4G 接收器，设备会自动出现在这里。
             </span>
           </div>
+        ) : (
+          <ul className="flex flex-col gap-1">
+            {devices.map((device) =>
+              device.kind === "earbuds" ? (
+                <li
+                  key={device.id}
+                  className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 rounded-md bg-muted/50 px-2.5 py-1.5"
+                >
+                  <button
+                    type="button"
+                    title="打开设备设置"
+                    onClick={onOpenEarbuds}
+                    className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                  >
+                    <Headphones className="size-3.5 shrink-0 text-brand" aria-hidden />
+                    <span className="flex min-w-0 flex-col gap-0.5">
+                      <span className="flex items-center gap-2">
+                        <span className="truncate text-xs font-medium">{device.name}</span>
+                        <Badge variant="secondary">已连接</Badge>
+                        {device.tags.map((tag) => (
+                          <Badge key={tag} variant="outline">
+                            {tag}
+                          </Badge>
+                        ))}
+                      </span>
+                      <span className="truncate text-xs text-muted-foreground">
+                        {device.address} · {earbudsBatterySummary(device.battery)}
+                      </span>
+                    </span>
+                    <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                  </button>
 
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={!ready}
-              onClick={() => void controls.refresh()}
-            >
-              <RefreshCw data-icon="inline-start" />
-              刷新
-            </Button>
-            {ready ? (
-              <Button variant="outline" size="sm" onClick={() => void controls.disconnect()}>
-                断开
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                disabled={busyPhase(state.phase)}
-                onClick={() => void controls.connect()}
-              >
-                连接
-              </Button>
+                  <div className="flex items-center gap-2">
+                    <Button variant="outline" size="xs" onClick={() => void controls.refresh()}>
+                      <RefreshCw data-icon="inline-start" />
+                      刷新
+                    </Button>
+                    <Button variant="outline" size="xs" onClick={() => void controls.disconnect()}>
+                      断开
+                    </Button>
+                  </div>
+                </li>
+              ) : (
+                <li
+                  key={device.id}
+                  className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 rounded-md bg-muted/50 px-2.5 py-1.5"
+                >
+                  <span className="flex min-w-0 flex-1 items-center gap-2">
+                    <Mouse className="size-3.5 shrink-0 text-brand" aria-hidden />
+                    <span className="flex min-w-0 flex-col gap-0.5">
+                      <span className="flex items-center gap-2">
+                        <span className="truncate text-xs font-medium">{device.name}</span>
+                        <Badge variant="secondary">{device.subtitle}</Badge>
+                      </span>
+                      <span className="truncate text-xs text-muted-foreground">
+                        {mouseBatterySummary(device)}
+                      </span>
+                    </span>
+                  </span>
+                  {device.charging && (
+                    <Zap className="size-3 text-emerald-600 dark:text-emerald-500" aria-hidden />
+                  )}
+                </li>
+              ),
             )}
-          </div>
-        </div>
+          </ul>
+        )}
 
-        {state.error && <p className="text-xs text-destructive">{state.error}</p>}
+        {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
       </CardContent>
     </Card>
   );
@@ -635,14 +712,7 @@ function BatteryValue({
   );
 }
 
-/**
- * 当前连接的展示名：与设备列表共用同一套口径（去掉末尾的 `_BLE` 后缀），
- * 没有名字时沿用占位文案——耳机不广播名字，`name` 为 null 是正常现象。
- */
-function headerTitle(state: BleState): string {
-  if (!state.name) return state.address ? "已连接耳机" : "未连接设备";
-  return displayDeviceName(state.name, state.address ?? state.name);
-}
+
 
 /** 正在建立链路（扫描 / 连接中）：此时不该再发起新的连接或进入二级页。 */
 function busyPhase(phase: BleState["phase"]): boolean {

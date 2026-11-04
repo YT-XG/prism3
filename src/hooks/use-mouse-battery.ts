@@ -21,14 +21,16 @@ const UNKNOWN: MouseBattery = {
 /**
  * 鼠标电量数据源：挂载时先用 Rust 侧缓存渲染，再读一次真值；之后按可见性轮询。
  *
- * 轮询**只在这个 hook 挂载期间**存在（首页卡片），窗口隐藏即停表——与
- * `useAppStatusReporter` 同一套「按需采集」模型，不留常驻线程。
+ * 轮询**只在这个 hook 挂载期间且 `enabled` 为真时**存在（首页卡片 / 有焦点的组合窗口），
+ * 窗口隐藏或失焦即停表——与 `useAppStatusReporter` 同一套「按需采集」模型，不留常驻线程。
+ * `enabled` 变化只收表、**不清空当前值**：重新可见时先显示上一份读数再刷新。
  */
-export function useMouseBattery(): MouseBattery {
+export function useMouseBattery(enabled = true): MouseBattery {
   const [battery, setBattery] = useState<MouseBattery>(UNKNOWN);
   const loggedErrorRef = useRef(false);
 
   useEffect(() => {
+    if (!enabled) return;
     let active = true;
     let timer: number | null = null;
 
@@ -83,7 +85,7 @@ export function useMouseBattery(): MouseBattery {
       stop();
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, []);
+  }, [enabled]);
 
   return battery;
 }

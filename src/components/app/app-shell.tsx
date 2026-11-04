@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { BluetoothPanel } from "@/components/bluetooth/bluetooth-panel";
+import { DevicesPanel } from "@/components/devices/devices-panel";
 import { ClipboardPanel } from "@/components/clipboard/clipboard-panel";
 import { HomeDashboard } from "@/components/home/home-dashboard";
 import { MonitorPanel } from "@/components/monitor/monitor-panel";
@@ -23,13 +23,13 @@ import { TitleBar } from "./title-bar";
 export function AppShell() {
   const activeView = useAppStore((state) => state.activeView);
 
-  // 数据型页面（监控 / 搜索 / 剪贴板 / 蓝牙）充分利用窗口宽度，表单型页面保持窄栏更易读。
+  // 数据型页面（监控 / 搜索 / 剪贴板 / 设备）充分利用窗口宽度，表单型页面保持窄栏更易读。
   const contentWidth = {
     home: "max-w-3xl",
     settings: "max-w-3xl",
     monitor: "max-w-none",
     search: "max-w-none",
-    bluetooth: "max-w-none",
+    devices: "max-w-none",
     clipboard: "max-w-none",
     notes: "max-w-none",
     projects: "max-w-none",
@@ -73,7 +73,7 @@ export function AppShell() {
                 {activeView === "search" && <SearchPanel />}
                 {activeView === "settings" && <SettingsPanel />}
                 {activeView === "monitor" && <MonitorPanel />}
-                {activeView === "bluetooth" && <BluetoothPanel />}
+                {activeView === "devices" && <DevicesPanel />}
               </div>
             </ScrollArea>
           )}
