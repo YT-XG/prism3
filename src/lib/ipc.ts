@@ -202,6 +202,8 @@ export interface MacroRecording {
   steps: MacroStep[];
   /** 无法映射成回放按键的事件数。 */
   skipped: number;
+  /** 低级钩子被系统回收 / 被游戏拦截时，本次是否退到了轮询兼容模式。 */
+  compat: boolean;
 }
 
 /** 当前录制 / 回放状态（`get_macro_state` 返回值）。 */
@@ -213,6 +215,8 @@ export interface MacroState {
   pendingRecording: boolean;
   /** 发起录制的窗口 label（`main` / `hub`）；只有它能取回录制结果。 */
   originLabel: string | null;
+  /** 当前录制是否已退到轮询兼容模式（钩子被回收 / 被游戏反作弊拦截）。 */
+  recordingCompat: boolean;
 }
 
 /** 项目的 Git 状态；`isRepo = false` 时不展示分支。 */

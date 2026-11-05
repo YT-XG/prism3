@@ -43,6 +43,7 @@ const INITIAL_STATE: MacroState = {
   playing: false,
   pendingRecording: false,
   originLabel: null,
+  recordingCompat: false,
 };
 
 /** 从按钮停止录制时，把「点停止按钮」产生的那一组鼠标按下 / 抬起步骤丢掉。 */
@@ -116,7 +117,9 @@ export function MacrosPanel() {
       description:
         result.skipped > 0
           ? `跳过 ${result.skipped} 个无法识别的按键；已作为未保存草稿加入，记得保存。`
-          : "已作为未保存草稿加入列表，记得点保存。",
+          : result.compat
+            ? "钩子被系统或游戏拦截，本次已用轮询兼容模式录制；已作为未保存草稿加入，记得保存。"
+            : "已作为未保存草稿加入列表，记得点保存。",
     });
   }, []);
 
@@ -412,7 +415,16 @@ export function MacrosPanel() {
             <span className="absolute inset-0 animate-ping rounded-full bg-red-500/60" />
             <span className="size-2 rounded-full bg-red-500" />
           </span>
-          <span>录制中 · 已记录 {runner.recordedSteps} 步 · 按 F9 结束</span>
+          <span
+            title={
+              runner.recordingCompat
+                ? "游戏或反作弊拦截了系统低级钩子，已自动改用轮询采集；极快的点按仍可能漏记。"
+                : undefined
+            }
+          >
+            录制中 · 已记录 {runner.recordedSteps} 步 · 按 F9 结束
+            {runner.recordingCompat ? " · 兼容模式（轮询）" : ""}
+          </span>
           <span className="text-muted-foreground">
             停止按钮的点击也会被记入，结束后会自动删掉最后一下。
           </span>

@@ -129,6 +129,8 @@ pub struct MacroRecording {
     pub steps: Vec<MacroStep>,
     /// 无法映射成回放按键的事件数（如多媒体键、部分输入法键）。
     pub skipped: usize,
+    /// 本次录制是否退到了「轮询兼容模式」（低级钩子被系统回收或被游戏拦截）。
+    pub compat: bool,
 }
 
 /// 录制 / 回放的全局状态（前端轮询用）。
@@ -144,6 +146,8 @@ pub struct MacroState {
     /// 发起录制的窗口 label（`main` / `hub`）。只有这个窗口的前端页面负责
     /// 取回录制，避免主窗口与组合窗口同时抢同一段结果。
     pub origin_label: Option<String>,
+    /// 当前录制是否已退到轮询兼容模式（钩子被回收 / 被反作弊拦截）。
+    pub recording_compat: bool,
 }
 
 /// 宏列表（Tauri 托管的唯一数据源）。
@@ -171,6 +175,9 @@ static RECORDING_ACTIVE: AtomicBool = AtomicBool::new(false);
 static RECORDED_STEPS: AtomicUsize = AtomicUsize::new(0);
 static PLAYING: AtomicBool = AtomicBool::new(false);
 static RECORDING_ORIGIN_LABEL: Mutex<Option<String>> = Mutex::new(None);
+/// 录制兜底：低级钩子被系统静默回收（回调超时）或被游戏反作弊拦截时，
+/// 录制线程里的看门狗会把它切到「轮询 `GetAsyncKeyState`」的兼容模式。
+static COMPAT_RECORDING: AtomicBool = AtomicBool::new(false);
 
 /// 发起录制 / 回放的窗口。任务结束时由后台线程把它重新显示出来。
 #[derive(Clone)]
@@ -362,6 +369,7 @@ pub fn get_macro_state() -> MacroState {
         playing: PLAYING.load(Ordering::SeqCst),
         pending_recording: imp::has_pending_recording(),
         origin_label: lock_origin_label().clone(),
+        recording_compat: COMPAT_RECORDING.load(Ordering::SeqCst),
     }
 }
 
@@ -382,6 +390,8 @@ pub fn start_macro_recording(app: AppHandle, window: WebviewWindow) -> AppResult
         app: app.clone(),
         label: window.label().to_string(),
     };
+    // 每次录制都从「钩子模式」开始；看门狗确认钩子失效后才会切到轮询。
+    COMPAT_RECORDING.store(false, Ordering::SeqCst);
     // 失败时把旧的 origin 还回去：可能上一段录制还没取回，那个归属不能被本次尝试覆盖。
     let previous_label = lock_origin_label().clone();
     *lock_origin_label() = Some(origin.label.clone());
@@ -681,35 +691,39 @@ fn recorded_step(
 
 #[cfg(windows)]
 mod imp {
+    use std::collections::HashSet;
     use std::mem::size_of;
-    use std::sync::atomic::AtomicU32;
+    use std::sync::atomic::{AtomicU32, AtomicU64};
     use std::sync::mpsc;
     use std::sync::{Mutex, MutexGuard};
     use std::thread::{self, JoinHandle};
     use std::time::{Duration, Instant};
 
-    use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
-    use windows::Win32::System::Threading::GetCurrentThreadId;
+    use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
+    use windows::Win32::System::Threading::{
+        GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY_TIME_CRITICAL,
+    };
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYBD_EVENT_FLAGS,
-        KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN,
-        MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE,
-        MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT,
-        MOUSE_EVENT_FLAGS, VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_SHIFT,
+        GetAsyncKeyState, GetLastInputInfo, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE,
+        KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, LASTINPUTINFO,
+        MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN,
+        MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
+        MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT, MOUSE_EVENT_FLAGS, VIRTUAL_KEY, VK_CONTROL,
+        VK_LBUTTON, VK_LWIN, VK_MBUTTON, VK_MENU, VK_RBUTTON, VK_SHIFT,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, GetMessageW, GetSystemMetrics, PeekMessageW, PostQuitMessage,
-        PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx, KBDLLHOOKSTRUCT,
+        CallNextHookEx, GetCursorPos, GetMessageW, GetSystemMetrics, PeekMessageW, PostQuitMessage,
+        PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT,
         LLKHF_INJECTED, LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, SM_CXVIRTUALSCREEN,
         SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, WH_KEYBOARD_LL, WH_MOUSE_LL,
-        WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_QUIT,
+        WM_APP, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_QUIT,
         WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN,
     };
 
     use super::{
         key_label, parse_combo, recorded_step, single_key_vk, MacroAction, MacroRecording,
-        MacroStep, MouseButton, MAX_STEPS, MOD_ALT, MOD_CTRL, MOD_SHIFT, MOD_WIN, PLAYING,
-        RECORDED_STEPS, RECORDING_ACTIVE, STOP_KEY_VK,
+        MacroStep, MouseButton, COMPAT_RECORDING, MAX_STEPS, MOD_ALT, MOD_CTRL, MOD_SHIFT, MOD_WIN,
+        PLAYING, RECORDED_STEPS, RECORDING_ACTIVE, STOP_KEY_VK,
     };
 
     struct RecordBuffer {
@@ -752,6 +766,11 @@ mod imp {
     static RECORDING_HANDLE: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
     static PLAYBACK_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     static PLAYBACK_HANDLE: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
+    /// 钩子回调被调用的次数（含移动、注入等最终没记成步骤的事件）。
+    /// 看门狗用它判断「系统确实有输入、钩子却一次都没回调」。
+    static HOOK_EVENTS: AtomicU64 = AtomicU64::new(0);
+    /// 看门狗要求录制线程重新安装钩子的线程消息。
+    const WM_APP_REHOOK: u32 = WM_APP + 1;
 
     fn lock_recording() -> MutexGuard<'static, Option<RecordBuffer>> {
         RECORD_BUFFER
@@ -776,6 +795,8 @@ mod imp {
 
         RECORDED_STEPS.store(0, std::sync::atomic::Ordering::SeqCst);
         RECORDING_ACTIVE.store(true, std::sync::atomic::Ordering::SeqCst);
+        HOOK_EVENTS.store(0, std::sync::atomic::Ordering::SeqCst);
+        COMPAT_RECORDING.store(false, std::sync::atomic::Ordering::SeqCst);
         *lock_recording() = Some(RecordBuffer::new());
 
         let (ready_tx, ready_rx) = mpsc::channel();
@@ -787,41 +808,65 @@ mod imp {
                 let _ = unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE) };
                 let tid = unsafe { GetCurrentThreadId() };
                 RECORDING_TID.store(tid, std::sync::atomic::Ordering::SeqCst);
+                // 游戏 / 反作弊 / 高负载下普通优先级线程会被饿死；低级钩子回调
+                // 超过 LowLevelHooksTimeout（默认 300ms）累计 10 次，Windows 就会
+                // 静默把钩子摘掉。先把录制线程提到最高优先级，排除这条路径。
+                let _ =
+                    unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL) };
 
-                let keyboard =
-                    unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), None, 0) };
-                let mouse = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), None, 0) };
+                let (mut keyboard, mut mouse) = match install_hooks() {
+                    Ok((keyboard, mouse)) => (Some(keyboard), Some(mouse)),
+                    Err(err) => {
+                        let _ = ready_tx.send(Err(err));
+                        RECORDING_TID.store(0, std::sync::atomic::Ordering::SeqCst);
+                        RECORDING_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+                        COMPAT_RECORDING.store(false, std::sync::atomic::Ordering::SeqCst);
+                        return;
+                    }
+                };
+                let _ = ready_tx.send(Ok(()));
+                let mut watchdog = spawn_watchdog(tid);
 
-                match (keyboard, mouse) {
-                    (Ok(keyboard), Ok(mouse)) => {
-                        let _ = ready_tx.send(Ok(()));
-                        loop {
-                            let result = unsafe { GetMessageW(&mut msg, None, 0, 0) };
-                            if result.0 <= 0 {
+                loop {
+                    let result = unsafe { GetMessageW(&mut msg, None, 0, 0) };
+                    if result.0 <= 0 {
+                        break;
+                    }
+                    if msg.message == WM_APP_REHOOK {
+                        // 钩子句柄必须由装它的线程重装：先摘旧的，再装新的。
+                        if let Some(hook) = mouse.take() {
+                            let _ = unsafe { UnhookWindowsHookEx(hook) };
+                        }
+                        if let Some(hook) = keyboard.take() {
+                            let _ = unsafe { UnhookWindowsHookEx(hook) };
+                        }
+                        match install_hooks() {
+                            Ok((next_keyboard, next_mouse)) => {
+                                keyboard = Some(next_keyboard);
+                                mouse = Some(next_mouse);
+                                log::info!("宏录制钩子已重新安装");
+                            }
+                            Err(err) => {
+                                log::error!("重新安装宏录制钩子失败：{err}");
                                 break;
                             }
                         }
-                        let _ = unsafe { UnhookWindowsHookEx(mouse) };
-                        let _ = unsafe { UnhookWindowsHookEx(keyboard) };
-                    }
-                    (keyboard, mouse) => {
-                        let keyboard_error = keyboard.as_ref().err().map(|err| err.to_string());
-                        let mouse_error = mouse.as_ref().err().map(|err| err.to_string());
-                        if let Ok(hook) = keyboard {
-                            let _ = unsafe { UnhookWindowsHookEx(hook) };
-                        }
-                        if let Ok(hook) = mouse {
-                            let _ = unsafe { UnhookWindowsHookEx(hook) };
-                        }
-                        let error = keyboard_error
-                            .or(mouse_error)
-                            .unwrap_or_else(|| "未知错误".to_string());
-                        let _ = ready_tx.send(Err(error));
                     }
                 }
 
-                RECORDING_TID.store(0, std::sync::atomic::Ordering::SeqCst);
+                // 先停看门狗再摘钩子：它只会往本线程投消息，但留着运行会污染下一段录制。
                 RECORDING_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+                if let Some(watchdog) = watchdog.take() {
+                    let _ = watchdog.join();
+                }
+                if let Some(hook) = mouse.take() {
+                    let _ = unsafe { UnhookWindowsHookEx(hook) };
+                }
+                if let Some(hook) = keyboard.take() {
+                    let _ = unsafe { UnhookWindowsHookEx(hook) };
+                }
+                COMPAT_RECORDING.store(false, std::sync::atomic::Ordering::SeqCst);
+                RECORDING_TID.store(0, std::sync::atomic::Ordering::SeqCst);
                 // 窗口在开始录制时被藏起来了：无论 F9 还是停止按钮，结束都把它放回来。
                 if let Some(origin) = origin.take() {
                     origin.reveal();
@@ -883,22 +928,256 @@ mod imp {
         }
 
         let buffer = lock_recording().take();
+        let compat = COMPAT_RECORDING.swap(false, std::sync::atomic::Ordering::SeqCst);
         RECORDED_STEPS.store(0, std::sync::atomic::Ordering::SeqCst);
         RECORDING_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
 
         match buffer {
             Some(buffer) => {
                 log::info!(
-                    "宏录制结束：{} 步，跳过 {} 个事件",
+                    "宏录制结束：{} 步，跳过 {} 个事件，兼容模式={compat}",
                     buffer.steps.len(),
                     buffer.skipped
                 );
                 Ok(MacroRecording {
                     steps: buffer.steps,
                     skipped: buffer.skipped,
+                    compat,
                 })
             }
             None => Err(super::AppError::Other("当前没有在录制".into())),
+        }
+    }
+
+    fn key_down(vk: u32) -> bool {
+        unsafe { (GetAsyncKeyState(vk as i32) as u16) & 0x8000 != 0 }
+    }
+
+    /// 兼容轮询专用：是否有修饰键正被按住（用于「裸 F9 结束录制」）。
+    fn modifiers_down() -> bool {
+        [
+            0x10u32, 0xA0, 0xA1, 0x11, 0xA2, 0xA3, 0x12, 0xA4, 0xA5, 0x5B, 0x5C,
+        ]
+        .iter()
+        .any(|vk| key_down(*vk))
+    }
+
+    /// 系统「最近一次输入」的毫秒 tick。看门狗靠它区分「用户没动」和
+    /// 「用户动了、钩子却没收到」。
+    fn last_input_tick() -> u32 {
+        let mut info = LASTINPUTINFO {
+            cbSize: size_of::<LASTINPUTINFO>() as u32,
+            dwTime: 0,
+        };
+        if unsafe { GetLastInputInfo(&mut info) }.as_bool() {
+            info.dwTime
+        } else {
+            0
+        }
+    }
+
+    fn install_hooks() -> Result<(HHOOK, HHOOK), String> {
+        let keyboard = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), None, 0) };
+        let mouse = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), None, 0) };
+        match (keyboard, mouse) {
+            (Ok(keyboard), Ok(mouse)) => Ok((keyboard, mouse)),
+            (keyboard, mouse) => {
+                let keyboard_error = keyboard.as_ref().err().map(|err| err.to_string());
+                let mouse_error = mouse.as_ref().err().map(|err| err.to_string());
+                if let Ok(hook) = keyboard {
+                    let _ = unsafe { UnhookWindowsHookEx(hook) };
+                }
+                if let Ok(hook) = mouse {
+                    let _ = unsafe { UnhookWindowsHookEx(hook) };
+                }
+                Err(keyboard_error
+                    .or(mouse_error)
+                    .unwrap_or_else(|| "未知错误".to_string()))
+            }
+        }
+    }
+
+    fn push_recorded(action: MacroAction, cap_delay: bool) {
+        if let Some(buffer) = lock_recording().as_mut() {
+            buffer.push(action, cap_delay);
+        }
+    }
+
+    /// 钩子彻底失效时的兜底：每 4ms 轮询 `GetAsyncKeyState` + `GetCursorPos`，
+    /// 把按下 / 抬起补成同样的步骤。
+    ///
+    /// 轮询没有 `LowLevelHooksTimeout`，也不依赖钩子链：游戏反作弊屏蔽低级钩子、
+    /// 或钩子被系统回收后，只有这条路仍可能录到输入。开始轮询时已经按住的键
+    /// 只记为「基线」，不补按下、松开时也不补抬起，避免凭空多出半截步骤。
+    fn poll_input(tid: u32) {
+        let _ = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL) };
+        // 只轮询能变成步骤的键（约 100 个），避免每 4ms 扫 0x01..0xFF 的无效查询。
+        // 泛修饰键（VK_SHIFT / VK_CONTROL / VK_MENU）在按住左右键时也会报 down，
+        // 和 0xA0..0xA5 的具体键重复，这里只留具体键，避免修饰键被记两遍。
+        let polled: Vec<u32> = (0x01..=0xFF)
+            .filter(|vk| !matches!(*vk, 0x10..=0x12))
+            .filter(|vk| key_label(*vk).is_some())
+            .collect();
+        let mut held: HashSet<u32> = polled.iter().copied().filter(|vk| key_down(*vk)).collect();
+        let mut initial = held.clone();
+        let buttons = [
+            (VK_LBUTTON.0 as u32, MouseButton::Left),
+            (VK_RBUTTON.0 as u32, MouseButton::Right),
+            (VK_MBUTTON.0 as u32, MouseButton::Middle),
+        ];
+        let mut button_held = [false; 3];
+        let mut button_initial = [false; 3];
+        for (index, (vk, _)) in buttons.iter().enumerate() {
+            button_held[index] = key_down(*vk);
+            button_initial[index] = button_held[index];
+        }
+
+        while RECORDING_ACTIVE.load(std::sync::atomic::Ordering::SeqCst)
+            && COMPAT_RECORDING.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            for vk in &polled {
+                let down = key_down(*vk);
+                let was = held.contains(vk);
+                if down == was {
+                    continue;
+                }
+                if down {
+                    held.insert(*vk);
+                    // 裸 F9 = 结束录制，和钩子路径保持一致。
+                    if *vk == STOP_KEY_VK && !modifiers_down() {
+                        COMPAT_RECORDING.store(false, std::sync::atomic::Ordering::SeqCst);
+                        let _ = unsafe { PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0)) };
+                        return;
+                    }
+                    if let Some(label) = key_label(*vk) {
+                        push_recorded(
+                            MacroAction::KeyDown {
+                                key: label.to_string(),
+                            },
+                            true,
+                        );
+                    }
+                } else {
+                    held.remove(vk);
+                    if initial.remove(vk) {
+                        continue;
+                    }
+                    if let Some(label) = key_label(*vk) {
+                        push_recorded(
+                            MacroAction::KeyUp {
+                                key: label.to_string(),
+                            },
+                            false,
+                        );
+                    }
+                }
+            }
+
+            // 鼠标按键：按下时记录光标坐标，抬起只记按键（和钩子路径同构）。
+            for (index, (vk, button)) in buttons.iter().enumerate() {
+                let down = key_down(*vk);
+                if down == button_held[index] {
+                    continue;
+                }
+                button_held[index] = down;
+                if down {
+                    let mut point = POINT::default();
+                    if unsafe { GetCursorPos(&mut point) }.is_ok() {
+                        push_recorded(
+                            MacroAction::MouseDown {
+                                x: point.x,
+                                y: point.y,
+                                button: *button,
+                            },
+                            true,
+                        );
+                    }
+                } else if button_initial[index] {
+                    button_initial[index] = false;
+                } else {
+                    push_recorded(MacroAction::MouseUp { button: *button }, false);
+                }
+            }
+
+            if RECORDED_STEPS.load(std::sync::atomic::Ordering::SeqCst) >= MAX_STEPS {
+                COMPAT_RECORDING.store(false, std::sync::atomic::Ordering::SeqCst);
+                let _ = unsafe { PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0)) };
+                return;
+            }
+            thread::sleep(Duration::from_millis(4));
+        }
+        COMPAT_RECORDING.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn start_polling_fallback(tid: u32) {
+        if COMPAT_RECORDING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        log::warn!("宏录制：钩子收不到输入，切换轮询兼容模式（游戏 / 反作弊可能拦截了低级钩子）");
+        let spawned = thread::Builder::new()
+            .name("prism3-macro-poll".into())
+            .spawn(move || poll_input(tid));
+        if let Err(err) = spawned {
+            log::error!("启动轮询兼容录制失败：{err}");
+            COMPAT_RECORDING.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// 看门狗：每秒对比「系统最近输入时间」与「钩子回调计数」。
+    ///
+    /// Windows 会在低级钩子回调累计超时 10 次后静默摘钩（不会通知进程），
+    /// 普通桌面场景几乎碰不到，但游戏满载 / 反作弊环境下很常见。有输入、
+    /// 计数不涨就先要求重装；重装后仍然如此就切到轮询兜底。
+    fn spawn_watchdog(tid: u32) -> Option<JoinHandle<()>> {
+        let handle = thread::Builder::new()
+            .name("prism3-macro-watchdog".into())
+            .spawn(move || {
+                let mut last_tick = last_input_tick();
+                let mut last_events = HOOK_EVENTS.load(std::sync::atomic::Ordering::SeqCst);
+                let mut rehooked = false;
+                let mut since_sample = Instant::now();
+                while RECORDING_ACTIVE.load(std::sync::atomic::Ordering::SeqCst) {
+                    thread::sleep(Duration::from_millis(200));
+                    if since_sample.elapsed() < Duration::from_secs(1) {
+                        continue;
+                    }
+                    since_sample = Instant::now();
+                    if !RECORDING_ACTIVE.load(std::sync::atomic::Ordering::SeqCst) {
+                        break;
+                    }
+                    let tick = last_input_tick();
+                    let events = HOOK_EVENTS.load(std::sync::atomic::Ordering::SeqCst);
+                    let input_advanced = tick != last_tick;
+                    last_tick = tick;
+                    if input_advanced && events == last_events {
+                        if !rehooked {
+                            rehooked = true;
+                            log::warn!("宏录制：系统有输入、钩子却没回调，尝试重新安装钩子");
+                            let _ = unsafe {
+                                PostThreadMessageW(tid, WM_APP_REHOOK, WPARAM(0), LPARAM(0))
+                            };
+                            // 重装要几毫秒才生效：从下一刻重新观察，避免把
+                            // 重装窗口里的输入误判成「装了也没回调」。
+                            last_tick = last_input_tick();
+                            last_events = HOOK_EVENTS.load(std::sync::atomic::Ordering::SeqCst);
+                            continue;
+                        }
+                        if !COMPAT_RECORDING.load(std::sync::atomic::Ordering::SeqCst) {
+                            start_polling_fallback(tid);
+                        }
+                    } else if events != last_events {
+                        // 钩子活着：下次再掉线允许先重装一次。
+                        rehooked = false;
+                    }
+                    last_events = events;
+                }
+            });
+        match handle {
+            Ok(handle) => Some(handle),
+            Err(err) => {
+                log::warn!("启动宏录制看门狗失败：{err}");
+                None
+            }
         }
     }
 
@@ -913,7 +1192,12 @@ mod imp {
     }
 
     unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-        if code < 0 || !RECORDING_ACTIVE.load(std::sync::atomic::Ordering::SeqCst) {
+        if code < 0 {
+            return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+        }
+        // 回调计数只给看门狗判断「钩子是否还活着」用，不参与步骤生成。
+        HOOK_EVENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if !RECORDING_ACTIVE.load(std::sync::atomic::Ordering::SeqCst) {
             return unsafe { CallNextHookEx(None, code, wparam, lparam) };
         }
 
@@ -987,7 +1271,11 @@ mod imp {
     }
 
     unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-        if code < 0 || !RECORDING_ACTIVE.load(std::sync::atomic::Ordering::SeqCst) {
+        if code < 0 {
+            return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+        }
+        HOOK_EVENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if !RECORDING_ACTIVE.load(std::sync::atomic::Ordering::SeqCst) {
             return unsafe { CallNextHookEx(None, code, wparam, lparam) };
         }
 
@@ -1129,6 +1417,10 @@ mod imp {
                 let mut msg = MSG::default();
                 let _ = unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE) };
                 let tid = unsafe { GetCurrentThreadId() };
+                // 与录制同理：回放期间游戏占用 CPU 时，低优先级线程的钩子回调
+                // 超时也会被系统摘掉，这里同样提到最高优先级。
+                let _ =
+                    unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL) };
                 match unsafe {
                     SetWindowsHookExW(WH_KEYBOARD_LL, Some(playback_stop_hook), None, 0)
                 } {
@@ -1707,5 +1999,48 @@ mod tests {
             },
         }]);
         assert!(bad.is_err(), "按下 / 抬起只接受单个物理键名");
+    }
+
+    #[test]
+    fn compat_polling_covers_keyboard_and_skips_mouse_buttons() {
+        // 轮询只扫能映射成步骤的键；常见键与 F9（结束键）都必须覆盖。
+        for vk in [
+            0x41u32, 0x30, 0x20, 0x0D, 0x10, 0x11, 0x12, 0x5B, 0x25, 0x26, 0x27, 0x28, 0xBC, 0x60,
+            0x70, 0x78,
+        ] {
+            assert!(key_label(vk).is_some(), "轮询应覆盖键 {vk:#x}");
+        }
+        // 鼠标按键走单独分支；不排除的话会被当成未知键静默丢掉。
+        for vk in [0x01u32, 0x02, 0x04] {
+            assert!(key_label(vk).is_none(), "鼠标键不应出现在键盘轮询表里");
+        }
+        assert!(key_label(STOP_KEY_VK).is_some(), "F9 必须能被轮询识别");
+    }
+
+    #[test]
+    fn recording_results_export_the_compat_flag() {
+        // 前端靠这两个字段提示「这次是兼容模式录的」，序列化名字不能漂。
+        let recording = MacroRecording {
+            steps: Vec::new(),
+            skipped: 0,
+            compat: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&recording).expect("应可序列化")["compat"],
+            true
+        );
+
+        let state = MacroState {
+            recording: false,
+            recorded_steps: 0,
+            playing: false,
+            pending_recording: false,
+            origin_label: None,
+            recording_compat: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&state).expect("应可序列化")["recordingCompat"],
+            true
+        );
     }
 }
