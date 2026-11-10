@@ -140,8 +140,8 @@ export function ProjectEditorDialog({ project, onClose, onSave }: ProjectEditorD
 
   return (
     <Dialog open onOpenChange={(next) => (!next ? onClose() : undefined)}>
-      <DialogContent className="sm:max-w-xl">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col sm:max-w-xl">
+        <DialogHeader className="shrink-0">
           <DialogTitle>{project ? "编辑项目" : "添加项目"}</DialogTitle>
           <DialogDescription>
             命令在应用内运行，不弹命令行窗口；项目目录可选，每条命令也可以单独指定工作目录，
@@ -149,7 +149,7 @@ export function ProjectEditorDialog({ project, onClose, onSave }: ProjectEditorD
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-4">
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
           <div className="grid gap-1.5">
             <span className="text-xs font-medium text-muted-foreground">名称</span>
             <Input
@@ -333,7 +333,7 @@ export function ProjectEditorDialog({ project, onClose, onSave }: ProjectEditorD
           </div>
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button type="button" variant="outline" size="sm" onClick={onClose}>
             取消
           </Button>
