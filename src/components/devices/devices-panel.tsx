@@ -5,6 +5,7 @@ import {
   Bluetooth,
   ChevronRight,
   Headphones,
+  Keyboard,
   Loader2,
   MonitorSmartphone,
   Mouse,
@@ -28,11 +29,13 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useEarbuds } from "@/hooks/use-earbuds";
 import { useMouseBattery } from "@/hooks/use-mouse-battery";
+import { useWirelessBatteries } from "@/hooks/use-wireless-batteries";
 import { displayDeviceName, oneBudUnavailable } from "@/lib/ble-format";
 import {
   connectedDevices,
   earbudsBatterySummary,
   mouseBatterySummary,
+  wirelessBatterySummary,
   type ConnectedDevice,
 } from "@/lib/devices";
 import { formatTimeAgo } from "@/lib/format";
@@ -85,7 +88,9 @@ export function DevicesPanel() {
   const { state } = controls;
   // 鼠标电量：与首页卡片同一个数据源（可见时 30s 一轮，本页卸载即停）。
   const mouse = useMouseBattery();
-  const devices = connectedDevices(state, mouse);
+  // 多品牌无线外设（Logitech HID++ / CompX / 标准 HID）：60s 一轮，本页卸载即停。
+  const wireless = useWirelessBatteries();
+  const devices = connectedDevices(state, mouse, wireless);
 
   /** 二级页选中的设备地址；`null` = 停留在一级设备列表。 */
   const [selectedAddress, setSelectedAddress] = useState<string | null>(null);
@@ -105,7 +110,7 @@ export function DevicesPanel() {
       <div className="flex flex-col gap-4">
         <PanelHeader />
         <ConnectedDevicesCard
-          devices={connectedDevices(null, mouse)}
+          devices={connectedDevices(null, mouse, wireless)}
           controls={controls}
           error={null}
           onOpenEarbuds={() => {}}
@@ -269,7 +274,7 @@ function PanelHeader() {
     <div>
       <h1 className="font-heading text-lg font-medium">设备</h1>
       <p className="text-sm text-muted-foreground">
-        已连接的耳机与鼠标在这里汇总：耳机可进二级页调降噪 / 音效，鼠标（ML903 接收器）只读电量；下方的已记住设备与自动连接不依赖链路。
+        已连接的耳机、鼠标与无线外设在这里汇总：耳机可进二级页调降噪 / 音效，鼠标与无线外设只读电量；下方的已记住设备与自动连接不依赖链路。
       </p>
     </div>
   );
@@ -298,7 +303,7 @@ function ConnectedDevicesCard({
       <CardHeader>
         <CardTitle>已连接的设备</CardTitle>
         <CardDescription>
-          只列此刻真正连上的设备。耳机同一时刻只接受一个连接，厂商手机 App 占线时连接会失败。
+          只列此刻真正连上的设备。耳机同一时刻只接受一个连接，厂商手机 App 占线时连接会失败；无线外设需要插着接收器。
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -307,7 +312,7 @@ function ConnectedDevicesCard({
             <MonitorSmartphone className="size-4 text-muted-foreground" aria-hidden />
             <span className="text-xs text-muted-foreground">还没有已连接的设备</span>
             <span className="text-xs text-muted-foreground">
-              取出耳机（见下方「自动连接」）或插上鼠标的 2.4G 接收器，设备会自动出现在这里。
+              取出耳机（见下方「自动连接」）或插上鼠标 / 键盘的 2.4G 接收器，设备会自动出现在这里。
             </span>
           </div>
         ) : (
@@ -351,6 +356,27 @@ function ConnectedDevicesCard({
                       断开
                     </Button>
                   </div>
+                </li>
+              ) : device.kind === "wireless" ? (
+                <li
+                  key={device.id}
+                  className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 rounded-md bg-muted/50 px-2.5 py-1.5"
+                >
+                  <span className="flex min-w-0 flex-1 items-center gap-2">
+                    <DeviceKindIcon kind={device.category} />
+                    <span className="flex min-w-0 flex-col gap-0.5">
+                      <span className="flex items-center gap-2">
+                        <span className="truncate text-xs font-medium">{device.name}</span>
+                        <Badge variant="secondary">{device.subtitle}</Badge>
+                      </span>
+                      <span className="truncate text-xs text-muted-foreground">
+                        {wirelessBatterySummary(device)} · {deviceSourceLabel(device.source)}
+                      </span>
+                    </span>
+                  </span>
+                  {device.charging === true && (
+                    <Zap className="size-3 text-emerald-600 dark:text-emerald-500" aria-hidden />
+                  )}
                 </li>
               ) : (
                 <li
@@ -713,6 +739,34 @@ function BatteryValue({
 }
 
 
+
+/** 无线外设按类型选图标；未知类型用通用设备图标。 */
+function DeviceKindIcon({ kind }: { kind: Extract<ConnectedDevice, { kind: "wireless" }>["category"] }) {
+  if (kind === "keyboard") {
+    return <Keyboard className="size-3.5 shrink-0 text-brand" aria-hidden />;
+  }
+  if (kind === "headset") {
+    return <Headphones className="size-3.5 shrink-0 text-brand" aria-hidden />;
+  }
+  if (kind === "mouse") {
+    return <Mouse className="size-3.5 shrink-0 text-brand" aria-hidden />;
+  }
+  return <MonitorSmartphone className="size-3.5 shrink-0 text-brand" aria-hidden />;
+}
+
+/** 读数来源的短标签（只帮助排查，不参与逻辑）。 */
+function deviceSourceLabel(source: string): string {
+  switch (source) {
+    case "logitech":
+      return "Logitech HID++";
+    case "compx":
+      return "CompX";
+    case "standard":
+      return "HID 电量字段";
+    default:
+      return source;
+  }
+}
 
 /** 正在建立链路（扫描 / 连接中）：此时不该再发起新的连接或进入二级页。 */
 function busyPhase(phase: BleState["phase"]): boolean {

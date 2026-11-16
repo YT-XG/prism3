@@ -26,6 +26,32 @@ export interface MouseBattery {
   charging: boolean;
 }
 
+/**
+ * 一台多品牌无线外设的电量读数（与 Rust 侧 `WirelessBattery` 一一对应）。
+ *
+ * 数据源见 `src-tauri/src/wireless.rs`：Logitech HID++ 2.0、CompX/ATK `1A 06`、
+ * 标准 HID 电量字段。`percent` 为 `null` 表示「这次没读到」（休眠 / 有线 / 不支持），
+ * 不是 0%；`charging` 为 `null` 表示该协议不提供充电状态。
+ */
+export interface WirelessBattery {
+  /** 稳定标识（接口路径派生）。 */
+  id: string;
+  /** 展示名：设备自报名字 → 产品串 → 型号名。 */
+  name: string;
+  /** `mouse` / `keyboard` / `headset` / `other`。 */
+  kind: "mouse" | "keyboard" | "headset" | "other";
+  /** 电量百分比；`null` = 未上报。 */
+  percent: number | null;
+  /** 充电状态；`null` = 未提供。 */
+  charging: boolean | null;
+  /** 百分比是否由电压估算（Logitech 耳机 / 只报电压的设备），界面显示「约」。 */
+  approx: boolean;
+  /** 读数来源：`logitech` / `compx` / `standard`。 */
+  source: string;
+  /** 传输方式：「2.4G 接收器」/「USB 有线」/「USB HID」。 */
+  transport: string;
+}
+
 /** 与 Rust 侧 `AppConfig` 一一对应。 */
 export interface AppConfig {
   theme: Theme;
@@ -613,6 +639,10 @@ export const ipc = {
   readMouseBattery: () => invoke<MouseBattery>("read_mouse_battery"),
   /** 读取缓存的鼠标电量（窗口挂载 / 热重载后兜底拉取）。 */
   getMouseBattery: () => invoke<MouseBattery>("get_mouse_battery"),
+  /** 读一轮多品牌无线外设电量（Logitech / CompX / 标准 HID；设备页按可见性轮询）。 */
+  readWirelessBatteries: () => invoke<WirelessBattery[]>("read_wireless_batteries"),
+  /** 读取缓存的多品牌无线外设电量（窗口挂载 / 热重载后兜底拉取）。 */
+  getWirelessBatteries: () => invoke<WirelessBattery[]>("get_wireless_batteries"),
   /** 每次轮询变化的动态量（CPU/内存/网络/磁盘）。 */
   getSystemSnapshot: () => invoke<DynamicSnapshot>("get_system_snapshot"),
   /** 不随时间变化的静态信息（硬件型号/OS/主机名），进程启动时采集一次。 */

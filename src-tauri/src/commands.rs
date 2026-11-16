@@ -21,6 +21,7 @@ use crate::paste::{self, PasteOutcome};
 use crate::repo::{note, note_folder, note_link, tag};
 use crate::status::{self, AppStatus, AppStatusState};
 use crate::updater::{self, UpdateSnapshot};
+use crate::wireless::{self, WirelessBattery, WirelessState};
 
 use std::sync::atomic::Ordering;
 
@@ -943,6 +944,20 @@ pub fn read_mouse_battery(state: State<'_, MouseState>) -> AppResult<MouseBatter
 /// 读取缓存的鼠标电量（窗口挂载 / 热重载后兜底拉取）。
 #[tauri::command]
 pub fn get_mouse_battery(state: State<'_, MouseState>) -> MouseBattery {
+    state.current()
+}
+
+/// 读一轮多品牌无线外设电量（Logitech HID++ / CompX / 标准 HID；协议见 `wireless.rs`）。
+///
+/// 由设备页按可见性轮询调用；没有设备时只是一次 HID 枚举，不占常驻线程。
+#[tauri::command(async)]
+pub fn read_wireless_batteries(state: State<'_, WirelessState>) -> AppResult<Vec<WirelessBattery>> {
+    Ok(state.store(wireless::read_all()?))
+}
+
+/// 读取缓存的多品牌无线外设电量（窗口挂载 / 热重载后兜底拉取）。
+#[tauri::command]
+pub fn get_wireless_batteries(state: State<'_, WirelessState>) -> Vec<WirelessBattery> {
     state.current()
 }
 /// 读取蓝牙耳机会话状态（窗口挂载时兜底拉取：事件不缓存）。

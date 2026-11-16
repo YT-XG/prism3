@@ -1,13 +1,15 @@
-import { BatteryCharging, Headphones, Mouse, Zap } from "lucide-react";
+import { BatteryCharging, Headphones, Keyboard, Mouse, Zap } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useEarbuds } from "@/hooks/use-earbuds";
 import { useMouseBattery } from "@/hooks/use-mouse-battery";
+import { useWirelessBatteries } from "@/hooks/use-wireless-batteries";
 import {
   connectedDevices,
   earbudsBatterySummary,
   mouseBatterySummary,
+  wirelessBatterySummary,
 } from "@/lib/devices";
 import { oneBudUnavailable } from "@/lib/ble-format";
 
@@ -21,9 +23,10 @@ import { oneBudUnavailable } from "@/lib/ble-format";
  */
 export function HubDevicesWidget({ active }: { active: boolean }) {
   const earbuds = useEarbuds();
-  // 组合窗口是隐藏而非卸载：失焦时停表，别让后台窗口还在按 30s 读 HID。
+  // 组合窗口是隐藏而非卸载：失焦时停表，别让后台窗口还在按 30s / 60s 读 HID。
   const mouse = useMouseBattery(active);
-  const devices = connectedDevices(earbuds.state, mouse);
+  const wireless = useWirelessBatteries(active);
+  const devices = connectedDevices(earbuds.state, mouse, wireless);
 
   if (devices.length === 0) {
     return (
@@ -88,6 +91,30 @@ export function HubDevicesWidget({ active }: { active: boolean }) {
                 有一只耳机没有上报电量；只有一只在线时，降噪梯度可能切换不动。
               </p>
             ) : null}
+          </li>
+        ) : device.kind === "wireless" ? (
+          <li key={device.id} className="flex flex-col gap-1">
+            <div className="flex items-start justify-between gap-2">
+              <span className="flex min-w-0 items-center gap-1.5">
+                {device.category === "keyboard" ? (
+                  <Keyboard className="size-3.5 shrink-0 text-brand" aria-hidden />
+                ) : device.category === "headset" ? (
+                  <Headphones className="size-3.5 shrink-0 text-brand" aria-hidden />
+                ) : (
+                  <Mouse className="size-3.5 shrink-0 text-brand" aria-hidden />
+                )}
+                <span className="truncate text-xs font-medium">{device.name}</span>
+              </span>
+              <Badge variant="secondary" className="shrink-0">
+                {device.subtitle}
+              </Badge>
+            </div>
+            <p className="flex items-center gap-1 truncate text-[0.65rem] text-muted-foreground">
+              {wirelessBatterySummary(device)}
+              {device.charging === true && (
+                <Zap className="size-3 text-emerald-600 dark:text-emerald-500" aria-hidden />
+              )}
+            </p>
           </li>
         ) : (
           <li key={device.id} className="flex flex-col gap-1">

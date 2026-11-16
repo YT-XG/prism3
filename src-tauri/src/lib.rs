@@ -22,6 +22,7 @@ mod repo;
 mod status;
 mod tray;
 mod updater;
+mod wireless;
 
 use std::sync::RwLock;
 
@@ -183,6 +184,9 @@ pub fn run() {
 
             // 鼠标电量：无设备时不创建任何东西，读数是按需的（见 mouse.rs）。
             app.manage(mouse::MouseState::new());
+
+            // 多品牌无线外设电量（Logitech HID++ / CompX / 标准 HID）：同样按需（见 wireless.rs）。
+            app.manage(wireless::WirelessState::new());
 
             // 剪贴板历史：与「启用与否」无关地先读一次落盘历史（几毫秒），
             // 这样「先禁用、之后重新启用」也能立刻看到旧记录。
@@ -392,6 +396,8 @@ pub fn run() {
             commands::set_dual_device,
             commands::read_mouse_battery,
             commands::get_mouse_battery,
+            commands::read_wireless_batteries,
+            commands::get_wireless_batteries,
             commands::get_clipboard_state,
             commands::search_clipboard,
             commands::get_clipboard_text,
