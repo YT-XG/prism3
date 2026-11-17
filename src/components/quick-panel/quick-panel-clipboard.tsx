@@ -31,6 +31,11 @@ interface QuickPanelClipboardProps {
   focused: boolean;
   /** 每页条数。组合窗口空间大，传更大值让一屏多放几条，其余靠翻页。 */
   pageSize?: number;
+  /**
+   * 每次「从外部呼出本页」自增（目前只有组合窗口传）。变化时清空搜索关键词并
+   * 重新聚焦搜索框，让每次呼出都从干净状态开始。
+   */
+  focusToken?: number;
   /** 请求进入输入聚焦模式；返回是否成功。 */
   onRequestFocus: () => Promise<boolean>;
   /** 退出输入聚焦模式并把键盘焦点还给原应用。 */
@@ -56,6 +61,7 @@ export function QuickPanelClipboard({
   active,
   focused,
   pageSize = DEFAULT_PAGE_SIZE,
+  focusToken,
   onRequestFocus,
   onReleaseFocus,
   onDismiss,
@@ -111,6 +117,14 @@ export function QuickPanelClipboard({
   useEffect(() => {
     if (active && focused) inputRef.current?.focus();
   }, [active, focused]);
+
+  // 组合窗口每次呼出都从干净状态开始：清掉上一次的关键词，并把焦点放回搜索框。
+  useEffect(() => {
+    if (!focusToken) return;
+    setQuery("");
+    setFeedback(null);
+    inputRef.current?.focus();
+  }, [focusToken]);
 
   // 收起 / 翻到别页：关掉弹窗、清掉上一次的提示，免得下次展开看到残留。
   useEffect(() => {

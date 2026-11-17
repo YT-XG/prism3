@@ -10,8 +10,7 @@ export type AppView =
   | "devices"
   | "clipboard"
   | "notes"
-  | "projects"
-  | "macros";
+  | "projects";
 
 interface AppState {
   config: AppConfig | null;
