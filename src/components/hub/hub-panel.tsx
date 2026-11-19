@@ -10,11 +10,11 @@ import {
   ListChecks,
   NotebookPen,
   Search,
-  Triangle,
   X,
   type LucideIcon,
 } from "lucide-react";
 
+import { PrismMark } from "@/components/app/prism-mark";
 import { ClockCard } from "@/components/home/cards/clock";
 import { MonitorCard } from "@/components/home/cards/monitor";
 import { HubDevicesWidget } from "@/components/hub/hub-widgets";
@@ -194,11 +194,11 @@ export function HubPanel() {
       <div
         // 整屏变灰蒙版（参照 Win+G）：窗口本身铺满光标所在的屏幕（见 `hub.rs`），
         // 这一层把桌面压暗，卡片再浮在蒙版上居中排布。
-        className="flex h-full w-full items-center justify-center bg-black/45 p-6 dark:bg-black/55"
+        className="relative flex h-full w-full items-center justify-center overflow-hidden bg-black/45 p-5 dark:bg-black/60"
         onMouseDown={(event) => {
-          // 点**任何一张卡片之外**的地方都收起：整屏蒙版、卡片之间的空隙，以及左侧小视图
-          // 下方那片空白（它露出的就是蒙版，视觉上等同空白）。只判断 `event.target ===
-          // currentTarget` 不够——那些空白处命中的是中间的布局容器，点下去毫无反应。
+          // 点**任何一张卡片之外**的地方都收起：整屏蒙版、卡片之间的空隙。
+          // 只判断 `event.target === currentTarget` 不够——那些空白处命中的是中间的
+          // 布局容器，点下去毫无反应。左侧小视图现在是一整张卡片，卡内空白不再收起。
           //
           // 弹窗 / 下拉浮层挂在 `body` 下（Radix Portal），事件仍会经 React 树冒泡到这里；
           // 它们在视觉上属于「卡片内部」，必须一并放过，否则点一下编辑框的按钮就把 hub 收了。
@@ -214,11 +214,20 @@ export function HubPanel() {
           }
         }}
       >
-        <div className="flex h-full max-h-[900px] w-full max-w-[1440px] min-h-0 flex-col gap-3">
+        {/* 顶部一层极淡的品牌光晕：让整块悬浮面板像从桌面里「透」出来，而不是贴上去的。 */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 h-[420px] bg-[radial-gradient(60%_100%_at_50%_0%,var(--brand-glow),transparent_70%)] opacity-50"
+        />
+
+        <div className="relative flex h-full max-h-[900px] w-full max-w-[1440px] min-h-0 flex-col gap-3">
           <HubTopBar active={view} shortcut={shortcut} onSelect={selectView} />
 
           <div className="flex min-h-0 flex-1 gap-3">
-            <aside className="flex w-64 shrink-0 flex-col gap-3 overflow-y-auto">
+            <aside
+              data-hub-surface=""
+              className="flex w-64 shrink-0 flex-col overflow-x-hidden overflow-y-auto rounded-xl bg-background ring-1 ring-border/50"
+            >
               <HubSmallView icon={Activity} title="系统资源">
                 {/* 小视图常驻可见（不随主视图切换），所以按真实窗口焦点停表。 */}
                 <MonitorCard enabled={focused} />
@@ -233,13 +242,17 @@ export function HubPanel() {
 
             <main className="min-w-0 flex-1">
               {/*
-                卡片一律「无边框、无投影」：整屏已经压了一层变灰蒙版，靠底色 + 圆角就够
-                分层，再套边线 / 阴影反而像框里套框。
+                hub 是悬浮层：允许一圈极细 ring + 一层柔和投影把面板从变灰桌面里托起来；
+                面板内部仍不逐卡加边框 / 模糊，避免「框里套框」。
               */}
               <div
                 data-hub-surface=""
-                className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl bg-background"
+                className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl bg-background shadow-[0_30px_80px_-44px_rgba(0,0,0,0.7)] ring-1 ring-border/50"
               >
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-brand/50 to-transparent"
+                />
                 <HubMainView visible={view === "search"} scroll>
                   <QuickPanelSearch active={isActive("search")} {...commonProps} />
                 </HubMainView>
@@ -306,18 +319,25 @@ function HubTopBar({
   return (
     <header
       data-hub-surface=""
-      className="flex h-11 shrink-0 items-center gap-2 rounded-xl bg-background px-2.5"
+      className="relative flex h-12 shrink-0 items-center gap-2 overflow-hidden rounded-xl bg-background px-3 shadow-[0_18px_50px_-34px_rgba(0,0,0,0.65)] ring-1 ring-border/50"
     >
-      <span className="flex shrink-0 items-baseline gap-1.5 pl-1">
-        <Triangle className="size-3.5 shrink-0 self-center text-brand" strokeWidth={1.5} aria-hidden />
-        <span className="font-heading text-[0.7rem] font-semibold tracking-[0.14em] uppercase">
-          Prism3
-        </span>
-        {version && (
-          <span className="text-[0.65rem] font-medium text-muted-foreground tabular-nums">
-            v{version}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-brand/50 to-transparent"
+      />
+
+      <span className="flex shrink-0 items-center gap-1.5 pl-1">
+        <PrismMark className="size-4 shrink-0" />
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          <span className="font-heading text-[0.7rem] font-semibold tracking-[0.14em] uppercase">
+            Prism3
           </span>
-        )}
+          {version && (
+            <span className="truncate text-[0.65rem] font-medium text-muted-foreground tabular-nums">
+              v{version}
+            </span>
+          )}
+        </span>
       </span>
 
       <span className="mx-0.5 h-5 w-px shrink-0 bg-border" aria-hidden />
@@ -326,7 +346,7 @@ function HubTopBar({
         role="tablist"
         aria-orientation="horizontal"
         aria-label="主视图（← → 切换）"
-        className="flex items-center gap-0.5 rounded-lg bg-muted/60 p-0.5"
+        className="flex items-center gap-0.5 rounded-lg bg-muted/50 p-0.5 ring-1 ring-border/40"
         onKeyDown={(event) => {
           const delta =
             event.key === "ArrowLeft" || event.key === "ArrowUp"
@@ -353,12 +373,23 @@ function HubTopBar({
               title={`${label}（← → 切换）`}
               onClick={() => onSelect(id)}
               className={cn(
-                "flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-                on ? "bg-background text-foreground" : "text-muted-foreground hover:text-foreground",
+                "relative flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                on
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
               )}
             >
-              <Icon className="size-3.5 shrink-0" aria-hidden />
+              <Icon
+                className={cn("size-3.5 shrink-0", on && "text-brand")}
+                aria-hidden
+              />
               {label}
+              {on && (
+                <span
+                  aria-hidden
+                  className="absolute inset-x-3 bottom-0 h-px rounded-full bg-brand"
+                />
+              )}
             </button>
           );
         })}
@@ -366,12 +397,16 @@ function HubTopBar({
 
       <div className="ml-auto flex shrink-0 items-center gap-1.5 pl-3">
         <span className="hidden items-center gap-1 text-[0.65rem] text-muted-foreground lg:flex">
-          <kbd className="rounded border border-border/70 bg-muted/60 px-1 py-0.5 leading-none">←</kbd>
-          <kbd className="rounded border border-border/70 bg-muted/60 px-1 py-0.5 leading-none">→</kbd>
+          <kbd className="rounded border border-border/70 bg-muted/60 px-1 py-0.5 leading-none">
+            ←
+          </kbd>
+          <kbd className="rounded border border-border/70 bg-muted/60 px-1 py-0.5 leading-none">
+            →
+          </kbd>
           切换
         </span>
         {shortcut && (
-          <span className="rounded-md bg-muted/60 px-2 py-1 text-[0.65rem] text-muted-foreground">
+          <span className="rounded-md border border-border/50 bg-muted/50 px-2 py-1 text-[0.65rem] text-muted-foreground">
             {shortcut} 唤起 / 收起
           </span>
         )}
@@ -389,7 +424,7 @@ function HubTopBar({
   );
 }
 
-/** 左侧小视图外壳：与主视图同一套卡片外观，标题行带图标。 */
+/** 左侧小视图：三段内容共用一张卡片，中间用发丝分隔线，不再一卡套一卡。 */
 function HubSmallView({
   icon: Icon,
   title,
@@ -400,10 +435,7 @@ function HubSmallView({
   children: ReactNode;
 }) {
   return (
-    <section
-      data-hub-surface=""
-      className="flex shrink-0 flex-col gap-2 rounded-xl bg-background px-3.5 py-3 text-sm"
-    >
+    <section className="flex shrink-0 flex-col gap-2 border-t border-border/40 px-3.5 py-3 first:border-t-0">
       <header className="flex items-center gap-2">
         <Icon className="size-3.5 shrink-0 text-brand" aria-hidden />
         <h2 className="min-w-0 truncate font-heading text-[0.8125rem] font-semibold">{title}</h2>

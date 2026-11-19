@@ -8,6 +8,8 @@ import { useAppVersion } from "@/hooks/use-app-version";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/stores/app-store";
 
+import { PrismMark } from "./prism-mark";
+
 /**
  * 自定义标题栏（无边框窗口）。
  *
@@ -51,15 +53,18 @@ export function TitleBar() {
       data-tauri-drag-region="deep"
       className="flex h-12 shrink-0 items-center select-none"
     >
-      <div className="flex w-40 shrink-0 items-baseline gap-1.5 px-3">
-        <span className="font-heading text-xs font-semibold tracking-[0.14em] uppercase">
-          Prism3
-        </span>
-        {version && (
-          <span className="text-[0.65rem] font-medium text-muted-foreground tabular-nums">
-            v{version}
+      <div className="flex w-40 shrink-0 items-center gap-2 px-3">
+        <PrismMark className="size-4 shrink-0 text-foreground/70" />
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          <span className="font-heading text-xs font-semibold tracking-[0.14em] uppercase">
+            Prism3
           </span>
-        )}
+          {version && (
+            <span className="truncate text-[0.65rem] font-medium text-muted-foreground tabular-nums">
+              v{version}
+            </span>
+          )}
+        </span>
       </div>
 
       <div className="flex flex-1 items-center justify-end gap-0.5 pr-1">
