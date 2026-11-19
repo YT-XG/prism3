@@ -33,15 +33,17 @@ const settingsItem: { id: AppView; label: string; icon: typeof House } = {
 };
 
 /**
- * 左侧导航（参照 x-hub 的极简侧轨）：固定 160px，当前项用强调色软底 + 左侧光束，
- * 不用下划线；设置常驻底部，日常入口不会因为它而上下浮动。
+ * 左侧导航（极简侧轨）：固定 160px，无底色、无边框，入口直接浮在页面底上。
+ *
+ * 当前项 = 强调色软底 + 左侧 2px 光束 + 图标染色；为了让「选中」在浅色软底上
+ * 依然立得住，文字同时提一档字重。设置常驻底部，与日常入口用发丝线分隔。
  */
 export function AppSidebar() {
   const activeView = useAppStore((state) => state.activeView);
   const setActiveView = useAppStore((state) => state.setActiveView);
 
   return (
-    <aside className="flex w-40 shrink-0 flex-col overflow-y-auto p-2 pt-1">
+    <aside className="flex w-40 shrink-0 flex-col overflow-y-auto px-2 pt-1 pb-3">
       <nav className="flex flex-col gap-0.5" aria-label="主导航">
         {items.map(({ id, label, icon: Icon }) => {
           const active = activeView === id;
@@ -58,7 +60,7 @@ export function AppSidebar() {
       </nav>
 
       <div className="mt-auto flex flex-col gap-0.5 pt-3">
-        <span className="mb-1 h-px bg-border/60" aria-hidden />
+        <span className="mb-1.5 h-px bg-border/50" aria-hidden />
         <NavButton
           active={activeView === settingsItem.id}
           label={settingsItem.label}
@@ -87,19 +89,26 @@ function NavButton({
       aria-current={active ? "page" : undefined}
       aria-label={label}
       className={cn(
-        "relative h-8 justify-start gap-2 pl-3",
-        active && "bg-brand-soft text-foreground hover:bg-brand-soft",
+        "relative h-9 justify-start gap-2.5 rounded-lg pr-3 pl-3 text-[0.8125rem]",
+        active
+          ? "bg-brand-soft font-medium text-foreground hover:bg-brand-soft"
+          : "font-normal text-muted-foreground hover:text-foreground",
       )}
       onClick={onClick}
     >
       <span
         aria-hidden
         className={cn(
-          "absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-brand transition-opacity",
+          "absolute inset-y-2 left-0 w-0.5 rounded-full bg-brand transition-opacity duration-200",
           active ? "opacity-100" : "opacity-0",
         )}
       />
-      <Icon className="size-4 shrink-0" />
+      <Icon
+        className={cn(
+          "size-[15px] shrink-0 transition-colors",
+          active ? "text-brand" : "text-muted-foreground",
+        )}
+      />
       <span className="truncate">{label}</span>
     </Button>
   );

@@ -22,7 +22,7 @@ interface MetricChartProps {
 }
 
 /** uPlot 的 React 封装：迷你折线，隐藏坐标轴、图例与交互。 */
-export function MetricChart({ xs, ys, series, height = 88, max }: MetricChartProps) {
+export function MetricChart({ xs, ys, series, height = 104, max }: MetricChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const plotRef = useRef<uPlot | null>(null);
   // 颜色 / 系列变化时需重建实例（canvas 取不到 CSS 变量）。

@@ -4,6 +4,7 @@ import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
 import { X } from "lucide-react";
 import { toast } from "sonner";
 
+import { PageHeader } from "@/components/app/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -70,13 +71,11 @@ export function MonitorPanel() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-2">
-        <h1 className="font-heading text-lg font-medium">监控</h1>
-        {cpuUsage === null && <Badge variant="secondary">采集预热中</Badge>}
-      </div>
-      <p className="text-sm text-muted-foreground">
-        每 1 秒采集一次，展示最近 60 秒的趋势；离开本页即停止采集。
-      </p>
+      <PageHeader
+        title="监控"
+        badge={cpuUsage === null ? <Badge variant="secondary">采集预热中</Badge> : undefined}
+        description="每 1 秒采集一次，展示最近 60 秒的趋势；离开本页即停止采集。"
+      />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <MetricCard

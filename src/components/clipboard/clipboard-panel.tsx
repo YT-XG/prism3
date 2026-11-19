@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "re
 
 import { ClipboardList as ClipboardListIcon, Info, Search, X } from "lucide-react";
 
+import { PageHeader } from "@/components/app/page-header";
 import { ClipboardEditDialog } from "@/components/clipboard/clipboard-edit-dialog";
 import { ClipboardList } from "@/components/clipboard/clipboard-list";
 import { ClipboardStatus } from "@/components/clipboard/clipboard-status";
@@ -94,14 +95,16 @@ export function ClipboardPanel() {
 
   return (
     <div className="glass-card flex h-full min-h-0 flex-col gap-4 rounded-xl bg-card p-5">
-      <div className="shrink-0">
-        <h1 className="font-heading text-lg font-medium">剪贴板</h1>
-        <p className="text-sm text-muted-foreground">
-          记录复制过的文本与图片。点击一条记录
-          {pasteOnClick ? "即可回到上一个窗口并粘贴" : "即可复制到系统剪贴板"}
-          ；↑↓ 选择 · Enter {pasteOnClick ? "粘贴" : "复制"} · Ctrl+C 仅复制 · Delete 删除。
-        </p>
-      </div>
+      <PageHeader
+        title="剪贴板"
+        description={
+          <>
+            记录复制过的文本与图片。点击一条记录
+            {pasteOnClick ? "即可回到上一个窗口并粘贴" : "即可复制到系统剪贴板"}
+            ；↑↓ 选择 · Enter {pasteOnClick ? "粘贴" : "复制"} · Ctrl+C 仅复制 · Delete 删除。
+          </>
+        }
+      />
 
       <div className="relative shrink-0">
         <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />

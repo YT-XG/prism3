@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { PageHeader } from "@/components/app/page-header";
 import { UpdateCard } from "@/components/app/update-card";
 import { ClipboardStatus } from "@/components/clipboard/clipboard-status";
 import { SearchIndexStatus } from "@/components/search/search-status";
@@ -192,12 +193,10 @@ export function SettingsPanel() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="font-heading text-lg font-medium">设置</h1>
-        <p className="text-sm text-muted-foreground">
-          这里的改动会通过 IPC 交给 Rust 侧持久化。
-        </p>
-      </div>
+      <PageHeader
+        title="设置"
+        description="这里的改动会通过 IPC 交给 Rust 侧持久化。"
+      />
 
       <Card>
         <CardHeader>

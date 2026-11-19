@@ -11,6 +11,8 @@ interface HomeCardProps {
   placement: HomePlacement;
   icon: LucideIcon;
   title: string;
+  /** 在网格里的序号：只用来错开入场动画，不参与布局。 */
+  index?: number;
   editing: boolean;
   /** 正在被拖动 / 缩放：原卡片半透明，位置由虚线预览块指示。 */
   dragging: boolean;
@@ -30,6 +32,7 @@ export function HomeCard({
   placement,
   icon: Icon,
   title,
+  index = 0,
   editing,
   dragging,
   onRemove,
@@ -42,23 +45,26 @@ export function HomeCard({
       className={cn(
         // `min-w-0`：网格项默认 `min-width:auto`，内部长文本（路径等）会把卡片撑得比
         // 自己的轨道还宽，进而让整个网格溢出、冒出横向滚动条。归零后由 `overflow-hidden` 裁切。
-        "group/card relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl bg-card text-sm text-card-foreground ring-1 ring-[color:var(--frost-border)] [background-image:var(--frost-surface)]",
+        "card-enter group/card relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-xl bg-card text-sm text-card-foreground ring-1 ring-[color:var(--frost-border)] transition-[box-shadow,background-color] duration-200 [background-image:var(--frost-surface)] hover:ring-[color:color-mix(in_srgb,var(--brand)_22%,var(--frost-border))]",
         editing && "ring-brand/35",
         dragging && "opacity-35",
       )}
       style={{
         gridColumn: `${placement.x + 1} / span ${placement.w}`,
         gridRow: `${placement.y + 1} / span ${placement.h}`,
+        animationDelay: `${Math.min(index, 9) * 24}ms`,
       }}
     >
       <header
         className={cn(
-          "flex shrink-0 items-center gap-2 px-4 pt-3 pb-2",
+          "flex shrink-0 items-center gap-2 border-b border-border/45 px-4 pt-3 pb-2.5",
           editing && "cursor-grab touch-none select-none active:cursor-grabbing",
         )}
         onPointerDown={editing ? onDragStart : undefined}
       >
-        <Icon className="size-3.5 shrink-0 text-brand" aria-hidden="true" />
+        <span className="flex size-5 shrink-0 items-center justify-center rounded-[5px] bg-brand-soft text-brand">
+          <Icon className="size-3" aria-hidden="true" />
+        </span>
         <h2 className="min-w-0 truncate font-heading text-[0.8125rem] font-semibold tracking-[-0.01em]">
           {title}
         </h2>
@@ -84,7 +90,7 @@ export function HomeCard({
       <div
         inert={editing ? true : undefined}
         className={cn(
-          "min-h-0 flex-1 overflow-y-auto px-4 pb-3",
+          "min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-3",
           editing && "pointer-events-none opacity-80 select-none",
         )}
       >

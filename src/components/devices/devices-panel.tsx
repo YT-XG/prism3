@@ -15,6 +15,7 @@ import {
   Zap,
 } from "lucide-react";
 
+import { PageHeader } from "@/components/app/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -271,12 +272,10 @@ export function DevicesPanel() {
 /** 页面标题（一级与「正在读取」共用）。 */
 function PanelHeader() {
   return (
-    <div>
-      <h1 className="font-heading text-lg font-medium">设备</h1>
-      <p className="text-sm text-muted-foreground">
-        已连接的耳机、鼠标与无线外设在这里汇总：耳机可进二级页调降噪 / 音效，鼠标与无线外设只读电量；下方的已记住设备与自动连接不依赖链路。
-      </p>
-    </div>
+    <PageHeader
+      title="设备"
+      description="已连接的耳机、鼠标与无线外设在这里汇总：耳机可进二级页调降噪 / 音效，鼠标与无线外设只读电量；下方的已记住设备与自动连接不依赖链路。"
+    />
   );
 }
 

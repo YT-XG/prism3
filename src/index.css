@@ -80,9 +80,9 @@
     --bg-page: #f7f8fa;
     --base-a: #ffffff;
     --base-b: #f5f7fa;
-    --glow-a: hsl(var(--hue-a) var(--tint-sat) 58% / 0.16);
-    --glow-b: hsl(var(--hue-b) var(--tint-sat) 60% / 0.11);
-    --glow-c: hsl(var(--hue-c) var(--tint-sat) 60% / 0.14);
+    --glow-a: hsl(var(--hue-a) var(--tint-sat) 58% / 0.2);
+    --glow-b: hsl(var(--hue-b) var(--tint-sat) 60% / 0.14);
+    --glow-c: hsl(var(--hue-c) var(--tint-sat) 60% / 0.17);
     --app-bg:
         radial-gradient(1200px 800px at 10% -10%, var(--glow-a), transparent 55%),
         radial-gradient(1000px 700px at 102% 2%, var(--glow-b), transparent 55%),
@@ -318,6 +318,7 @@ html[data-wallpaper].dark aside svg {
   .glass-card {
     background-image: var(--frost-surface);
     border: 1px solid var(--frost-border);
+    box-shadow: var(--frost-edge);
     }
   /* 瞬态表面（弹窗/下拉）才允许真模糊，一次性成本 */
   .glass-overlay {
@@ -325,6 +326,16 @@ html[data-wallpaper].dark aside svg {
     box-shadow: 0 24px 60px -24px rgba(0, 0, 0, 0.35);
     border: 1px solid var(--frost-border);
     }
+
+  /* 页面进入：只做 6px 上移 + 淡入，切页时给一个「落位」的物理感，不做缩放。 */
+  .view-enter {
+    animation: view-in 240ms cubic-bezier(0.22, 0.8, 0.24, 1) both;
+  }
+  /* 卡片入场：首屏卡片按 24ms 步进错开，只淡入 + 4px 上移。 */
+  .card-enter {
+    animation: card-in 260ms cubic-bezier(0.22, 0.8, 0.24, 1) both;
+  }
+
 
   /*
    * 壁纸层：整层图片先按配置模糊，再叠一层可调蒙版；
@@ -353,6 +364,35 @@ html[data-wallpaper].dark aside svg {
     inset: 0;
     background: var(--wallpaper-veil-color);
     }
+}
+
+@keyframes view-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .view-enter,
+  .card-enter {
+    animation: none;
+  }
 }
 
 /*

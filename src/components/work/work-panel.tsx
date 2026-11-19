@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { PageHeader } from "@/components/app/page-header";
 import { WorkLogEditDialog } from "@/components/work/work-log-edit-dialog";
 import { WorkReportDialog } from "@/components/work/work-report-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -403,18 +404,16 @@ export function WorkPanel({ active = true }: { active?: boolean }) {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col gap-3">
-        <div className="flex items-end justify-between gap-3">
-          <div className="flex flex-col gap-0.5">
-            <h1 className="font-heading text-lg font-semibold tracking-[-0.01em]">工作记录</h1>
-            <p className="text-xs text-muted-foreground">
-              记下每天完成了什么；周报由记录自动汇总，不用再回忆。
-            </p>
-          </div>
-          <Button size="sm" className="gap-1.5" onClick={() => setReportOpen(true)}>
-            <FileText className="size-3.5" aria-hidden />
-            生成本周报告
-          </Button>
-        </div>
+        <PageHeader
+          title="工作记录"
+          description="记下每天完成了什么；周报由记录自动汇总，不用再回忆。"
+          actions={
+            <Button size="sm" className="gap-1.5" onClick={() => setReportOpen(true)}>
+              <FileText className="size-3.5" aria-hidden />
+              生成本周报告
+            </Button>
+          }
+        />
 
         <div className="glass-card rounded-xl p-3">
           <div className="mb-2 flex flex-wrap items-center gap-1.5">

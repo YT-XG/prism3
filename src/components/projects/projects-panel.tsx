@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { PageHeader } from "@/components/app/page-header";
 import {
   ProjectEditorDialog,
   type ProjectDraft,
@@ -273,18 +274,16 @@ export function ProjectsPanel() {
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col gap-4">
-      <div className="flex shrink-0 flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="font-heading text-lg font-medium">项目</h1>
-          <p className="text-sm text-muted-foreground">
-            左侧选择项目，右侧启动命令并实时查看输出（不弹命令行窗口）。
-          </p>
-        </div>
-        <Button size="sm" onClick={() => setEditor(null)}>
-          <Plus data-icon="inline-start" />
-          添加项目
-        </Button>
-      </div>
+      <PageHeader
+        title="项目"
+        description="左侧选择项目，右侧启动命令并实时查看输出（不弹命令行窗口）。"
+        actions={
+          <Button size="sm" onClick={() => setEditor(null)}>
+            <Plus data-icon="inline-start" />
+            添加项目
+          </Button>
+        }
+      />
 
       {projects.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border/70 px-6 py-14 text-center">
@@ -536,7 +535,7 @@ export function ProjectsPanel() {
                     }
                   />
                 ) : (
-                  <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border/70 px-6 text-center">
+                  <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border/60 px-6 text-center ring-1 ring-[color:var(--frost-border)] [background-image:var(--frost-surface)]">
                     <span className="flex size-10 items-center justify-center rounded-xl bg-brand-soft text-brand">
                       <Terminal className="size-5" aria-hidden="true" />
                     </span>

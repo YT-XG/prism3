@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { PageHeader } from "@/components/app/page-header";
 import { BluetoothCard } from "@/components/home/cards/bluetooth";
 import { ClipboardCard } from "@/components/home/cards/clipboard";
 import { ClockCard } from "@/components/home/cards/clock";
@@ -259,52 +260,52 @@ export function HomeDashboard() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col px-6 py-5 pb-4">
-      <div className="mb-3 flex shrink-0 flex-wrap items-center gap-2">
-        <div className="home-heading min-w-0">
-          <h1 className="home-heading-title font-heading text-base font-semibold">首页</h1>
-          <p className="home-heading-subtitle text-[0.65rem] text-muted-foreground">
-            {editing
-              ? "拖动卡片标题移动 · 右下角改尺寸 · 改动即时保存"
-              : "常用模块一览，布局会自动保存"}
-          </p>
-        </div>
-
-        <div className="ml-auto flex items-center gap-1">
-          {editing && (
-            <>
-              <AddModuleMenu
-                available={availableModules}
-                onAdd={(id) => {
-                  if (addModule(id)) toast.success("已添加模块");
-                }}
-              />
-              <Button variant="ghost" size="sm" onClick={handleReset}>
-                <RotateCcw data-icon="inline-start" />
-                恢复默认
-              </Button>
-            </>
-          )}
-
-          <Button
-            variant={editing ? "default" : "outline"}
-            size="sm"
-            onClick={() => setEditing((value) => !value)}
-          >
-            {editing ? (
+    <div className="flex h-full min-h-0 flex-col px-7 pt-6 pb-5">
+      <PageHeader
+        className="mb-4"
+        title="首页"
+        description={
+          editing
+            ? "拖动卡片标题移动 · 右下角改尺寸 · 改动即时保存"
+            : "常用模块一览，布局会自动保存"
+        }
+        actions={
+          <>
+            {editing && (
               <>
-                <Check data-icon="inline-start" />
-                完成
-              </>
-            ) : (
-              <>
-                <PencilLine data-icon="inline-start" />
-                编辑布局
+                <AddModuleMenu
+                  available={availableModules}
+                  onAdd={(id) => {
+                    if (addModule(id)) toast.success("已添加模块");
+                  }}
+                />
+                <Button variant="ghost" size="sm" onClick={handleReset}>
+                  <RotateCcw data-icon="inline-start" />
+                  恢复默认
+                </Button>
               </>
             )}
-          </Button>
-        </div>
-      </div>
+
+            <Button
+              variant={editing ? "default" : "outline"}
+              size="sm"
+              onClick={() => setEditing((value) => !value)}
+            >
+              {editing ? (
+                <>
+                  <Check data-icon="inline-start" />
+                  完成
+                </>
+              ) : (
+                <>
+                  <PencilLine data-icon="inline-start" />
+                  编辑布局
+                </>
+              )}
+            </Button>
+          </>
+        }
+      />
 
       <div
         className={cn(
@@ -354,7 +355,7 @@ export function HomeDashboard() {
                 rowCount * HOME_ROW_MIN_PX + (rowCount - 1) * HOME_GAP_PX,
             }}
           >
-            {placements.map((placement) => {
+            {placements.map((placement, index) => {
               const def = homeModuleDef(placement.id);
               const Icon = MODULE_ICONS[placement.id];
               const Body = MODULE_BODIES[placement.id];
@@ -363,6 +364,7 @@ export function HomeDashboard() {
               return (
                 <HomeCard
                   key={placement.id}
+                  index={index}
                   placement={placement}
                   icon={Icon}
                   title={def.title}
