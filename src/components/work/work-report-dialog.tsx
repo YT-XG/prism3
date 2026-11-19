@@ -19,14 +19,26 @@ interface WorkReportDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   logs: WorkLog[];
+  /** 未来计划：追加在周报末尾。 */
+  plans?: WorkLog[];
   from: number;
   to: number;
 }
 
-/** 周报预览：按项目分组生成 Markdown，一键复制到剪贴板。 */
-export function WorkReportDialog({ open, onOpenChange, logs, from, to }: WorkReportDialogProps) {
+/** 周报预览：按项目分组生成 Markdown，并附上未来计划，一键复制到剪贴板。 */
+export function WorkReportDialog({
+  open,
+  onOpenChange,
+  logs,
+  plans = [],
+  from,
+  to,
+}: WorkReportDialogProps) {
   const [copied, setCopied] = useState(false);
-  const report = useMemo(() => buildWorkReport(logs, from, to), [logs, from, to]);
+  const report = useMemo(
+    () => buildWorkReport(logs, from, to, plans),
+    [logs, plans, from, to],
+  );
 
   const copy = async () => {
     try {
@@ -51,7 +63,9 @@ export function WorkReportDialog({ open, onOpenChange, logs, from, to }: WorkRep
         <DialogHeader>
           <DialogTitle>本周工作报告</DialogTitle>
           <DialogDescription>
-            由本周 {logs.length} 条记录生成，按项目分组；复制后可直接粘进日报 / 周报。
+            由本周 {logs.length} 条完成记录
+            {plans.length > 0 ? ` + ${plans.length} 条未来计划` : ""}
+            生成，按项目分组；复制后可直接粘进日报 / 周报。
           </DialogDescription>
         </DialogHeader>
 

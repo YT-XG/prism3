@@ -202,6 +202,9 @@ export interface PortStatus {
 /** 工作记录的类型（与 Rust `WORK_KINDS` / 数据库 CHECK 约束一一对应）。 */
 export type WorkLogKind = "dev" | "bug" | "support" | "doc" | "meeting" | "ops" | "other";
 
+/** 工作记录状态：done = 已完成；planned = 提前列出的未来工作。 */
+export type WorkLogStatus = "done" | "planned";
+
 /** 工作记录的项目（单层容器，不嵌套）。 */
 export interface WorkProject {
   id: number;
@@ -222,6 +225,8 @@ export interface WorkLog {
   projectId: number | null;
   projectName: string;
   kind: WorkLogKind;
+  /** `planned` 时 `finishedAt` 是计划日期。 */
+  status: WorkLogStatus;
   hours: number;
   finishedAt: number;
   source: string;
@@ -745,28 +750,34 @@ export const ipc = {
   pruneClipboardHistory: () => invoke<void>("prune_clipboard_history"),
 
   // ---- 工作记录（完成台账） ----
-  /** 按完成时间取 `[from, to]` 内的记录（秒级时间戳，最新在前）。 */
+  /** 按完成时间取 `[from, to]` 内的**已完成**记录（秒级时间戳，最新在前）。 */
   listWorkLogs: (from: number, to: number) =>
     invoke<WorkLog[]>("list_work_logs", { from, to }),
-  /** 记一条完成的活（`finishedAt` 缺省 = 现在）。 */
+  /** 全部未来计划（按计划日期正序）。 */
+  listWorkPlans: () => invoke<WorkLog[]>("list_work_plans"),
+  /** 记一条完成的活或一条未来计划（`finishedAt` 缺省 = 现在；计划时它是计划日期）。 */
   createWorkLog: (args: {
     title: string;
     detail?: string;
     projectId?: number | null;
     kind?: WorkLogKind;
+    status?: WorkLogStatus;
     hours?: number;
     finishedAt?: number;
   }) => invoke<WorkLog>("create_work_log", args),
-  /** 修改一条记录（`finishedAt` 缺省沿用原值）。 */
+  /** 修改一条记录 / 计划（`finishedAt` 缺省沿用原值）。 */
   updateWorkLog: (args: {
     id: number;
     title: string;
     detail?: string;
     projectId?: number | null;
     kind?: WorkLogKind;
+    status?: WorkLogStatus;
     hours?: number;
     finishedAt?: number;
   }) => invoke<WorkLog>("update_work_log", args),
+  /** 把一条未来计划标记为完成（完成时间 = 现在）。 */
+  completeWorkPlan: (id: number) => invoke<WorkLog>("complete_work_plan", { id }),
   /** 删除一条记录。 */
   deleteWorkLog: (id: number) => invoke<void>("delete_work_log", { id }),
   /** 列出未归档的工作项目。 */

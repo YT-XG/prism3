@@ -89,9 +89,11 @@ pub struct WorkProject {
     pub created_at: u64,
 }
 
-/// 一条工作完成记录（台账主表）。
+/// 一条工作记录（台账主表）。
 ///
-/// `hours = 0` 表示「没填工时」，不是零耗时；`project_name` 由查询时 JOIN 带出，
+/// `status = "done"` 是已完成的记录，`"planned"` 是提前列出的未来工作
+/// （此时 `finished_at` 表示**计划日期**）。
+/// `hours = 0` 表示「没填工时」；`project_name` 由查询时 JOIN 带出，
 /// 项目删除后为空串。`source` 预留 `manual` / `task` / `git`，本版只写 `manual`。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -102,6 +104,7 @@ pub struct WorkLog {
     pub project_id: Option<i64>,
     pub project_name: String,
     pub kind: String,
+    pub status: String,
     pub hours: f64,
     pub finished_at: u64,
     pub source: String,

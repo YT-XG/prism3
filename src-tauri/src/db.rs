@@ -23,9 +23,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::Connection;
 
-/// 逻辑 schema 版本。1 = 速记 / 剪贴板；2 = 新增工作记录（`work_projects` / `work_logs`）。
-/// 新表一律 `IF NOT EXISTS`，老库打开时自动补齐，无需补列逻辑。
-const SCHEMA_VERSION: u32 = 2;
+/// 逻辑 schema 版本。1 = 速记 / 剪贴板；2 = 工作记录；3 = 工作记录的「计划 / 完成」状态。
+/// 新表一律 `IF NOT EXISTS`，老库打开时自动补表 / 补列，无需人工迁移。
+const SCHEMA_VERSION: u32 = 3;
 
 /// 由 Tauri 托管的数据库状态。
 ///
@@ -186,6 +186,9 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
           project_id INTEGER REFERENCES work_projects(id) ON DELETE SET NULL,
           kind TEXT NOT NULL DEFAULT 'dev'
             CHECK (kind IN ('dev','bug','support','doc','meeting','ops','other')),
+          -- done = 已完成的记录；planned = 提前列出的未来工作（finished_at 此时是计划日期）。
+          status TEXT NOT NULL DEFAULT 'done'
+            CHECK (status IN ('done','planned')),
           hours REAL NOT NULL DEFAULT 0,
           finished_at INTEGER NOT NULL,
           source TEXT NOT NULL DEFAULT 'manual',
@@ -206,6 +209,22 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_work_logs_project  ON work_logs(project_id);
         ",
     )?;
+
+    // v3：老库的 `work_logs` 没有 `status` 列——`CREATE TABLE IF NOT EXISTS` 不会补列，
+    // 这里显式检查并 `ALTER TABLE`。已有记录一律按「已完成」处理。
+    let has_status: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('work_logs') WHERE name = 'status'",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_status == 0 {
+        conn.execute(
+            "ALTER TABLE work_logs ADD COLUMN status TEXT NOT NULL DEFAULT 'done'
+             CHECK (status IN ('done','planned'))",
+            [],
+        )?;
+        log::info!("已为 work_logs 补充 status 列（老记录默认 done）");
+    }
 
     // 清理历史遗留的内置「剪藏」文件夹 / 标签（幂等、**不再新建**）。
     //
@@ -252,6 +271,15 @@ mod tests {
         ] {
             assert!(table_exists(&conn, table), "缺表 {table}");
         }
+        // v3：工作记录必须有 status 列
+        let has_status: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('work_logs') WHERE name = 'status'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_status, 1, "work_logs 缺 status 列");
         // 全新库不再新建任何内置（builtin）文件夹 / 标签
 
         let n: i64 = conn
@@ -268,6 +296,54 @@ mod tests {
             })
             .unwrap();
         assert_eq!(n, 0, "不应再新建内置标签");
+    }
+
+    #[test]
+    fn legacy_work_logs_get_status_done() {
+        // 模拟 v2 老库：work_logs 没有 status 列。迁移后应补列且老记录按 done 处理。
+        let conn = Connection::open_in_memory().unwrap();
+        apply_pragmas(&conn).unwrap();
+        conn.execute_batch(
+            "
+            CREATE TABLE work_logs (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              title TEXT NOT NULL,
+              detail TEXT NOT NULL DEFAULT '',
+              project_id INTEGER,
+              kind TEXT NOT NULL DEFAULT 'dev',
+              hours REAL NOT NULL DEFAULT 0,
+              finished_at INTEGER NOT NULL,
+              source TEXT NOT NULL DEFAULT 'manual',
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            );
+            ",
+        )
+        .unwrap();
+        let now = now_secs() as i64;
+        conn.execute(
+            "INSERT INTO work_logs (title, finished_at, created_at, updated_at)
+             VALUES ('老记录', ?1, ?1, ?1)",
+            params![now],
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let has_status: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('work_logs') WHERE name = 'status'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_status, 1);
+        let status: String = conn
+            .query_row("SELECT status FROM work_logs WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(status, "done");
     }
 
     #[test]

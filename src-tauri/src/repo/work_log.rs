@@ -12,9 +12,14 @@ const PROJECT_COLS: &str = "id, name, archived_at, created_at";
 
 /// 日志查询列顺序，必须与 `row_to_log` 一一对应（项目名由 JOIN 带出）。
 const LOG_COLS: &str = "l.id, l.title, l.detail, l.project_id, COALESCE(p.name, ''), \
-     l.kind, l.hours, l.finished_at, l.source, l.created_at, l.updated_at";
+     l.kind, l.status, l.hours, l.finished_at, l.source, l.created_at, l.updated_at";
 
 const LOG_FROM: &str = "FROM work_logs l LEFT JOIN work_projects p ON p.id = l.project_id";
+
+/// 秒级时间戳 → SQLite INTEGER（钳到 i64 上限，避免 `u64::MAX as i64` 变成负数）。
+fn sql_time(secs: u64) -> i64 {
+    secs.min(i64::MAX as u64) as i64
+}
 
 fn row_to_project(row: &rusqlite::Row) -> Result<WorkProject> {
     Ok(WorkProject {
@@ -33,11 +38,12 @@ fn row_to_log(row: &rusqlite::Row) -> Result<WorkLog> {
         project_id: row.get(3)?,
         project_name: row.get(4)?,
         kind: row.get(5)?,
-        hours: row.get(6)?,
-        finished_at: row.get::<_, i64>(7)? as u64,
-        source: row.get(8)?,
-        created_at: row.get::<_, i64>(9)? as u64,
-        updated_at: row.get::<_, i64>(10)? as u64,
+        status: row.get(6)?,
+        hours: row.get(7)?,
+        finished_at: row.get::<_, i64>(8)? as u64,
+        source: row.get(9)?,
+        created_at: row.get::<_, i64>(10)? as u64,
+        updated_at: row.get::<_, i64>(11)? as u64,
     })
 }
 
@@ -119,14 +125,25 @@ pub fn get(conn: &Connection, id: i64) -> Result<WorkLog> {
     )
 }
 
-/// `[from, to]` 闭区间内（按 `finished_at`）的完成记录，最新在前。
+/// `[from, to]` 闭区间内（按 `finished_at`）的**已完成**记录，最新在前。
 pub fn list_range(conn: &Connection, from: u64, to: u64) -> Result<Vec<WorkLog>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {LOG_COLS} {LOG_FROM}
-         WHERE l.finished_at >= ?1 AND l.finished_at <= ?2
+         WHERE l.status = 'done' AND l.finished_at >= ?1 AND l.finished_at <= ?2
          ORDER BY l.finished_at DESC, l.id DESC"
     ))?;
-    let rows = stmt.query_map(params![from as i64, to as i64], row_to_log)?;
+    let rows = stmt.query_map(params![sql_time(from), sql_time(to)], row_to_log)?;
+    rows.collect()
+}
+
+/// 全部「未来计划」：按计划日期正序（最早的 / 已过期的排在前面）。
+pub fn list_planned(conn: &Connection) -> Result<Vec<WorkLog>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {LOG_COLS} {LOG_FROM}
+         WHERE l.status = 'planned'
+         ORDER BY l.finished_at ASC, l.id ASC"
+    ))?;
+    let rows = stmt.query_map([], row_to_log)?;
     rows.collect()
 }
 
@@ -137,6 +154,7 @@ pub fn create(
     detail: &str,
     project_id: Option<i64>,
     kind: &str,
+    status: &str,
     hours: f64,
     finished_at: u64,
     source: &str,
@@ -151,15 +169,16 @@ pub fn create(
     let ts = super::now();
     conn.execute(
         "INSERT INTO work_logs
-           (title, detail, project_id, kind, hours, finished_at, source, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+           (title, detail, project_id, kind, status, hours, finished_at, source, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
         params![
             title,
             detail,
             project_id,
             kind,
+            status,
             hours,
-            finished_at as i64,
+            sql_time(finished_at),
             source,
             ts as i64
         ],
@@ -175,6 +194,7 @@ pub fn update(
     detail: &str,
     project_id: Option<i64>,
     kind: &str,
+    status: &str,
     hours: f64,
     finished_at: u64,
 ) -> Result<WorkLog> {
@@ -187,19 +207,36 @@ pub fn update(
     }
     let affected = conn.execute(
         "UPDATE work_logs
-         SET title = ?1, detail = ?2, project_id = ?3, kind = ?4,
-             hours = ?5, finished_at = ?6, updated_at = ?7
-         WHERE id = ?8",
+         SET title = ?1, detail = ?2, project_id = ?3, kind = ?4, status = ?5,
+             hours = ?6, finished_at = ?7, updated_at = ?8
+         WHERE id = ?9",
         params![
             title,
             detail,
             project_id,
             kind,
+            status,
             hours,
-            finished_at as i64,
+            sql_time(finished_at),
             super::now() as i64,
             id
         ],
+    )?;
+    if affected == 0 {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "NOT_FOUND: 工作记录 {id} 不存在"
+        )));
+    }
+    get(conn, id)
+}
+
+/// 把一条计划标记为完成：状态改为 `done`，完成时间写成 `finished_at`。
+pub fn complete(conn: &Connection, id: i64, finished_at: u64) -> Result<WorkLog> {
+    let affected = conn.execute(
+        "UPDATE work_logs
+         SET status = 'done', finished_at = ?1, updated_at = ?2
+         WHERE id = ?3",
+        params![sql_time(finished_at), super::now() as i64, id],
     )?;
     if affected == 0 {
         return Err(rusqlite::Error::InvalidParameterName(format!(
@@ -235,7 +272,18 @@ mod tests {
     }
 
     fn sample(conn: &Connection, title: &str, finished_at: u64) -> WorkLog {
-        create(conn, title, "", None, "dev", 1.5, finished_at, "manual").unwrap()
+        create(
+            conn,
+            title,
+            "",
+            None,
+            "dev",
+            "done",
+            1.5,
+            finished_at,
+            "manual",
+        )
+        .unwrap()
     }
 
     #[test]
@@ -256,6 +304,7 @@ mod tests {
             "补充说明",
             None,
             "bug",
+            "done",
             2.0,
             1_700_000_100,
         )
@@ -297,6 +346,7 @@ mod tests {
             "",
             Some(project.id),
             "dev",
+            "done",
             1.0,
             1_700_000_000,
             "manual",
@@ -314,7 +364,39 @@ mod tests {
     #[test]
     fn unknown_project_is_rejected() {
         let conn = conn();
-        let err = create(&conn, "x", "", Some(999), "dev", 0.0, 1, "manual").unwrap_err();
+        let err = create(&conn, "x", "", Some(999), "dev", "done", 0.0, 1, "manual").unwrap_err();
         assert!(err.to_string().contains("NOT_FOUND"));
+    }
+
+    #[test]
+    fn planned_items_are_listed_separately_and_can_complete() {
+        let conn = conn();
+        sample(&conn, "已完成的活", 1_700_000_000);
+        let planned = create(
+            &conn,
+            "下周补登录测试",
+            "",
+            None,
+            "dev",
+            "planned",
+            2.0,
+            1_700_000_500,
+            "manual",
+        )
+        .unwrap();
+
+        // 计划不进入「已完成」区间查询
+        assert_eq!(list_range(&conn, 0, u64::MAX).unwrap().len(), 1);
+        let plans = list_planned(&conn).unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].title, "下周补登录测试");
+        assert_eq!(plans[0].status, "planned");
+
+        // 完成后换成 done，并写实际完成时间
+        let done = complete(&conn, planned.id, 1_700_000_900).unwrap();
+        assert_eq!(done.status, "done");
+        assert_eq!(done.finished_at, 1_700_000_900);
+        assert!(list_planned(&conn).unwrap().is_empty());
+        assert_eq!(list_range(&conn, 0, u64::MAX).unwrap().len(), 2);
     }
 }

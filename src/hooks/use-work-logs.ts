@@ -67,7 +67,7 @@ export function useWorkProjects(): { projects: WorkProject[]; reload: () => void
 }
 
 /**
- * `[from, to]`（秒级时间戳）内的工作记录，最新在前。
+ * `[from, to]`（秒级时间戳）内的**已完成**记录，最新在前。
  *
  * 时间范围变化与 `worklogs:changed` 都会触发重拉；`reload` 供保存后立即刷新。
  */
@@ -93,4 +93,29 @@ export function useWorkLogs(from: number, to: number): { logs: WorkLog[]; reload
 
   const reload = useCallback(() => setTick((value) => value + 1), []);
   return { logs, reload };
+}
+
+/** 全部「未来计划」，按计划日期正序；随 `worklogs:changed` 重拉。 */
+export function useWorkPlans(): { plans: WorkLog[]; reload: () => void } {
+  const revision = useWorkRevision();
+  const [plans, setPlans] = useState<WorkLog[]>([]);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    void ipc
+      .listWorkPlans()
+      .then((list) => {
+        if (active) setPlans(list);
+      })
+      .catch((cause) => {
+        void logError(`读取未来计划失败：${String(cause)}`);
+      });
+    return () => {
+      active = false;
+    };
+  }, [revision, tick]);
+
+  const reload = useCallback(() => setTick((value) => value + 1), []);
+  return { plans, reload };
 }

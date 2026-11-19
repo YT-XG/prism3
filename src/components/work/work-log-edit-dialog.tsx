@@ -15,7 +15,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { ipc, type WorkLog, type WorkLogKind, type WorkProject } from "@/lib/ipc";
+import { ipc, type WorkLog, type WorkLogKind, type WorkLogStatus, type WorkProject } from "@/lib/ipc";
 import { WORK_KIND_OPTIONS } from "@/lib/work-kinds";
 import { dateInputValue, timestampFromDateInput } from "@/lib/work-time";
 
@@ -38,6 +38,7 @@ export function WorkLogEditDialog({
   const [detail, setDetail] = useState("");
   const [projectId, setProjectId] = useState<number | null>(null);
   const [kind, setKind] = useState<WorkLogKind>("dev");
+  const [status, setStatus] = useState<WorkLogStatus>("done");
   const [hours, setHours] = useState("");
   const [date, setDate] = useState("");
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -50,6 +51,7 @@ export function WorkLogEditDialog({
     setDetail(log.detail);
     setProjectId(log.projectId);
     setKind(log.kind);
+    setStatus(log.status);
     setHours(log.hours > 0 ? String(log.hours) : "");
     setDate(dateInputValue(log.finishedAt));
     setConfirmingDelete(false);
@@ -60,7 +62,7 @@ export function WorkLogEditDialog({
     if (!log) return;
     const trimmed = title.trim();
     if (!trimmed) {
-      toast.error("请填写完成内容");
+      toast.error("请填写标题");
       return;
     }
     const parsedHours = hours.trim() === "" ? 0 : Number(hours);
@@ -76,6 +78,7 @@ export function WorkLogEditDialog({
         detail,
         projectId,
         kind,
+        status,
         hours: parsedHours,
         finishedAt: timestampFromDateInput(date, log.finishedAt),
       });
@@ -105,19 +108,36 @@ export function WorkLogEditDialog({
     <Dialog open={log !== null} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>编辑工作记录</DialogTitle>
-          <DialogDescription>改完点保存；删除只影响这一条记录。</DialogDescription>
+          <DialogTitle>{status === "planned" ? "编辑未来计划" : "编辑工作记录"}</DialogTitle>
+          <DialogDescription>
+            改完点保存；删除只影响这一条。把「计划中」改成「已完成」会把它转成完成记录。
+          </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="work-edit-title">完成了什么</Label>
+            <Label htmlFor="work-edit-title">
+              {status === "planned" ? "计划做什么" : "完成了什么"}
+            </Label>
             <Input
               id="work-edit-title"
               value={title}
               spellCheck={false}
               onChange={(event) => setTitle(event.target.value)}
             />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="work-edit-status">状态</Label>
+            <select
+              id="work-edit-status"
+              className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+              value={status}
+              onChange={(event) => setStatus(event.target.value as WorkLogStatus)}
+            >
+              <option value="done">已完成</option>
+              <option value="planned">计划中（未来工作）</option>
+            </select>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -168,7 +188,9 @@ export function WorkLogEditDialog({
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="work-edit-date">完成日期</Label>
+              <Label htmlFor="work-edit-date">
+                {status === "planned" ? "计划日期" : "完成日期"}
+              </Label>
               <Input
                 id="work-edit-date"
                 type="date"

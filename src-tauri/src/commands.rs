@@ -1225,6 +1225,17 @@ fn bump_work_logs(app: &AppHandle) {
 
 /// 记录类型白名单（与 `db.rs` 的 CHECK 约束一致）。
 const WORK_KINDS: [&str; 7] = ["dev", "bug", "support", "doc", "meeting", "ops", "other"];
+/// 工作记录状态：done = 已完成，planned = 提前列出的未来工作。
+const WORK_STATUSES: [&str; 2] = ["done", "planned"];
+
+fn normalize_work_status(raw: Option<&str>) -> AppResult<String> {
+    let status = raw.unwrap_or("done").trim();
+    if WORK_STATUSES.contains(&status) {
+        Ok(status.to_string())
+    } else {
+        Err(AppError::Other(format!("未知的工作状态：{status}")))
+    }
+}
 
 fn normalize_work_kind(raw: Option<&str>) -> AppResult<String> {
     let kind = raw.unwrap_or("dev").trim();
@@ -1252,11 +1263,18 @@ fn validated_work_hours(hours: Option<f64>) -> AppResult<f64> {
     Ok((value * 100.0).round() / 100.0)
 }
 
-/// `[from, to]` 内（按完成时间）的工作记录，最新在前。
+/// `[from, to]` 内（按完成时间）的**已完成**工作记录，最新在前。
 #[tauri::command(async)]
 pub fn list_work_logs(state: State<'_, DbState>, from: u64, to: u64) -> AppResult<Vec<WorkLog>> {
     let conn = state.lock();
     Ok(work_log::list_range(&conn, from, to)?)
+}
+
+/// 全部「未来计划」，按计划日期正序。
+#[tauri::command(async)]
+pub fn list_work_plans(state: State<'_, DbState>) -> AppResult<Vec<WorkLog>> {
+    let conn = state.lock();
+    Ok(work_log::list_planned(&conn)?)
 }
 
 #[tauri::command(async)]
@@ -1268,11 +1286,13 @@ pub fn create_work_log(
     detail: Option<String>,
     project_id: Option<i64>,
     kind: Option<String>,
+    status: Option<String>,
     hours: Option<f64>,
     finished_at: Option<u64>,
 ) -> AppResult<WorkLog> {
     let title = validated_work_title(&title)?;
     let kind = normalize_work_kind(kind.as_deref())?;
+    let status = normalize_work_status(status.as_deref())?;
     let hours = validated_work_hours(hours)?;
     let finished_at = finished_at.unwrap_or_else(crate::db::now_secs);
 
@@ -1284,6 +1304,7 @@ pub fn create_work_log(
             detail.as_deref().unwrap_or("").trim(),
             project_id,
             &kind,
+            &status,
             hours,
             finished_at,
             "manual",
@@ -1303,6 +1324,7 @@ pub fn update_work_log(
     detail: Option<String>,
     project_id: Option<i64>,
     kind: Option<String>,
+    status: Option<String>,
     hours: Option<f64>,
     finished_at: Option<u64>,
 ) -> AppResult<WorkLog> {
@@ -1314,6 +1336,10 @@ pub fn update_work_log(
         let conn = state.lock();
         let existing = work_log::get(&conn, id)
             .map_err(|_| AppError::Other("这条工作记录已经不在了，请刷新后重试".to_string()))?;
+        let status = match status {
+            Some(raw) => normalize_work_status(Some(&raw))?,
+            None => existing.status.clone(),
+        };
         work_log::update(
             &conn,
             id,
@@ -1321,9 +1347,25 @@ pub fn update_work_log(
             detail.as_deref().unwrap_or("").trim(),
             project_id,
             &kind,
+            &status,
             hours,
             finished_at.unwrap_or(existing.finished_at),
         )?
+    };
+    bump_work_logs(&app);
+    Ok(updated)
+}
+
+/// 把一条未来计划标记为完成：状态改为 done，完成时间 = 现在。
+#[tauri::command]
+pub fn complete_work_plan(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    id: i64,
+) -> AppResult<WorkLog> {
+    let updated = {
+        let conn = state.lock();
+        work_log::complete(&conn, id, crate::db::now_secs())?
     };
     bump_work_logs(&app);
     Ok(updated)

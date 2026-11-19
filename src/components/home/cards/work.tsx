@@ -1,12 +1,13 @@
 import { useMemo } from "react";
 
 import { HomeCardHint, HomeCardLink } from "@/components/home/home-card";
-import { useWorkLogs } from "@/hooks/use-work-logs";
+import { useWorkLogs, useWorkPlans } from "@/hooks/use-work-logs";
 import { WORK_KIND_LABELS } from "@/lib/work-kinds";
 import {
   endOfDay,
   endOfWeek,
   formatClock,
+  formatDayLabel,
   formatHours,
   startOfDay,
   startOfWeek,
@@ -20,13 +21,15 @@ export function WorkCard() {
   const week = useMemo(() => ({ from: startOfWeek(), to: endOfWeek() }), []);
   const { logs: todayLogs } = useWorkLogs(today.from, today.to);
   const { logs: weekLogs } = useWorkLogs(week.from, week.to);
+  const { plans } = useWorkPlans();
 
   const weekHours = weekLogs.reduce((sum, log) => sum + Math.max(0, log.hours), 0);
   const recent = todayLogs.slice(0, 3);
+  const nextPlan = plans[0];
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-3 gap-2">
         <div className="flex flex-col rounded-lg bg-muted/50 px-2.5 py-2">
           <span className="font-heading text-lg font-semibold tabular-nums">
             {todayLogs.length}
@@ -39,7 +42,20 @@ export function WorkCard() {
           </span>
           <span className="text-[0.65rem] text-muted-foreground">本周工时</span>
         </div>
+        <div className="flex flex-col rounded-lg bg-muted/50 px-2.5 py-2">
+          <span className="font-heading text-lg font-semibold tabular-nums">{plans.length}</span>
+          <span className="text-[0.65rem] text-muted-foreground">未来计划</span>
+        </div>
       </div>
+
+      {nextPlan && (
+        <div className="rounded-lg bg-muted/40 px-2 py-1.5">
+          <span className="text-[0.65rem] text-muted-foreground">
+            下一步 · {formatDayLabel(nextPlan.finishedAt)}
+          </span>
+          <p className="truncate text-xs font-medium">{nextPlan.title}</p>
+        </div>
+      )}
 
       {recent.length === 0 ? (
         <HomeCardHint>
@@ -70,7 +86,9 @@ export function WorkCard() {
       )}
 
       <div className="mt-auto flex items-center justify-between gap-2 border-t border-border/50 pt-2">
-        <span className="text-[0.65rem] text-muted-foreground">本周 {weekLogs.length} 项</span>
+        <span className="text-[0.65rem] text-muted-foreground">
+          本周 {weekLogs.length} 项 · 计划 {plans.length} 项
+        </span>
         <HomeCardLink onClick={() => setActiveView("work")}>去记录</HomeCardLink>
       </div>
     </div>

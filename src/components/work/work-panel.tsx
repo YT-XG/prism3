@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  CalendarClock,
   Check,
+  CheckCircle2,
   FileText,
   Pencil,
   Plus,
@@ -16,8 +18,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { useWorkLogs, useWorkProjects } from "@/hooks/use-work-logs";
-import { ipc, type WorkLog, type WorkLogKind, type WorkProject } from "@/lib/ipc";
+import { useWorkLogs, useWorkPlans, useWorkProjects } from "@/hooks/use-work-logs";
+import {
+  ipc,
+  type WorkLog,
+  type WorkLogKind,
+  type WorkLogStatus,
+  type WorkProject,
+} from "@/lib/ipc";
 import { WORK_KIND_CLASS, WORK_KIND_LABELS, WORK_KIND_OPTIONS } from "@/lib/work-kinds";
 import {
   dateInputValue,
@@ -69,9 +77,12 @@ export function WorkPanel({ active = true }: { active?: boolean }) {
   }, [range]);
 
   const { logs } = useWorkLogs(bounds.from, bounds.to);
+  const { plans } = useWorkPlans();
   const week = useMemo(() => ({ from: startOfWeek(), to: endOfWeek() }), []);
   const { logs: weekLogs } = useWorkLogs(week.from, week.to);
 
+  /** 当前记录表单是「记完成」还是「列计划」。 */
+  const [entryMode, setEntryMode] = useState<WorkLogStatus>("done");
   const [title, setTitle] = useState("");
   const [detail, setDetail] = useState("");
   const [projectId, setProjectId] = useState<number | null>(null);
@@ -112,6 +123,17 @@ export function WorkPanel({ active = true }: { active?: boolean }) {
     return logs;
   }, [logs, filter]);
 
+  /** 未来计划按同一筛选口径展示（看某个项目时只列该项目的计划）。 */
+  const filteredPlans = useMemo(() => {
+    if (filter.kind === "project") {
+      return plans.filter((plan) => plan.projectId === filter.id);
+    }
+    if (filter.kind === "unassigned") {
+      return plans.filter((plan) => plan.projectId == null);
+    }
+    return plans;
+  }, [plans, filter]);
+
   const totalHours = filteredLogs.reduce((sum, log) => sum + Math.max(0, log.hours), 0);
   const coveredProjects = new Set(filteredLogs.map((log) => log.projectName || "未归属")).size;
   const unassignedCount = logs.filter((log) => log.projectId == null).length;
@@ -139,7 +161,7 @@ export function WorkPanel({ active = true }: { active?: boolean }) {
   const submit = async () => {
     const trimmed = title.trim();
     if (!trimmed) {
-      toast.error("请填写完成内容");
+      toast.error(entryMode === "planned" ? "请填写计划内容" : "请填写完成内容");
       return;
     }
     const parsedHours = hours.trim() === "" ? 0 : Number(hours);
@@ -154,18 +176,30 @@ export function WorkPanel({ active = true }: { active?: boolean }) {
         detail,
         projectId,
         kind,
+        status: entryMode,
         hours: parsedHours,
         finishedAt: timestampFromDateInput(date, Math.floor(Date.now() / 1000)),
       });
-      toast.success("已记录");
+      toast.success(entryMode === "planned" ? "已加入未来计划" : "已记录");
       setTitle("");
       setDetail("");
       setHours("");
       setDate(dateInputValue(Math.floor(Date.now() / 1000)));
     } catch (cause) {
-      toast.error(`记录失败：${String(cause)}`);
+      toast.error(`${entryMode === "planned" ? "添加计划" : "记录"}失败：${String(cause)}`);
     } finally {
       setSaving(false);
+    }
+  };
+
+  /** 一键把计划转成完成记录（完成时间 = 现在）。 */
+  const completePlan = async (plan: WorkLog) => {
+    try {
+      await ipc.completeWorkPlan(plan.id);
+      setConfirmLogId(null);
+      toast.success(`已完成「${plan.title}」`);
+    } catch (cause) {
+      toast.error(`标记完成失败：${String(cause)}`);
     }
   };
 
@@ -383,11 +417,38 @@ export function WorkPanel({ active = true }: { active?: boolean }) {
         </div>
 
         <div className="glass-card rounded-xl p-3">
+          <div className="mb-2 flex flex-wrap items-center gap-1.5">
+            <Button
+              variant={entryMode === "done" ? "secondary" : "ghost"}
+              size="xs"
+              onClick={() => setEntryMode("done")}
+            >
+              完成记录
+            </Button>
+            <Button
+              variant={entryMode === "planned" ? "secondary" : "ghost"}
+              size="xs"
+              onClick={() => setEntryMode("planned")}
+            >
+              <CalendarClock className="size-3.5" aria-hidden />
+              计划未来
+            </Button>
+            <span className="text-[11px] text-muted-foreground">
+              {entryMode === "planned"
+                ? "先列出来，完成后在计划列表点 ✓ 转为完成记录"
+                : "记录已经做完的事；周报自动汇总"}
+            </span>
+          </div>
+
           <div className="flex items-center gap-2">
             <Input
               value={title}
               spellCheck={false}
-              placeholder="完成了什么？例如：修复登录超时"
+              placeholder={
+                entryMode === "planned"
+                  ? "计划做什么？例如：下周补登录模块测试"
+                  : "完成了什么？例如：修复登录超时"
+              }
               className="h-8 flex-1 text-xs"
               onChange={(event) => setTitle(event.target.value)}
               onKeyDown={(event) => {
@@ -395,7 +456,7 @@ export function WorkPanel({ active = true }: { active?: boolean }) {
               }}
             />
             <Button size="sm" disabled={saving || !title.trim()} onClick={() => void submit()}>
-              记录
+              {entryMode === "planned" ? "加入计划" : "记录"}
             </Button>
           </div>
 
@@ -440,6 +501,7 @@ export function WorkPanel({ active = true }: { active?: boolean }) {
 
             <Input
               type="date"
+              title={entryMode === "planned" ? "计划日期" : "完成日期"}
               className="h-7 w-32 text-xs"
               value={date}
               onChange={(event) => setDate(event.target.value)}
@@ -448,17 +510,31 @@ export function WorkPanel({ active = true }: { active?: boolean }) {
 
           <Textarea
             value={detail}
-            placeholder="补充说明（可选）：结果、链接、影响范围…"
+            placeholder={
+              entryMode === "planned"
+                ? "计划说明（可选）：目标、依赖、验收标准…"
+                : "补充说明（可选）：结果、链接、影响范围…"
+            }
             className="mt-2 min-h-14 text-xs"
             onChange={(event) => setDetail(event.target.value)}
           />
         </div>
 
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           <StatBox label="完成项" value={String(filteredLogs.length)} />
           <StatBox label="合计工时" value={totalHours > 0 ? formatHours(totalHours) : "0h"} />
           <StatBox label="涉及项目" value={String(coveredProjects)} />
+          <StatBox label="未来计划" value={String(filteredPlans.length)} />
         </div>
+
+        <PlanList
+          plans={filteredPlans}
+          confirmId={confirmLogId}
+          onComplete={(plan) => void completePlan(plan)}
+          onEdit={(plan) => setEditing(plan)}
+          onDelete={(plan) => setConfirmLogId(plan.id)}
+          onConfirmDelete={(plan) => void removeLog(plan)}
+        />
 
         <div className="glass-card flex min-h-0 flex-1 flex-col rounded-xl p-3">
           <div className="flex shrink-0 items-center justify-between gap-3">
@@ -592,9 +668,132 @@ export function WorkPanel({ active = true }: { active?: boolean }) {
         open={reportOpen}
         onOpenChange={setReportOpen}
         logs={weekLogs}
+        plans={plans}
         from={week.from}
         to={week.to}
       />
+    </div>
+  );
+}
+
+function PlanList({
+  plans,
+  confirmId,
+  onComplete,
+  onEdit,
+  onDelete,
+  onConfirmDelete,
+}: {
+  plans: WorkLog[];
+  confirmId: number | null;
+  onComplete: (plan: WorkLog) => void;
+  onEdit: (plan: WorkLog) => void;
+  onDelete: (plan: WorkLog) => void;
+  onConfirmDelete: (plan: WorkLog) => void;
+}) {
+  return (
+    <div className="glass-card flex max-h-52 shrink-0 flex-col rounded-xl p-3">
+      <div className="flex shrink-0 items-center justify-between">
+        <span className="flex items-center gap-1.5 text-xs font-medium">
+          <CalendarClock className="size-3.5 text-brand" aria-hidden />
+          未来计划
+        </span>
+        <span className="text-[11px] text-muted-foreground tabular-nums">{plans.length} 项</span>
+      </div>
+
+      <div className="mt-2 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
+        {plans.length === 0 ? (
+          <p className="rounded-lg bg-muted/30 px-2.5 py-2 text-[11px] leading-relaxed text-muted-foreground">
+            还没有计划。把要做的事先写进来，完成后点 ✓ 转为完成记录。
+          </p>
+        ) : (
+          plans.map((plan) => {
+            const overdue = plan.finishedAt < startOfDay();
+            return (
+              <div
+                key={plan.id}
+                className="group flex items-start gap-2 rounded-md px-2 py-1.5 hover:bg-muted/30"
+              >
+                <span
+                  className={cn(
+                    "w-14 shrink-0 pt-0.5 text-[11px] tabular-nums",
+                    overdue ? "text-destructive" : "text-muted-foreground",
+                  )}
+                  title={overdue ? "计划日期已过" : undefined}
+                >
+                  {formatDayLabel(plan.finishedAt)}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-sm font-medium break-words">{plan.title}</span>
+                    {plan.projectName && (
+                      <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
+                        {plan.projectName}
+                      </Badge>
+                    )}
+                    <span
+                      className={cn(
+                        "inline-flex h-4 items-center rounded-full px-1.5 text-[10px] font-medium",
+                        WORK_KIND_CLASS[plan.kind],
+                      )}
+                    >
+                      {WORK_KIND_LABELS[plan.kind]}
+                    </span>
+                    <span className="ml-auto shrink-0 text-[11px] text-muted-foreground tabular-nums">
+                      {formatHours(plan.hours)}
+                    </span>
+                  </div>
+                  {plan.detail.trim() && (
+                    <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+                      {plan.detail}
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                  {confirmId === plan.id ? (
+                    <Button
+                      variant="destructive"
+                      size="icon-xs"
+                      title="确认删除"
+                      onClick={() => onConfirmDelete(plan)}
+                    >
+                      <Check />
+                    </Button>
+                  ) : (
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        title="标记完成（转为完成记录）"
+                        onClick={() => onComplete(plan)}
+                      >
+                        <CheckCircle2 />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        title="编辑"
+                        onClick={() => onEdit(plan)}
+                      >
+                        <Pencil />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        title="删除"
+                        onClick={() => onDelete(plan)}
+                      >
+                        <Trash2 />
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }

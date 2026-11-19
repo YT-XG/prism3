@@ -6,8 +6,14 @@ import { formatDate, formatHours } from "@/lib/work-time";
  *
  * 口径固定为「按项目分组、组内按完成时间正序」：汇报时同一条线的事聚在一起，
  * 读的人不用自己跳着找。没有归属的记录统一落在「未归属项目」。
+ * `plans`（未来计划）会追加在末尾，方便汇报时直接说「接下来做什么」。
  */
-export function buildWorkReport(logs: WorkLog[], from: number, to: number): string {
+export function buildWorkReport(
+  logs: WorkLog[],
+  from: number,
+  to: number,
+  plans: WorkLog[] = [],
+): string {
   const sorted = [...logs].sort((a, b) => a.finishedAt - b.finishedAt);
   const totalHours = sorted.reduce((sum, log) => sum + Math.max(0, log.hours), 0);
 
@@ -27,20 +33,31 @@ export function buildWorkReport(logs: WorkLog[], from: number, to: number): stri
   ];
 
   if (sorted.length === 0) {
-    lines.push("_这段时间还没有记录。_");
-    return lines.join("\n");
+    lines.push("_这段时间还没有完成记录。_", "");
+  } else {
+    for (const [project, entries] of groups) {
+      lines.push(`## ${project}`, "");
+      for (const entry of entries) {
+        const hours = entry.hours > 0 ? `（${formatHours(entry.hours)}）` : "";
+        const date = new Date(entry.finishedAt * 1000);
+        const dateLabel = `${date.getMonth() + 1}/${date.getDate()} `;
+        lines.push(`- ${dateLabel}${entry.title}${hours}`);
+        if (entry.detail.trim()) {
+          lines.push(`  - ${entry.detail.trim().replace(/\n/g, " ")}`);
+        }
+      }
+      lines.push("");
+    }
   }
 
-  for (const [project, entries] of groups) {
-    lines.push(`## ${project}`, "");
-    for (const entry of entries) {
-      const hours = entry.hours > 0 ? `（${formatHours(entry.hours)}）` : "";
-      const date = new Date(entry.finishedAt * 1000);
+  if (plans.length > 0) {
+    lines.push("## 未来计划", "");
+    for (const plan of [...plans].sort((a, b) => a.finishedAt - b.finishedAt)) {
+      const date = new Date(plan.finishedAt * 1000);
       const dateLabel = `${date.getMonth() + 1}/${date.getDate()} `;
-      lines.push(`- ${dateLabel}${entry.title}${hours}`);
-      if (entry.detail.trim()) {
-        lines.push(`  - ${entry.detail.trim().replace(/\n/g, " ")}`);
-      }
+      const hours = plan.hours > 0 ? `（${formatHours(plan.hours)}）` : "";
+      const project = plan.projectName.trim() ? ` · ${plan.projectName.trim()}` : "";
+      lines.push(`- ${dateLabel}${plan.title}${hours}${project}`);
     }
     lines.push("");
   }
