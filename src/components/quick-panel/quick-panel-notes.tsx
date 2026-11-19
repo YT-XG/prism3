@@ -39,6 +39,8 @@ interface QuickPanelNotesProps {
   active: boolean;
   /** 是否已进入输入聚焦模式。 */
   focused: boolean;
+  /** 隐藏页内标题与说明（组合窗口传 `true`：它有自己的统一页头）。 */
+  hideHeading?: boolean;
   onRequestFocus: () => Promise<boolean>;
   onReleaseFocus: () => Promise<void>;
   /** 收起面板。 */
@@ -55,6 +57,7 @@ interface QuickPanelNotesProps {
 export function QuickPanelNotes({
   active,
   focused,
+  hideHeading = false,
   onRequestFocus,
   onReleaseFocus,
   onDismiss,
@@ -239,14 +242,16 @@ export function QuickPanelNotes({
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-col gap-0.5">
-        <h2 className="font-heading text-sm font-medium">速记</h2>
-        <p className="text-xs text-muted-foreground">
-          {focused
-            ? "输入即自动保存（600ms 防抖）· 点保存开始下一条 · Esc 退出"
-            : "点输入框开始记；点下方条目把它读上来接着改（↗ 在主窗口打开）"}
-        </p>
-      </div>
+      {!hideHeading && (
+        <div className="flex flex-col gap-0.5">
+          <h2 className="font-heading text-sm font-medium">速记</h2>
+          <p className="text-xs text-muted-foreground">
+            {focused
+              ? "输入即自动保存（600ms 防抖）· 点保存开始下一条 · Esc 退出"
+              : "点输入框开始记；点下方条目把它读上来接着改（↗ 在主窗口打开）"}
+          </p>
+        </div>
+      )}
 
       <div className="flex flex-col gap-2" onMouseDown={handleInputMouseDown}>
         <Input

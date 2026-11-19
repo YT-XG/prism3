@@ -36,6 +36,11 @@ interface QuickPanelClipboardProps {
    * 重新聚焦搜索框，让每次呼出都从干净状态开始。
    */
   focusToken?: number;
+  /**
+   * 隐藏页内标题与说明（组合窗口传 `true`：它有自己的统一页头，
+   * 两处标题会重复）。
+   */
+  hideHeading?: boolean;
   /** 请求进入输入聚焦模式；返回是否成功。 */
   onRequestFocus: () => Promise<boolean>;
   /** 退出输入聚焦模式并把键盘焦点还给原应用。 */
@@ -62,6 +67,7 @@ export function QuickPanelClipboard({
   focused,
   pageSize = DEFAULT_PAGE_SIZE,
   focusToken,
+  hideHeading = false,
   onRequestFocus,
   onReleaseFocus,
   onDismiss,
@@ -230,18 +236,20 @@ export function QuickPanelClipboard({
   return (
     // 撑满宿主给的高度：列表自己滚，翻页条钉在底部，头部（标题 / 搜索 / 筛选）始终可见。
     <div className="flex h-full min-h-0 flex-col gap-2">
-      <div className="flex shrink-0 flex-col gap-0.5">
-        <h2 className="font-heading text-sm font-medium">剪贴板</h2>
-        <p className="text-xs text-muted-foreground">
-          {focused
-            ? pasteOnClick
-              ? "↑↓ 选择 · Enter 粘贴 · PgUp/PgDn 翻页 · Esc 收起"
-              : "↑↓ 选择 · Enter 复制 · PgUp/PgDn 翻页 · Esc 收起"
-            : pasteOnClick
-              ? "点一条记录即可粘到刚才那个窗口；点输入框可搜索"
-              : "点一条记录即复制到剪贴板；点输入框可搜索"}
-        </p>
-      </div>
+      {!hideHeading && (
+        <div className="flex shrink-0 flex-col gap-0.5">
+          <h2 className="font-heading text-sm font-medium">剪贴板</h2>
+          <p className="text-xs text-muted-foreground">
+            {focused
+              ? pasteOnClick
+                ? "↑↓ 选择 · Enter 粘贴 · PgUp/PgDn 翻页 · Esc 收起"
+                : "↑↓ 选择 · Enter 复制 · PgUp/PgDn 翻页 · Esc 收起"
+              : pasteOnClick
+                ? "点一条记录即可粘到刚才那个窗口；点输入框可搜索"
+                : "点一条记录即复制到剪贴板；点输入框可搜索"}
+          </p>
+        </div>
+      )}
 
       <div className="relative shrink-0" onMouseDown={handleInputMouseDown}>
         <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />

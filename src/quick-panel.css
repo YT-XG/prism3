@@ -145,3 +145,119 @@ body,
     opacity: 0.85;
   }
 }
+
+/*
+ * ── 组合窗口（window label = `hub`）────────────────────────────────────────
+ *
+ * 一块浮在「整屏压暗」蒙版上的玻璃板。窗口本身是透明的（Windows 上的 WebView2
+ * 拿不到桌面当背景，`backdrop-filter` 糊不到桌面），所以这块板不能真的半透：
+ * 一旦透，底下主窗口的卡片文字会直接串上来，看起来像排版叠影。
+ * 这里只留 1.5%~2% 的透光——够看出「浮在桌面上」，又不会把字透出来。
+ *
+ * 刻意**不借 `--frost-surface`**：那套烘焙渐变在亮色下是纯白不透明，会把这块板
+ * 做成一块死白；这里直接写白 / 深底，投影做得很深很远（窗口只有一块板，落影是
+ * 它唯一的高度线索），顶边再加一道品牌色发丝光把板「托」出蒙版。
+ */
+.hub-slab {
+  background-color: transparent;
+  background-image:
+    radial-gradient(
+      120% 90% at 0% 0%,
+      color-mix(in srgb, var(--brand) 10%, transparent),
+      transparent 55%
+    ),
+    linear-gradient(
+      158deg,
+      rgba(255, 255, 255, 0.986) 0%,
+      rgba(250, 252, 255, 0.978) 52%,
+      rgba(255, 255, 255, 0.982) 100%
+    );
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.65),
+    0 48px 120px -46px rgba(0, 0, 0, 0.72),
+    0 16px 40px -24px rgba(0, 0, 0, 0.5);
+}
+
+.dark .hub-slab {
+  background-image:
+    radial-gradient(
+      120% 90% at 0% 0%,
+      color-mix(in srgb, var(--brand) 14%, transparent),
+      transparent 55%
+    ),
+    linear-gradient(
+      158deg,
+      rgba(25, 27, 38, 0.982) 0%,
+      rgba(16, 18, 27, 0.972) 52%,
+      rgba(22, 24, 34, 0.976) 100%
+    );
+  border-color: rgba(255, 255, 255, 0.13);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 48px 120px -46px rgba(0, 0, 0, 0.86),
+    0 16px 40px -24px rgba(0, 0, 0, 0.6);
+}
+
+/* 唤出时的一次落位：12px 上浮 + 极轻的缩放，只做一次（窗口隐藏不卸载组件）。 */
+@keyframes hub-enter {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.986);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.hub-enter {
+  animation: hub-enter 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/*
+ * 左栏中段是三块小视图（按内容高度自己排），装不下时由这一层滚动。
+ * 滚动区的下沿正好切在页脚的发丝线上，露出半张卡片像排版出错，
+ * 所以给底部 28px 做一层淡出，让溢出的内容自己消失。
+ */
+.hub-aside-scroll {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent 100%);
+}
+
+/*
+ * 板内的输入类控件统一给一层软底。
+ *
+ * `Input` 基元是透明底 + 描边（放在主窗口的玻璃卡上正好），但在这块近乎实心的板上
+ * 就只剩一圈描边，读不出「这里能打字」。只在本窗口（`data-hub-surface`）补底色，
+ * 不改基元，免得主窗口的观感跟着变。
+ */
+[data-hub-surface] input[data-slot="input"],
+[data-hub-surface] textarea {
+  background-color: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+
+.dark [data-hub-surface] input[data-slot="input"],
+.dark [data-hub-surface] textarea {
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
+/*
+ * 聚焦圈在板内要收窄。
+ *
+ * `Input` 基元的 `focus-visible:ring-3` 是为主窗口的玻璃卡设计的（那里底色和板同色，
+ * 3px 光圈是唯一的聚焦线索）；到了这块实心板上，它和 1px 描边叠成「双圈」，并且
+ * 剪贴板搜索框每次唤出都自动聚焦，等于常驻一圈粗紫边。这里换成「1px 品牌描边 +
+ * 1px 极淡外光」，描边本身当聚焦线，光圈只用来把它托起来。
+ * 规则写在 layer 之外，能盖过 `@layer utilities` 里的 ring（不靠 !important）。
+ */
+[data-hub-surface] input[data-slot="input"]:focus-visible,
+[data-hub-surface] textarea:focus-visible {
+  border-color: color-mix(in srgb, var(--ring) 52%, var(--input));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ring) 16%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hub-enter {
+    animation: none;
+  }
+}

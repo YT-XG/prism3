@@ -16,6 +16,8 @@ interface QuickPanelSearchProps {
   active: boolean;
   /** 是否已进入输入聚焦模式（窗口可聚焦并持有键盘焦点）。 */
   focused: boolean;
+  /** 隐藏页内标题与说明（组合窗口传 `true`：它有自己的统一页头）。 */
+  hideHeading?: boolean;
   /** 请求进入输入聚焦模式；返回是否成功。 */
   onRequestFocus: () => Promise<boolean>;
   /** Esc：退出聚焦模式并收起面板。 */
@@ -36,6 +38,7 @@ interface QuickPanelSearchProps {
 export function QuickPanelSearch({
   active,
   focused,
+  hideHeading = false,
   onRequestFocus,
   onDismiss,
 }: QuickPanelSearchProps) {
@@ -103,14 +106,16 @@ export function QuickPanelSearch({
 
   return (
     <div className="flex flex-col gap-2" onMouseDown={handleMouseDown}>
-      <div className="flex flex-col gap-0.5">
-        <h2 className="font-heading text-sm font-medium">文件搜索</h2>
-        <p className="text-xs text-muted-foreground">
-          {focused
-            ? "↑↓ 选择 · Enter 打开 · Shift+Enter 定位 · Esc 收起"
-            : "点击输入框开始打字（会临时接管键盘焦点）"}
-        </p>
-      </div>
+      {!hideHeading && (
+        <div className="flex flex-col gap-0.5">
+          <h2 className="font-heading text-sm font-medium">文件搜索</h2>
+          <p className="text-xs text-muted-foreground">
+            {focused
+              ? "↑↓ 选择 · Enter 打开 · Shift+Enter 定位 · Esc 收起"
+              : "点击输入框开始打字（会临时接管键盘焦点）"}
+          </p>
+        </div>
+      )}
 
       <div className="relative">
         <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />

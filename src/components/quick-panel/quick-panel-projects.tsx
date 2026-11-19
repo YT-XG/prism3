@@ -16,6 +16,8 @@ interface QuickPanelProjectsProps {
    * 塞进控制台后列表就没地方了，那里仍按「输出去主窗口看」。
    */
   withOutput?: boolean;
+  /** 隐藏页内标题与说明（组合窗口传 `true`：它有自己的统一页头）。 */
+  hideHeading?: boolean;
 }
 
 type Feedback = { tone: "ok" | "error"; text: string } | null;
@@ -27,7 +29,11 @@ type Feedback = { tone: "ok" | "error"; text: string } | null;
  * 那份全局状态，重读比跨窗口同步更简单可靠）。提示走页内一行文字：
  * 主窗口之外没有常驻的 Toaster 语境，页内提示最稳。
  */
-export function QuickPanelProjects({ active, withOutput = false }: QuickPanelProjectsProps) {
+export function QuickPanelProjects({
+  active,
+  withOutput = false,
+  hideHeading = false,
+}: QuickPanelProjectsProps) {
   const [projects, setProjects] = useState<ProjectEntry[]>([]);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const {
@@ -108,14 +114,16 @@ export function QuickPanelProjects({ active, withOutput = false }: QuickPanelPro
         withOutput && "h-full min-h-0",
       )}
     >
-      <div className="flex shrink-0 flex-col gap-0.5">
-        <h2 className="font-heading text-sm font-medium">项目</h2>
-        <p className="text-xs text-muted-foreground">
-          {withOutput
-            ? "点击命令即在应用内启动 / 停止（不弹命令行窗口），下方实时显示所选命令的输出。"
-            : "点击命令即在应用内启动 / 停止（不弹命令行窗口）；输出到主窗口「项目」页查看。"}
-        </p>
-      </div>
+      {!hideHeading && (
+        <div className="flex shrink-0 flex-col gap-0.5">
+          <h2 className="font-heading text-sm font-medium">项目</h2>
+          <p className="text-xs text-muted-foreground">
+            {withOutput
+              ? "点击命令即在应用内启动 / 停止（不弹命令行窗口），下方实时显示所选命令的输出。"
+              : "点击命令即在应用内启动 / 停止（不弹命令行窗口）；输出到主窗口「项目」页查看。"}
+          </p>
+        </div>
+      )}
 
       {feedback && (
         <p

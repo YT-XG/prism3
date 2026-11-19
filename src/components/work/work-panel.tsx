@@ -66,8 +66,17 @@ const RANGE_LABELS: { value: RangeKey; label: string }[] = [
  *
  * `active` 供 hub 使用：切走 / 收起时关闭弹窗，避免下次呼出还挂着一个
  * 上次没关的编辑框或周报预览。主窗口始终传默认 `true`。
+ *
+ * `hideHeader` 也供 hub 使用：组合窗口有自己的统一页头，这里再画一个
+ * `PageHeader` 就重复了；此时「生成本周报告」挪到录入卡首行右侧，入口不丢。
  */
-export function WorkPanel({ active = true }: { active?: boolean }) {
+export function WorkPanel({
+  active = true,
+  hideHeader = false,
+}: {
+  active?: boolean;
+  hideHeader?: boolean;
+}) {
   const { projects } = useWorkProjects();
   const [range, setRange] = useState<RangeKey>("today");
 
@@ -404,16 +413,18 @@ export function WorkPanel({ active = true }: { active?: boolean }) {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col gap-3">
-        <PageHeader
-          title="工作记录"
-          description="记下每天完成了什么；周报由记录自动汇总，不用再回忆。"
-          actions={
-            <Button size="sm" className="gap-1.5" onClick={() => setReportOpen(true)}>
-              <FileText className="size-3.5" aria-hidden />
-              生成本周报告
-            </Button>
-          }
-        />
+        {!hideHeader && (
+          <PageHeader
+            title="工作记录"
+            description="记下每天完成了什么；周报由记录自动汇总，不用再回忆。"
+            actions={
+              <Button size="sm" className="gap-1.5" onClick={() => setReportOpen(true)}>
+                <FileText className="size-3.5" aria-hidden />
+                生成本周报告
+              </Button>
+            }
+          />
+        )}
 
         <div className="glass-card rounded-xl p-3">
           <div className="mb-2 flex flex-wrap items-center gap-1.5">
@@ -437,6 +448,17 @@ export function WorkPanel({ active = true }: { active?: boolean }) {
                 ? "先列出来，完成后在计划列表点 ✓ 转为完成记录"
                 : "记录已经做完的事；周报自动汇总"}
             </span>
+            {hideHeader && (
+              <Button
+                variant="ghost"
+                size="xs"
+                className="ml-auto gap-1"
+                onClick={() => setReportOpen(true)}
+              >
+                <FileText className="size-3" aria-hidden />
+                生成本周报告
+              </Button>
+            )}
           </div>
 
           <div className="flex items-center gap-2">

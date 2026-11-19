@@ -3,11 +3,11 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Activity,
-  MonitorSmartphone,
   ClipboardList,
   Clock,
   FolderGit2,
   ListChecks,
+  MonitorSmartphone,
   NotebookPen,
   Search,
   X,
@@ -37,15 +37,72 @@ function hideHub() {
   void ipc.hideHub();
 }
 
-/** 主视图 id：就是顶部按钮条里那排按钮，点哪个就把右边的大区域换成哪一页。 */
-type HubViewId = "search" | "notes" | "clipboard" | "projects" | "work";
+/** 主视图 id：就是左侧导航那一列，点哪个就把右边换成哪一页。 */
+type HubViewId = "clipboard" | "notes" | "work" | "projects" | "search";
 
-const HUB_VIEWS: { id: HubViewId; label: string; icon: LucideIcon }[] = [
-  { id: "clipboard", label: "剪贴板", icon: ClipboardList },
-  { id: "notes", label: "速记", icon: NotebookPen },
-  { id: "work", label: "工作", icon: ListChecks },
-  { id: "projects", label: "项目", icon: FolderGit2 },
-  { id: "search", label: "搜索", icon: Search },
+/**
+ * 每个主视图的三件套：导航短名、页头标题、页头那一句操作提示。
+ *
+ * 提示语与各页自带的副标题同源（这里多一份是因为 hub 隐藏了页内标题，
+ * 见 `hideHeading`），所以改文案时两处都要看一眼。
+ */
+interface HubViewMeta {
+  id: HubViewId;
+  label: string;
+  title: string;
+  icon: LucideIcon;
+  hint: (context: { focused: boolean; pasteOnClick: boolean }) => string;
+}
+
+const HUB_VIEWS: HubViewMeta[] = [
+  {
+    id: "clipboard",
+    label: "剪贴板",
+    title: "剪贴板",
+    icon: ClipboardList,
+    hint: ({ focused, pasteOnClick }) =>
+      focused
+        ? pasteOnClick
+          ? "↑↓ 选择 · Enter 粘贴 · PgUp/PgDn 翻页 · Esc 收起"
+          : "↑↓ 选择 · Enter 复制 · PgUp/PgDn 翻页 · Esc 收起"
+        : pasteOnClick
+          ? "点一条记录即可粘到刚才那个窗口；点输入框可搜索"
+          : "点一条记录即复制到剪贴板；点输入框可搜索",
+  },
+  {
+    id: "notes",
+    label: "速记",
+    title: "速记",
+    icon: NotebookPen,
+    hint: ({ focused }) =>
+      focused
+        ? "输入即自动保存 · 点保存开始下一条 · Esc 退出"
+        : "点输入框开始记；点下方条目把它读上来接着改",
+  },
+  {
+    id: "work",
+    label: "工作",
+    title: "工作记录",
+    icon: ListChecks,
+    hint: () => "记下每天完成了什么；周报由记录自动汇总，不用再回忆",
+  },
+  {
+    id: "projects",
+    label: "项目",
+    title: "项目",
+    icon: FolderGit2,
+    hint: () => "在应用内启动 / 停止命令（不弹命令行窗口），下方实时显示输出",
+  },
+  {
+    id: "search",
+    label: "搜索",
+    title: "文件搜索",
+    icon: Search,
+    hint: ({ focused }) =>
+      focused
+        ? "↑↓ 选择 · Enter 打开 · Shift+Enter 定位 · Esc 收起"
+        : "点击输入框开始打字（会临时接管键盘焦点）",
+  },
 ];
 
 /** 每次呼出组合窗口都固定停在这一页（用户最常用的剪贴板）。 */
@@ -75,19 +132,18 @@ function arrowKeyBelongsToTarget(target: EventTarget | null): boolean {
 }
 
 /**
- * 组合窗口（窗口 label = `hub`）：铺满整屏的透明悬浮窗 + 一层变灰蒙版，
- * 结构参照 Windows Game Bar / Win+G —— **整屏压暗，蒙版上放顶部按钮条 + 左侧小视图 + 主视图**。
+ * 组合窗口（窗口 label = `hub`）：铺满整屏的透明悬浮窗，唤起时整块桌面压暗，
+ * 中间浮一块「命令中心」玻璃板。
  *
- * - 变灰蒙版：根节点整屏半透明黑底（窗口本身铺满光标所在屏幕，见 `hub.rs`），
- *   点空白处即收起——和 Win+G 一样用「整屏变灰」把注意力压到悬浮内容上；
- * - 顶部按钮条：左侧品牌，中间五个按钮切换主视图（**左右方向键也能切**），右侧快捷键提示与「收起」；
- * - 左侧小视图：常驻的系统资源 / 时钟 / 耳机摘要，直接复用首页卡片的数据源；
- * - 右侧主视图：复用快捷小窗的搜索 / 速记 / 剪贴板 / 项目 / 工作五页（它们只依赖
- *   `active` / `focused`，不关心自己跑在哪个窗口；项目页额外内嵌命令输出）。
+ * 布局（自左向右三块，全部装在同一块板里）：
+ * - 顶栏：品牌标记 + 版本，右侧是快捷键提示与收起；不再放导航；
+ * - 左栏：**竖直导航**（剪贴板 / 速记 / 工作 / 项目 / 搜索）+ 「现在 / 系统资源 / 设备」三个常驻小视图，
+ *   导航移到左侧是为了让主视图整块留给内容，标题不再和顶部标签条重复；
+ * - 右栏：统一的页头（图标 + 标题 + 一句操作提示）+ 主视图内容。
  *
- * 组合窗口是正常可聚焦窗口，因此 `focused` 就是真实的窗口焦点：失焦时 Rust 会隐藏
- * 窗口，这里同时把各页切回 `active=false` 以停止轮询。主视图五页**全部常驻挂载**、
- * 只把非当前页 `display:none`（见 `HubMainView`），否则切页会把速记页没写完的草稿丢掉。
+ * 主视图五页**全部常驻挂载**、只把非当前页 `display:none`（见 `HubMainView`），
+ * 否则切页会把速记页没写完的草稿丢掉。窗口失焦时 Rust 会隐藏窗口，
+ * 这里同时把各页切回 `active=false` 以停止轮询。
  */
 export function HubPanel() {
   // 本窗口没有主题引导脚本（见 quick-panel.html），配置也是异步读回来的：
@@ -95,6 +151,7 @@ export function HubPanel() {
   // 归主窗口，否则本窗口挂载瞬间的默认值会覆盖掉主窗口存下的外观偏好。
   useConfig();
   const shortcut = useAppStore((state) => state.config?.hubShortcut ?? "");
+  const pasteOnClick = useAppStore((state) => state.config?.clipboardPasteOnClick ?? true);
 
   const [focused, setFocused] = useState(true);
   /** 当前主视图：**每次呼出都会重置为 `DEFAULT_VIEW`（剪贴板）**，不跨次记忆。 */
@@ -192,16 +249,13 @@ export function HubPanel() {
   return (
     <ThemeProvider persist={false}>
       <div
-        // 整屏变灰蒙版（参照 Win+G）：窗口本身铺满光标所在的屏幕（见 `hub.rs`），
-        // 这一层把桌面压暗，卡片再浮在蒙版上居中排布。
-        className="relative flex h-full w-full items-center justify-center overflow-hidden bg-black/45 p-5 dark:bg-black/60"
+        // 整屏蒙版：窗口本身铺满光标所在的屏幕（见 `hub.rs`），
+        // 三层分别负责「压暗」「品牌光晕」「四周暗角」，玻璃板再浮在中间。
+        className="relative flex h-full w-full items-center justify-center overflow-hidden p-4"
         onMouseDown={(event) => {
-          // 点**任何一张卡片之外**的地方都收起：整屏蒙版、卡片之间的空隙。
-          // 只判断 `event.target === currentTarget` 不够——那些空白处命中的是中间的
-          // 布局容器，点下去毫无反应。左侧小视图现在是一整张卡片，卡内空白不再收起。
-          //
-          // 弹窗 / 下拉浮层挂在 `body` 下（Radix Portal），事件仍会经 React 树冒泡到这里；
-          // 它们在视觉上属于「卡片内部」，必须一并放过，否则点一下编辑框的按钮就把 hub 收了。
+          // 点**玻璃板之外**的地方才收起：板内空白、弹窗 / 下拉浮层都算「内部」。
+          // 弹窗 / 下拉挂在 `body` 下（Radix Portal），事件仍会经 React 树冒泡到这里，
+          // 必须一并放过，否则点一下编辑框的按钮就把 hub 收了。
           const target = event.target as Element | null;
           if (
             !target?.closest("[data-hub-surface]") &&
@@ -214,50 +268,44 @@ export function HubPanel() {
           }
         }}
       >
-        {/* 顶部一层极淡的品牌光晕：让整块悬浮面板像从桌面里「透」出来，而不是贴上去的。 */}
+        <div aria-hidden className="absolute inset-0 bg-[#08090f]/55 dark:bg-black/65" />
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-x-0 top-0 h-[420px] bg-[radial-gradient(60%_100%_at_50%_0%,var(--brand-glow),transparent_70%)] opacity-50"
+          className="pointer-events-none absolute inset-0 bg-[radial-gradient(70%_46%_at_50%_-8%,var(--brand-glow),transparent_62%)] opacity-80"
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 [background:radial-gradient(120%_92%_at_50%_50%,transparent_30%,rgba(0,0,0,0.42)_100%)]"
         />
 
-        <div className="relative flex h-full max-h-[900px] w-full max-w-[1440px] min-h-0 flex-col gap-3">
-          <HubTopBar active={view} shortcut={shortcut} onSelect={selectView} />
+        <div
+          data-hub-surface=""
+          className="hub-slab hub-enter relative flex h-full max-h-[900px] w-full max-w-[1340px] min-h-0 flex-col overflow-hidden rounded-[26px]"
+        >
+          {/* 顶边一道品牌色发丝光：玻璃板与蒙版之间唯一的「亮边」。 */}
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-x-24 top-0 z-10 h-px bg-gradient-to-r from-transparent via-brand/45 to-transparent"
+          />
 
-          <div className="flex min-h-0 flex-1 gap-3">
-            <aside
-              data-hub-surface=""
-              className="flex w-64 shrink-0 flex-col overflow-x-hidden overflow-y-auto rounded-xl bg-background ring-1 ring-border/50"
-            >
-              <HubSmallView icon={Activity} title="系统资源">
-                {/* 小视图常驻可见（不随主视图切换），所以按真实窗口焦点停表。 */}
-                <MonitorCard enabled={focused} />
-              </HubSmallView>
-              <HubSmallView icon={Clock} title="时钟">
-                <ClockCard />
-              </HubSmallView>
-              <HubSmallView icon={MonitorSmartphone} title="设备">
-                <HubDevicesWidget active={focused} />
-              </HubSmallView>
-            </aside>
+          <HubTopBar shortcut={shortcut} />
 
-            <main className="min-w-0 flex-1">
-              {/*
-                hub 是悬浮层：允许一圈极细 ring + 一层柔和投影把面板从变灰桌面里托起来；
-                面板内部仍不逐卡加边框 / 模糊，避免「框里套框」。
-              */}
-              <div
-                data-hub-surface=""
-                className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl bg-background shadow-[0_30px_80px_-44px_rgba(0,0,0,0.7)] ring-1 ring-border/50"
-              >
-                <span
-                  aria-hidden
-                  className="pointer-events-none absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-brand/50 to-transparent"
-                />
+          <div className="flex min-h-0 flex-1">
+            <HubAside active={view} focused={focused} onSelect={selectView} />
+
+            <section className="flex min-w-0 flex-1 flex-col">
+              <HubPaneHeader
+                view={view}
+                focused={focused}
+                pasteOnClick={pasteOnClick}
+              />
+
+              <div className="flex min-h-0 flex-1 flex-col px-6 pb-5">
                 <HubMainView visible={view === "search"} scroll>
-                  <QuickPanelSearch active={isActive("search")} {...commonProps} />
+                  <QuickPanelSearch active={isActive("search")} hideHeading {...commonProps} />
                 </HubMainView>
                 <HubMainView visible={view === "notes"} scroll>
-                  <QuickPanelNotes active={isActive("notes")} {...commonProps} />
+                  <QuickPanelNotes active={isActive("notes")} hideHeading {...commonProps} />
                 </HubMainView>
                 {/* 剪贴板页自己滚列表（翻页条要钉在底部），不让外层再套一层滚动。 */}
                 <HubMainView visible={view === "clipboard"} scroll={false}>
@@ -265,6 +313,7 @@ export function HubPanel() {
                     active={isActive("clipboard")}
                     pageSize={CLIPBOARD_PAGE_SIZE}
                     focusToken={focusToken}
+                    hideHeading
                     {...commonProps}
                   />
                 </HubMainView>
@@ -273,12 +322,12 @@ export function HubPanel() {
                   <QuickPanelProjects active={isActive("projects")} withOutput />
                 </HubMainView>
                 {/* 工作页直接用主窗口同款完整台账（项目筛选 / 编辑 / 周报全都在），
-                    不依赖主窗口；它自己管理滚动，交给外层会把时间线压没。 */}
+                    不依赖主窗口；页头由 hub 统一提供，报告入口挪进录入卡首行。 */}
                 <HubMainView visible={view === "work"} scroll={false}>
-                  <WorkPanel active={isActive("work")} />
+                  <WorkPanel active={isActive("work")} hideHeader />
                 </HubMainView>
               </div>
-            </main>
+            </section>
           </div>
         </div>
       </div>
@@ -287,66 +336,131 @@ export function HubPanel() {
   );
 }
 
+/** 顶栏：左侧品牌（标记 + 字标 + 版本 + 「命令中心」），右侧快捷键提示与收起。 */
+function HubTopBar({ shortcut }: { shortcut: string }) {
+  const version = useAppVersion();
+
+  return (
+    <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-border/45 px-5">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <span className="flex size-7 shrink-0 items-center justify-center rounded-[9px] bg-brand-soft ring-1 ring-brand/20">
+          <PrismMark className="size-[15px]" />
+        </span>
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="font-heading text-[0.72rem] leading-none font-semibold tracking-[0.18em] uppercase">
+            Prism3
+          </span>
+          {version && (
+            <span className="truncate text-[0.6rem] font-medium text-muted-foreground tabular-nums">
+              v{version}
+            </span>
+          )}
+        </span>
+        <span className="hidden h-4 w-px shrink-0 bg-border/60 sm:block" aria-hidden />
+        <span className="hidden text-[0.65rem] tracking-[0.16em] whitespace-nowrap text-muted-foreground sm:block">
+          命令中心
+        </span>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-2">
+        {shortcut && (
+          <span className="hidden items-center gap-1.5 text-[0.65rem] text-muted-foreground md:flex">
+            <kbd className="rounded-md border border-border/65 bg-muted/45 px-1.5 py-0.5 leading-none">
+              {shortcut}
+            </kbd>
+            唤出 / 收起
+          </span>
+        )}
+        <span className="hidden items-center gap-1 text-[0.65rem] text-muted-foreground lg:flex">
+          <kbd className="rounded-md border border-border/65 bg-muted/45 px-1.5 py-0.5 leading-none">
+            Esc
+          </kbd>
+          收起
+        </span>
+        <Button variant="ghost" size="icon-sm" aria-label="收起" title="收起（Esc）" onClick={hideHub}>
+          <X className="size-4" />
+        </Button>
+      </div>
+    </header>
+  );
+}
+
 /**
- * 顶部按钮条：左侧品牌，中间切换主视图的按钮组，右侧快捷键提示与收起。
- * 按钮组做成「内凹底 + 选中项浮起」的胶囊，与快捷小窗分页器的选中样式同源。
+ * 左栏：竖直导航 + 三个常驻小视图。
+ *
+ * 导航挪到左侧后不再与主视图标题重复；小视图（现在 / 系统 / 设备）不随主视图切换，
+ * 系统卡按**真实窗口焦点**停表。
  */
-function HubTopBar({
+function HubAside({
   active,
-  shortcut,
+  focused,
   onSelect,
 }: {
   active: HubViewId;
-  shortcut: string;
+  focused: boolean;
   onSelect: (id: HubViewId) => void;
 }) {
-  const version = useAppVersion();
+  return (
+    <aside className="flex w-[268px] shrink-0 flex-col border-r border-border/45 bg-black/[0.02] dark:bg-black/25">
+      <HubNav active={active} onSelect={onSelect} />
 
-  /** 同 `HubPanel::viewRef`：连续按键时不能等下一帧才拿到新的 active。 */
+      <div className="hub-aside-scroll flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <HubSection icon={Clock} label="现在">
+          <ClockCard />
+        </HubSection>
+        <HubSection icon={Activity} label="系统资源">
+          <MonitorCard enabled={focused} />
+        </HubSection>
+        <HubSection icon={MonitorSmartphone} label="设备">
+          <HubDevicesWidget active={focused} />
+        </HubSection>
+      </div>
+
+      <footer className="flex shrink-0 items-center gap-1.5 border-t border-border/45 px-4 py-2.5 text-[0.65rem] text-muted-foreground">
+        <kbd className="rounded border border-border/60 bg-muted/40 px-1 py-0.5 leading-none">←</kbd>
+        <kbd className="rounded border border-border/60 bg-muted/40 px-1 py-0.5 leading-none">→</kbd>
+        切换视图 · 点空白处返回桌面
+      </footer>
+    </aside>
+  );
+}
+
+/** 竖直导航：选中项 = 强调色软底 + 左侧 2px 光束（与主窗口侧栏同一套视觉语言）。 */
+function HubNav({
+  active,
+  onSelect,
+}: {
+  active: HubViewId;
+  onSelect: (id: HubViewId) => void;
+}) {
+  /** 连续按键时不能等下一帧才拿到新的 active。 */
   const activeRef = useRef(active);
   activeRef.current = active;
 
-  /** 顶部菜单内的方向键切换（四个方向都接，左右是本排的主方向）。 */
+  /** 导航内的方向键切换（四个方向都接，左右是本排的主方向）。 */
   const moveTab = (delta: number) => {
     const index = HUB_VIEWS.findIndex((item) => item.id === activeRef.current);
     const next = HUB_VIEWS[(index + delta + HUB_VIEWS.length) % HUB_VIEWS.length];
     activeRef.current = next.id;
     onSelect(next.id);
-    // 让焦点跟到新 tab：连续按键时焦点不会留在旧按钮上。
+    // 让焦点跟到新项：连续按键时焦点不会留在旧按钮上。
     window.setTimeout(() => document.getElementById(`hub-tab-${next.id}`)?.focus(), 0);
   };
 
   return (
-    <header
-      data-hub-surface=""
-      className="relative flex h-12 shrink-0 items-center gap-2 overflow-hidden rounded-xl bg-background px-3 shadow-[0_18px_50px_-34px_rgba(0,0,0,0.65)] ring-1 ring-border/50"
-    >
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-brand/50 to-transparent"
-      />
-
-      <span className="flex shrink-0 items-center gap-1.5 pl-1">
-        <PrismMark className="size-4 shrink-0" />
-        <span className="flex min-w-0 items-baseline gap-1.5">
-          <span className="font-heading text-[0.7rem] font-semibold tracking-[0.14em] uppercase">
-            Prism3
-          </span>
-          {version && (
-            <span className="truncate text-[0.65rem] font-medium text-muted-foreground tabular-nums">
-              v{version}
-            </span>
-          )}
+    <div className="shrink-0 px-2.5 pt-3.5 pb-1">
+      <div className="mb-1.5 flex items-center gap-2 px-2">
+        <span className="text-[0.6rem] font-medium tracking-[0.2em] text-muted-foreground">
+          视图
         </span>
-      </span>
-
-      <span className="mx-0.5 h-5 w-px shrink-0 bg-border" aria-hidden />
+        <span className="h-px flex-1 bg-border/45" aria-hidden />
+      </div>
 
       <nav
         role="tablist"
-        aria-orientation="horizontal"
+        aria-orientation="vertical"
         aria-label="主视图（← → 切换）"
-        className="flex items-center gap-0.5 rounded-lg bg-muted/50 p-0.5 ring-1 ring-border/40"
+        className="flex flex-col gap-0.5"
         onKeyDown={(event) => {
           const delta =
             event.key === "ArrowLeft" || event.key === "ArrowUp"
@@ -373,72 +487,91 @@ function HubTopBar({
               title={`${label}（← → 切换）`}
               onClick={() => onSelect(id)}
               className={cn(
-                "relative flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                "group relative flex h-9 items-center gap-2.5 rounded-lg pr-2.5 pl-3 text-left text-[0.8125rem] transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
                 on
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
+                  ? "bg-brand-soft font-medium text-foreground"
+                  : "text-muted-foreground hover:bg-muted/40 hover:text-foreground",
               )}
             >
+              <span
+                aria-hidden
+                className={cn(
+                  "absolute inset-y-2 left-0 w-0.5 rounded-full bg-brand transition-opacity duration-200",
+                  on ? "opacity-100" : "opacity-0",
+                )}
+              />
               <Icon
-                className={cn("size-3.5 shrink-0", on && "text-brand")}
+                className={cn(
+                  "size-4 shrink-0 transition-colors",
+                  on ? "text-brand" : "text-muted-foreground",
+                )}
                 aria-hidden
               />
-              {label}
-              {on && (
-                <span
-                  aria-hidden
-                  className="absolute inset-x-3 bottom-0 h-px rounded-full bg-brand"
-                />
-              )}
+              <span className="truncate">{label}</span>
             </button>
           );
         })}
       </nav>
+    </div>
+  );
+}
 
-      <div className="ml-auto flex shrink-0 items-center gap-1.5 pl-3">
-        <span className="hidden items-center gap-1 text-[0.65rem] text-muted-foreground lg:flex">
-          <kbd className="rounded border border-border/70 bg-muted/60 px-1 py-0.5 leading-none">
-            ←
-          </kbd>
-          <kbd className="rounded border border-border/70 bg-muted/60 px-1 py-0.5 leading-none">
-            →
-          </kbd>
-          切换
+/** 主视图页头：图标软底方块 + 标题 + 一句操作提示；右侧是方向键提示。 */
+function HubPaneHeader({
+  view,
+  focused,
+  pasteOnClick,
+}: {
+  view: HubViewId;
+  focused: boolean;
+  pasteOnClick: boolean;
+}) {
+  const meta = HUB_VIEWS.find((item) => item.id === view) ?? HUB_VIEWS[0];
+  const Icon = meta.icon;
+
+  return (
+    <header className="flex shrink-0 items-start justify-between gap-6 px-6 pt-5 pb-4">
+      <div className="flex min-w-0 items-center gap-3">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand ring-1 ring-brand/15">
+          <Icon className="size-4" aria-hidden />
         </span>
-        {shortcut && (
-          <span className="rounded-md border border-border/50 bg-muted/50 px-2 py-1 text-[0.65rem] text-muted-foreground">
-            {shortcut} 唤起 / 收起
-          </span>
-        )}
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="收起"
-          title="收起（Esc）"
-          onClick={hideHub}
-        >
-          <X className="size-3.5" />
-        </Button>
+        <div className="min-w-0">
+          <h1 className="font-heading text-[1.0625rem] leading-tight font-semibold tracking-[-0.02em]">
+            {meta.title}
+          </h1>
+          <p className="mt-1 truncate text-[0.75rem] text-muted-foreground">
+            {meta.hint({ focused, pasteOnClick })}
+          </p>
+        </div>
       </div>
+
+      <span className="hidden shrink-0 items-center gap-1 pt-1.5 text-[0.65rem] text-muted-foreground md:flex">
+        <kbd className="rounded border border-border/60 bg-muted/40 px-1 py-0.5 leading-none">←</kbd>
+        <kbd className="rounded border border-border/60 bg-muted/40 px-1 py-0.5 leading-none">→</kbd>
+        切换
+      </span>
     </header>
   );
 }
 
-/** 左侧小视图：三段内容共用一张卡片，中间用发丝分隔线，不再一卡套一卡。 */
-function HubSmallView({
+/** 左栏的一段小视图：小标题（图标 + 文字 + 发丝线）+ 内容。 */
+function HubSection({
   icon: Icon,
-  title,
+  label,
   children,
 }: {
   icon: LucideIcon;
-  title: string;
+  label: string;
   children: ReactNode;
 }) {
   return (
-    <section className="flex shrink-0 flex-col gap-2 border-t border-border/40 px-3.5 py-3 first:border-t-0">
+    <section className="flex shrink-0 flex-col gap-2.5 border-t border-border/45 px-4 py-3.5 first:border-t-0">
       <header className="flex items-center gap-2">
-        <Icon className="size-3.5 shrink-0 text-brand" aria-hidden />
-        <h2 className="min-w-0 truncate font-heading text-[0.8125rem] font-semibold">{title}</h2>
+        <Icon className="size-3 shrink-0 text-brand/80" aria-hidden />
+        <h2 className="text-[0.625rem] font-medium tracking-[0.16em] text-muted-foreground">
+          {label}
+        </h2>
+        <span className="h-px flex-1 bg-border/40" aria-hidden />
       </header>
       {children}
     </section>
@@ -468,8 +601,8 @@ function HubMainView({
     <div
       aria-hidden={!visible}
       className={cn(
-        "min-h-0 flex-1 px-3.5 py-3",
-        scroll ? "overflow-x-hidden overflow-y-auto" : "overflow-hidden",
+        "min-h-0 flex-1",
+        scroll ? "overflow-x-hidden overflow-y-auto" : "flex flex-col overflow-hidden",
         !visible && "hidden",
       )}
     >
