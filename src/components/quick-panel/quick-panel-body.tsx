@@ -7,6 +7,7 @@ import { QuickPanelClipboard } from "@/components/quick-panel/quick-panel-clipbo
 import { QuickPanelNotes } from "@/components/quick-panel/quick-panel-notes";
 import { QuickPanelProjects } from "@/components/quick-panel/quick-panel-projects";
 import { QuickPanelSearch } from "@/components/quick-panel/quick-panel-search";
+import { QuickPanelWork } from "@/components/quick-panel/quick-panel-work";
 import { useAppVersion } from "@/hooks/use-app-version";
 import { useQuickPanelBody, CLIP_BY_EDGE } from "@/hooks/use-quick-panel-body";
 import {
@@ -25,6 +26,7 @@ import {
   FolderGit2,
   Gauge,
   Info,
+  ListChecks,
   MousePointerClick,
   NotebookPen,
   Search,
@@ -40,6 +42,8 @@ const CLIPBOARD_PAGE_ID = "clipboard";
 const NOTES_PAGE_ID = "notes";
 /** 项目页的页面 id（同上）。 */
 const PROJECTS_PAGE_ID = "projects";
+/** 工作记录页的页面 id（同上）。 */
+const WORK_PAGE_ID = "work";
 
 /**
  * 快捷小窗面板本体：跑在独立窗口 `quick-panel-body` 中，高度恒为 `PANEL_HEIGHT`。
@@ -90,6 +94,22 @@ export function QuickPanelBody() {
         // 一行里要放目录 + 多条命令按钮，与剪贴板页同为最大页宽。
         panelWidth: PANEL_WIDTH_WIDE,
         content: <QuickPanelProjects active={phase === "open" && activePageId === PROJECTS_PAGE_ID} />,
+      },
+      {
+        id: WORK_PAGE_ID,
+        label: "记录",
+        icon: ListChecks,
+        // 一行输入 + 最近记录列表，与速记页同为最大页宽。
+        panelWidth: PANEL_WIDTH_WIDE,
+        content: (
+          <QuickPanelWork
+            active={phase === "open" && activePageId === WORK_PAGE_ID}
+            focused={focusMode}
+            onRequestFocus={requestFocus}
+            onReleaseFocus={releaseFocus}
+            onDismiss={dismiss}
+          />
+        ),
       },
       {
         id: BLUETOOTH_PAGE_ID,

@@ -13,12 +13,15 @@ use crate::config::{AppConfig, AppState, DockEdge};
 use crate::db::DbState;
 use crate::error::{AppError, AppResult};
 use crate::file_index::{self, FileIndexState, IndexState, SearchHit};
-use crate::models::{Note, NoteFolder, NoteImageGcReport, NoteLinks, NoteTagRow, PurgeReport, Tag};
+use crate::models::{
+    Note, NoteFolder, NoteImageGcReport, NoteLinks, NoteTagRow, PurgeReport, Tag, WorkLog,
+    WorkProject,
+};
 use crate::mouse::{self, MouseBattery, MouseState};
 use crate::note_image;
 use crate::note_io::{self, ExportReport, ImportOptions, ImportReport};
-use crate::paste::{self, PasteOutcome};
-use crate::repo::{note, note_folder, note_link, tag};
+use crate::paste::{self, PasteContent, PasteOutcome};
+use crate::repo::{note, note_folder, note_link, tag, work_log};
 use crate::status::{self, AppStatus, AppStatusState};
 use crate::updater::{self, UpdateSnapshot};
 use crate::wireless::{self, WirelessBattery, WirelessState};
@@ -1198,6 +1201,219 @@ pub fn clear_clipboard_history(app: AppHandle, state: State<'_, ClipboardState>)
 #[tauri::command]
 pub fn prune_clipboard_history(app: AppHandle, state: State<'_, ClipboardState>) -> AppResult<()> {
     state.prune(&app)
+}
+
+// ------------------------------ 工作记录（完成台账） ------------------------------
+
+/// 工作记录变化的事件名。载荷只带 `revision`，前端据此重拉（与 `notes:changed` 同口径）。
+const WORKLOGS_EVENT: &str = "worklogs:changed";
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkLogsChanged {
+    revision: u64,
+}
+
+/// 任何工作记录 / 项目写操作成功后调用：自增 revision 并广播。
+fn bump_work_logs(app: &AppHandle) {
+    let state = app.state::<DbState>();
+    let revision = state.work_revision.fetch_add(1, Ordering::SeqCst) + 1;
+    if let Err(err) = app.emit(WORKLOGS_EVENT, WorkLogsChanged { revision }) {
+        log::warn!("广播工作记录变化失败：{err}");
+    }
+}
+
+/// 记录类型白名单（与 `db.rs` 的 CHECK 约束一致）。
+const WORK_KINDS: [&str; 7] = ["dev", "bug", "support", "doc", "meeting", "ops", "other"];
+
+fn normalize_work_kind(raw: Option<&str>) -> AppResult<String> {
+    let kind = raw.unwrap_or("dev").trim();
+    if WORK_KINDS.contains(&kind) {
+        Ok(kind.to_string())
+    } else {
+        Err(AppError::Other(format!("未知的工作类型：{kind}")))
+    }
+}
+
+fn validated_work_title(title: &str) -> AppResult<String> {
+    let trimmed = title.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Other("请填写完成内容".into()));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// 工时：`0` = 没填；上限 24 小时（一天），保留两位小数。
+fn validated_work_hours(hours: Option<f64>) -> AppResult<f64> {
+    let value = hours.unwrap_or(0.0);
+    if !value.is_finite() || !(0.0..=24.0).contains(&value) {
+        return Err(AppError::Other("工时应在 0 到 24 小时之间".into()));
+    }
+    Ok((value * 100.0).round() / 100.0)
+}
+
+/// `[from, to]` 内（按完成时间）的工作记录，最新在前。
+#[tauri::command(async)]
+pub fn list_work_logs(state: State<'_, DbState>, from: u64, to: u64) -> AppResult<Vec<WorkLog>> {
+    let conn = state.lock();
+    Ok(work_log::list_range(&conn, from, to)?)
+}
+
+#[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
+pub fn create_work_log(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    title: String,
+    detail: Option<String>,
+    project_id: Option<i64>,
+    kind: Option<String>,
+    hours: Option<f64>,
+    finished_at: Option<u64>,
+) -> AppResult<WorkLog> {
+    let title = validated_work_title(&title)?;
+    let kind = normalize_work_kind(kind.as_deref())?;
+    let hours = validated_work_hours(hours)?;
+    let finished_at = finished_at.unwrap_or_else(crate::db::now_secs);
+
+    let created = {
+        let conn = state.lock();
+        work_log::create(
+            &conn,
+            &title,
+            detail.as_deref().unwrap_or("").trim(),
+            project_id,
+            &kind,
+            hours,
+            finished_at,
+            "manual",
+        )?
+    };
+    bump_work_logs(&app);
+    Ok(created)
+}
+
+#[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
+pub fn update_work_log(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    id: i64,
+    title: String,
+    detail: Option<String>,
+    project_id: Option<i64>,
+    kind: Option<String>,
+    hours: Option<f64>,
+    finished_at: Option<u64>,
+) -> AppResult<WorkLog> {
+    let title = validated_work_title(&title)?;
+    let kind = normalize_work_kind(kind.as_deref())?;
+    let hours = validated_work_hours(hours)?;
+
+    let updated = {
+        let conn = state.lock();
+        let existing = work_log::get(&conn, id)
+            .map_err(|_| AppError::Other("这条工作记录已经不在了，请刷新后重试".to_string()))?;
+        work_log::update(
+            &conn,
+            id,
+            &title,
+            detail.as_deref().unwrap_or("").trim(),
+            project_id,
+            &kind,
+            hours,
+            finished_at.unwrap_or(existing.finished_at),
+        )?
+    };
+    bump_work_logs(&app);
+    Ok(updated)
+}
+
+#[tauri::command]
+pub fn delete_work_log(app: AppHandle, state: State<'_, DbState>, id: i64) -> AppResult<()> {
+    {
+        let conn = state.lock();
+        work_log::delete(&conn, id)?;
+    }
+    bump_work_logs(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn list_work_projects(state: State<'_, DbState>) -> AppResult<Vec<WorkProject>> {
+    let conn = state.lock();
+    Ok(work_log::list_projects(&conn)?)
+}
+
+#[tauri::command]
+pub fn create_work_project(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    name: String,
+) -> AppResult<WorkProject> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err(AppError::Other("请填写项目名称".into()));
+    }
+    let created = {
+        let conn = state.lock();
+        if work_log::project_name_taken(&conn, &name)? {
+            return Err(AppError::Other(format!("项目「{name}」已存在")));
+        }
+        work_log::create_project(&conn, &name)?
+    };
+    bump_work_logs(&app);
+    Ok(created)
+}
+
+#[tauri::command]
+pub fn rename_work_project(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    id: i64,
+    name: String,
+) -> AppResult<()> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err(AppError::Other("请填写项目名称".into()));
+    }
+    {
+        let conn = state.lock();
+        let owner: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM work_projects WHERE name = ?1 COLLATE NOCASE",
+                [&name],
+                |r| r.get(0),
+            )
+            .ok();
+        if owner.is_some_and(|owner_id| owner_id != id) {
+            return Err(AppError::Other(format!("项目「{name}」已存在")));
+        }
+        work_log::rename_project(&conn, id, &name)?;
+    }
+    bump_work_logs(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_work_project(app: AppHandle, state: State<'_, DbState>, id: i64) -> AppResult<()> {
+    {
+        let conn = state.lock();
+        work_log::delete_project(&conn, id)?;
+    }
+    bump_work_logs(&app);
+    Ok(())
+}
+
+/// 把一段纯文本写进系统剪贴板（周报复制用）。
+///
+/// 复用 `paste.rs` 的写入链路并登记「这是本应用写的」序列号，避免剪贴板历史
+/// 把「复制周报」当成一次新的复制。
+#[tauri::command(async)]
+pub fn copy_text_to_clipboard(state: State<'_, ClipboardState>, text: String) -> AppResult<()> {
+    let seq = paste::copy(&PasteContent::Text(text))?;
+    state.note_self_write(seq);
+    Ok(())
 }
 
 // ------------------------------ 速记（笔记 / 文件夹 / 标签 / 图片） ------------------------------

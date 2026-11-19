@@ -8,6 +8,7 @@ import { MonitorPanel } from "@/components/monitor/monitor-panel";
 import { NotesPanel } from "@/components/notes/notes-panel";
 import { ProjectsPanel } from "@/components/projects/projects-panel";
 import { SearchPanel } from "@/components/search/search-panel";
+import { WorkPanel } from "@/components/work/work-panel";
 import { cn } from "@/lib/utils";
 import { ipc } from "@/lib/ipc";
 import { useAppStore } from "@/stores/app-store";
@@ -33,6 +34,7 @@ export function AppShell() {
     clipboard: "max-w-none",
     notes: "max-w-none",
     projects: "max-w-none",
+    work: "max-w-none",
   }[activeView];
 
   return (
@@ -48,7 +50,8 @@ export function AppShell() {
             <HomeDashboard />
           ) : activeView === "notes" ||
             activeView === "clipboard" ||
-            activeView === "projects" ? (
+            activeView === "projects" ||
+            activeView === "work" ? (
             // 整页数据视图（速记 / 剪贴板 / 项目）：**不进 ScrollArea**——Radix 的 Viewport
             // 内部是 `display: table` 包装层，子元素的 `h-full` 撑不满视口（卡片会被内容
             // 撑成一条、下方留一大片空白），故直接挂在有确定高度的 `main` 下，让各栏自己滚动。
@@ -62,6 +65,8 @@ export function AppShell() {
                 <NotesPanel />
               ) : activeView === "clipboard" ? (
                 <ClipboardPanel />
+              ) : activeView === "work" ? (
+                <WorkPanel />
               ) : (
                 <ProjectsPanel />
               )}

@@ -17,6 +17,7 @@ import {
   Bluetooth,
   FolderGit2,
   LayoutGrid,
+  ListChecks,
   NotebookPen,
   PencilLine,
   Plus,
@@ -35,6 +36,7 @@ import { NotesCard } from "@/components/home/cards/notes";
 import { ProjectsCard } from "@/components/home/cards/projects";
 import { SearchCard } from "@/components/home/cards/search";
 import { ShortcutsCard } from "@/components/home/cards/shortcuts";
+import { WorkCard } from "@/components/home/cards/work";
 import { HomeCard } from "@/components/home/home-card";
 import {
   HOME_COLS,
@@ -67,6 +69,7 @@ const MODULE_ICONS: Record<HomeModuleId, LucideIcon> = {
   notes: NotebookPen,
   search: Search,
   projects: FolderGit2,
+  work: ListChecks,
   shortcuts: LayoutGrid,
 };
 
@@ -79,6 +82,7 @@ const MODULE_BODIES: Record<HomeModuleId, ComponentType> = {
   notes: NotesCard,
   search: SearchCard,
   projects: ProjectsCard,
+  work: WorkCard,
   shortcuts: ShortcutsCard,
 };
 

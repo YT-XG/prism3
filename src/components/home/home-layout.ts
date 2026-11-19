@@ -32,6 +32,7 @@ export type HomeModuleId =
   | "notes"
   | "bluetooth"
   | "projects"
+  | "work"
   | "shortcuts";
 
 export interface HomeModuleDef {
@@ -63,6 +64,7 @@ export const HOME_MODULES: HomeModuleDef[] = [
   { id: "notes", title: "速记", minW: 3, minH: 3, idealW: 4, idealH: 5 },
   { id: "search", title: "快速搜索", minW: 3, minH: 3, idealW: 4, idealH: 5 },
   { id: "projects", title: "项目", minW: 3, minH: 3, idealW: 4, idealH: 5 },
+  { id: "work", title: "工作记录", minW: 3, minH: 2, idealW: 4, idealH: 3 },
   { id: "shortcuts", title: "常用入口", minW: 2, minH: 2, idealW: 4, idealH: 5 },
 ];
 

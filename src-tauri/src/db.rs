@@ -1,4 +1,4 @@
-//! 统一存储层：一个 SQLite 库承载速记（笔记正文 + 元数据）与剪贴板历史。
+//! 统一存储层：一个 SQLite 库承载速记（笔记正文 + 元数据）、剪贴板历史与工作记录。
 //!
 //! 库文件位于 `<app_config_dir>\prism3.db`（`%APPDATA%\com.prism3.desktop`，
 //! 与既有的 `config.json` / 剪贴板图片目录同目录），WAL 模式下会一并出现
@@ -23,8 +23,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::Connection;
 
-/// 逻辑 schema 版本。本库是新建的，首版即 1；无历史补列逻辑。
-const SCHEMA_VERSION: u32 = 1;
+/// 逻辑 schema 版本。1 = 速记 / 剪贴板；2 = 新增工作记录（`work_projects` / `work_logs`）。
+/// 新表一律 `IF NOT EXISTS`，老库打开时自动补齐，无需补列逻辑。
+const SCHEMA_VERSION: u32 = 2;
 
 /// 由 Tauri 托管的数据库状态。
 ///
@@ -33,6 +34,9 @@ const SCHEMA_VERSION: u32 = 1;
 pub struct DbState {
     pub conn: Mutex<Connection>,
     pub notes_revision: AtomicU64,
+    /// 工作记录的变更计数：任何 `work_logs` / `work_projects` 写操作后 +1，
+    /// 随 `worklogs:changed` 事件广播（载荷只带 revision）。
+    pub work_revision: AtomicU64,
 }
 
 impl DbState {
@@ -40,6 +44,7 @@ impl DbState {
         Self {
             conn: Mutex::new(conn),
             notes_revision: AtomicU64::new(0),
+            work_revision: AtomicU64::new(0),
         }
     }
 
@@ -164,6 +169,30 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
           image_bytes INTEGER
         );
 
+        -- 工作记录：work_projects 是「这件事属于哪摊活」的单层容器，
+        -- work_logs 是「我完成了什么」的事实流水（任务完成、手工补记都落这里）。
+        -- 项目删除时日志保留，只把归属置空（ON DELETE SET NULL）。
+        CREATE TABLE IF NOT EXISTS work_projects (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL UNIQUE,
+          archived_at INTEGER,
+          created_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS work_logs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          detail TEXT NOT NULL DEFAULT '',
+          project_id INTEGER REFERENCES work_projects(id) ON DELETE SET NULL,
+          kind TEXT NOT NULL DEFAULT 'dev'
+            CHECK (kind IN ('dev','bug','support','doc','meeting','ops','other')),
+          hours REAL NOT NULL DEFAULT 0,
+          finished_at INTEGER NOT NULL,
+          source TEXT NOT NULL DEFAULT 'manual',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_notes_updated     ON notes(updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_notes_folder      ON notes(folder_id);
         CREATE INDEX IF NOT EXISTS idx_notes_deleted     ON notes(deleted_at);
@@ -173,6 +202,8 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_note_links_to     ON note_links(to_note_id);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_clip_digest ON clipboard_history(digest);
         CREATE INDEX IF NOT EXISTS idx_clip_pinned_created ON clipboard_history(pinned, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_work_logs_finished ON work_logs(finished_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_work_logs_project  ON work_logs(project_id);
         ",
     )?;
 
@@ -216,6 +247,8 @@ mod tests {
             "tags",
             "note_tags",
             "clipboard_history",
+            "work_projects",
+            "work_logs",
         ] {
             assert!(table_exists(&conn, table), "缺表 {table}");
         }

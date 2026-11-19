@@ -199,6 +199,40 @@ export interface PortStatus {
   inUse: boolean;
 }
 
+/** 工作记录的类型（与 Rust `WORK_KINDS` / 数据库 CHECK 约束一一对应）。 */
+export type WorkLogKind = "dev" | "bug" | "support" | "doc" | "meeting" | "ops" | "other";
+
+/** 工作记录的项目（单层容器，不嵌套）。 */
+export interface WorkProject {
+  id: number;
+  name: string;
+  archivedAt: number | null;
+  createdAt: number;
+}
+
+/**
+ * 一条工作完成记录（台账主表）。
+ *
+ * `hours = 0` 表示没填工时；`projectName` 由后端 JOIN 带出，项目删除后为空串。
+ */
+export interface WorkLog {
+  id: number;
+  title: string;
+  detail: string;
+  projectId: number | null;
+  projectName: string;
+  kind: WorkLogKind;
+  hours: number;
+  finishedAt: number;
+  source: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface WorkLogsChanged {
+  revision: number;
+}
+
 /** 监控页的进程排序维度。 */
 export type ProcessSort = "cpu" | "memory";
 
@@ -709,6 +743,43 @@ export const ipc = {
   clearClipboardHistory: () => invoke<void>("clear_clipboard_history"),
   /** 立即按保留策略清理过期条目。 */
   pruneClipboardHistory: () => invoke<void>("prune_clipboard_history"),
+
+  // ---- 工作记录（完成台账） ----
+  /** 按完成时间取 `[from, to]` 内的记录（秒级时间戳，最新在前）。 */
+  listWorkLogs: (from: number, to: number) =>
+    invoke<WorkLog[]>("list_work_logs", { from, to }),
+  /** 记一条完成的活（`finishedAt` 缺省 = 现在）。 */
+  createWorkLog: (args: {
+    title: string;
+    detail?: string;
+    projectId?: number | null;
+    kind?: WorkLogKind;
+    hours?: number;
+    finishedAt?: number;
+  }) => invoke<WorkLog>("create_work_log", args),
+  /** 修改一条记录（`finishedAt` 缺省沿用原值）。 */
+  updateWorkLog: (args: {
+    id: number;
+    title: string;
+    detail?: string;
+    projectId?: number | null;
+    kind?: WorkLogKind;
+    hours?: number;
+    finishedAt?: number;
+  }) => invoke<WorkLog>("update_work_log", args),
+  /** 删除一条记录。 */
+  deleteWorkLog: (id: number) => invoke<void>("delete_work_log", { id }),
+  /** 列出未归档的工作项目。 */
+  listWorkProjects: () => invoke<WorkProject[]>("list_work_projects"),
+  /** 新建工作项目（同名会报错）。 */
+  createWorkProject: (name: string) => invoke<WorkProject>("create_work_project", { name }),
+  /** 重命名工作项目。 */
+  renameWorkProject: (id: number, name: string) =>
+    invoke<void>("rename_work_project", { id, name }),
+  /** 删除工作项目（记录保留，只解除归属）。 */
+  deleteWorkProject: (id: number) => invoke<void>("delete_work_project", { id }),
+  /** 把纯文本写进系统剪贴板（周报复制）。 */
+  copyTextToClipboard: (text: string) => invoke<void>("copy_text_to_clipboard", { text }),
 
   // ---- 速记（笔记 / 文件夹 / 标签 / 图片） ----
   /** 拉全量笔记（含正文；`trashed = true` 为回收站）。 */

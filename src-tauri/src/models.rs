@@ -79,6 +79,36 @@ pub struct NoteTagRow {
     pub tag_id: i64,
 }
 
+/// 工作记录的项目（单层容器，不嵌套；删除只解除日志归属，不删日志）。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WorkProject {
+    pub id: i64,
+    pub name: String,
+    pub archived_at: Option<u64>,
+    pub created_at: u64,
+}
+
+/// 一条工作完成记录（台账主表）。
+///
+/// `hours = 0` 表示「没填工时」，不是零耗时；`project_name` 由查询时 JOIN 带出，
+/// 项目删除后为空串。`source` 预留 `manual` / `task` / `git`，本版只写 `manual`。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WorkLog {
+    pub id: i64,
+    pub title: String,
+    pub detail: String,
+    pub project_id: Option<i64>,
+    pub project_name: String,
+    pub kind: String,
+    pub hours: f64,
+    pub finished_at: u64,
+    pub source: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
 /// 回收站保留策略下的清理报告（`purge_expired_notes`）。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]

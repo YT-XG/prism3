@@ -7,6 +7,7 @@ import {
   ClipboardList,
   Clock,
   FolderGit2,
+  ListChecks,
   NotebookPen,
   Search,
   Triangle,
@@ -21,6 +22,7 @@ import { QuickPanelClipboard } from "@/components/quick-panel/quick-panel-clipbo
 import { QuickPanelNotes } from "@/components/quick-panel/quick-panel-notes";
 import { QuickPanelProjects } from "@/components/quick-panel/quick-panel-projects";
 import { QuickPanelSearch } from "@/components/quick-panel/quick-panel-search";
+import { WorkPanel } from "@/components/work/work-panel";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
@@ -36,29 +38,40 @@ function hideHub() {
 }
 
 /** 主视图 id：就是顶部按钮条里那排按钮，点哪个就把右边的大区域换成哪一页。 */
-type HubViewId = "search" | "notes" | "clipboard" | "projects";
+type HubViewId = "search" | "notes" | "clipboard" | "projects" | "work";
 
 const HUB_VIEWS: { id: HubViewId; label: string; icon: LucideIcon }[] = [
-  { id: "search", label: "搜索", icon: Search },
-  { id: "notes", label: "速记", icon: NotebookPen },
   { id: "clipboard", label: "剪贴板", icon: ClipboardList },
+  { id: "notes", label: "速记", icon: NotebookPen },
+  { id: "work", label: "工作", icon: ListChecks },
   { id: "projects", label: "项目", icon: FolderGit2 },
+  { id: "search", label: "搜索", icon: Search },
 ];
 
-/** 记忆当前主视图的 localStorage 键（与快捷小窗分页器同一套做法）。 */
-const VIEW_STORAGE_KEY = "prism3:hub:view";
+/** 每次呼出组合窗口都固定停在这一页（用户最常用的剪贴板）。 */
+const DEFAULT_VIEW: HubViewId = "clipboard";
+
 /** 组合窗口里剪贴板一页放多少条：主视图比右缘面板高得多，一屏能放二十来条。 */
 const CLIPBOARD_PAGE_SIZE = 20;
 
-/** 读取上次停留的主视图；没写过或值已失效时回到第一页。 */
-function readStoredView(): HubViewId {
-  try {
-    const stored = window.localStorage.getItem(VIEW_STORAGE_KEY);
-    if (HUB_VIEWS.some((view) => view.id === stored)) return stored as HubViewId;
-  } catch {
-    // 隐私模式等场景下读不到，用默认页。
+/**
+ * 左右方向键是否该交给控件自己处理。
+ *
+ * 单行输入框里有文本（或选中了文本）时，左右键是在移动光标，不能拿来切页；
+ * 空输入框里左右键本来无事可做，才允许切页——否则搜索框一挂载就自动聚焦，
+ * 「方向键切菜单」会完全失效。多行编辑器 / 下拉框一律不抢。
+ */
+function arrowKeyBelongsToTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable || target.closest("[contenteditable='true']")) return true;
+  if (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
+  if (target instanceof HTMLInputElement) {
+    return (
+      target.value.length > 0 ||
+      (target.selectionStart !== null && target.selectionStart !== target.selectionEnd)
+    );
   }
-  return HUB_VIEWS[0].id;
+  return false;
 }
 
 /**
@@ -67,13 +80,13 @@ function readStoredView(): HubViewId {
  *
  * - 变灰蒙版：根节点整屏半透明黑底（窗口本身铺满光标所在屏幕，见 `hub.rs`），
  *   点空白处即收起——和 Win+G 一样用「整屏变灰」把注意力压到悬浮内容上；
- * - 顶部按钮条：左侧品牌，中间四个按钮切换主视图，右侧快捷键提示与「收起」；
+ * - 顶部按钮条：左侧品牌，中间五个按钮切换主视图（**左右方向键也能切**），右侧快捷键提示与「收起」；
  * - 左侧小视图：常驻的系统资源 / 时钟 / 耳机摘要，直接复用首页卡片的数据源；
- * - 右侧主视图：复用快捷小窗的搜索 / 速记 / 剪贴板 / 项目四页（它们只依赖
+ * - 右侧主视图：复用快捷小窗的搜索 / 速记 / 剪贴板 / 项目 / 工作五页（它们只依赖
  *   `active` / `focused`，不关心自己跑在哪个窗口；项目页额外内嵌命令输出）。
  *
  * 组合窗口是正常可聚焦窗口，因此 `focused` 就是真实的窗口焦点：失焦时 Rust 会隐藏
- * 窗口，这里同时把各页切回 `active=false` 以停止轮询。主视图四页**全部常驻挂载**、
+ * 窗口，这里同时把各页切回 `active=false` 以停止轮询。主视图五页**全部常驻挂载**、
  * 只把非当前页 `display:none`（见 `HubMainView`），否则切页会把速记页没写完的草稿丢掉。
  */
 export function HubPanel() {
@@ -84,7 +97,8 @@ export function HubPanel() {
   const shortcut = useAppStore((state) => state.config?.hubShortcut ?? "");
 
   const [focused, setFocused] = useState(true);
-  const [view, setView] = useState<HubViewId>(readStoredView);
+  /** 当前主视图：**每次呼出都会重置为 `DEFAULT_VIEW`（剪贴板）**，不跨次记忆。 */
+  const [view, setView] = useState<HubViewId>(DEFAULT_VIEW);
   /** 每次「呼出组合窗口」自增：剪贴板页据此清空上次的关键词并重新聚焦搜索框。 */
   const [focusToken, setFocusToken] = useState(0);
   const wasFocusedRef = useRef(focused);
@@ -107,32 +121,64 @@ export function HubPanel() {
   }, []);
 
   // 组合窗口失焦即隐藏，再次唤起才会重新拿到焦点：只有「由无焦点变有焦点」才算一次呼出。
-  // 若此时停在剪贴板页，就让该页清空上次的关键词并重新聚焦搜索框。
+  // 每次呼出都强制回到剪贴板页，并让该页清空上次的关键词、重新聚焦搜索框。
   useEffect(() => {
     const gained = focused && !wasFocusedRef.current;
     wasFocusedRef.current = focused;
-    if (gained && view === "clipboard") setFocusToken((token) => token + 1);
-  }, [focused, view]);
+    if (!gained) return;
+    setView(DEFAULT_VIEW);
+    setFocusToken((token) => token + 1);
+  }, [focused]);
+
+  const selectView = useCallback((id: HubViewId) => {
+    setView(id);
+  }, []);
+
+  /** 当前视图的镜像：键盘监听只挂一次，不能闭包里拿着首次渲染的 `view`。 */
+  const viewRef = useRef(view);
+  viewRef.current = view;
+
+  /** 在主视图序列里前后移动一格（首尾循环）。 */
+  const moveView = useCallback(
+    (delta: number) => {
+      const index = HUB_VIEWS.findIndex((item) => item.id === viewRef.current);
+      const next = HUB_VIEWS[(index + delta + HUB_VIEWS.length) % HUB_VIEWS.length];
+      // 先同步镜像再提交：按住方向键连续触发时，不能等下一帧渲染才看到新值。
+      viewRef.current = next.id;
+      selectView(next.id);
+    },
+    [selectView],
+  );
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        // 有弹窗时 Esc 先关弹窗（Radix 自己处理），不要让整个组合窗口一起消失。
+        if (document.querySelector('[role="dialog"][data-state="open"]')) return;
         event.preventDefault();
         hideHub();
+        return;
       }
+      // 只接左右键：上下键在搜索 / 剪贴板页是「选择结果」，抢了会破坏原有手感。
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      // 弹窗打开时不切页；页面自己的处理器已拦截；带修饰键 / 正在编辑文本时让给控件。
+      if (
+        event.defaultPrevented ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        document.querySelector('[role="dialog"][data-state="open"]') ||
+        arrowKeyBelongsToTarget(event.target)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      moveView(event.key === "ArrowLeft" ? -1 : 1);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
-
-  const selectView = useCallback((id: HubViewId) => {
-    setView(id);
-    try {
-      window.localStorage.setItem(VIEW_STORAGE_KEY, id);
-    } catch {
-      // 写不进去也不影响本次切换。
-    }
-  }, []);
+  }, [moveView]);
 
   // `active` = 窗口有焦点 **且** 当前显示的就是这一页：只有当前页该轮询 / 该发起查询。
   const isActive = (id: HubViewId) => focused && view === id;
@@ -153,8 +199,19 @@ export function HubPanel() {
           // 点**任何一张卡片之外**的地方都收起：整屏蒙版、卡片之间的空隙，以及左侧小视图
           // 下方那片空白（它露出的就是蒙版，视觉上等同空白）。只判断 `event.target ===
           // currentTarget` 不够——那些空白处命中的是中间的布局容器，点下去毫无反应。
+          //
+          // 弹窗 / 下拉浮层挂在 `body` 下（Radix Portal），事件仍会经 React 树冒泡到这里；
+          // 它们在视觉上属于「卡片内部」，必须一并放过，否则点一下编辑框的按钮就把 hub 收了。
           const target = event.target as Element | null;
-          if (!target?.closest("[data-hub-surface]")) hideHub();
+          if (
+            !target?.closest("[data-hub-surface]") &&
+            !target?.closest('[role="dialog"]') &&
+            !target?.closest('[data-slot="dialog-overlay"]') &&
+            !target?.closest("[data-radix-popper-content-wrapper]") &&
+            !target?.closest("[data-sonner-toaster]")
+          ) {
+            hideHub();
+          }
         }}
       >
         <div className="flex h-full max-h-[900px] w-full max-w-[1440px] min-h-0 flex-col gap-3">
@@ -202,6 +259,11 @@ export function HubPanel() {
                 <HubMainView visible={view === "projects"} scroll={false}>
                   <QuickPanelProjects active={isActive("projects")} withOutput />
                 </HubMainView>
+                {/* 工作页直接用主窗口同款完整台账（项目筛选 / 编辑 / 周报全都在），
+                    不依赖主窗口；它自己管理滚动，交给外层会把时间线压没。 */}
+                <HubMainView visible={view === "work"} scroll={false}>
+                  <WorkPanel active={isActive("work")} />
+                </HubMainView>
               </div>
             </main>
           </div>
@@ -227,6 +289,20 @@ function HubTopBar({
 }) {
   const version = useAppVersion();
 
+  /** 同 `HubPanel::viewRef`：连续按键时不能等下一帧才拿到新的 active。 */
+  const activeRef = useRef(active);
+  activeRef.current = active;
+
+  /** 顶部菜单内的方向键切换（四个方向都接，左右是本排的主方向）。 */
+  const moveTab = (delta: number) => {
+    const index = HUB_VIEWS.findIndex((item) => item.id === activeRef.current);
+    const next = HUB_VIEWS[(index + delta + HUB_VIEWS.length) % HUB_VIEWS.length];
+    activeRef.current = next.id;
+    onSelect(next.id);
+    // 让焦点跟到新 tab：连续按键时焦点不会留在旧按钮上。
+    window.setTimeout(() => document.getElementById(`hub-tab-${next.id}`)?.focus(), 0);
+  };
+
   return (
     <header
       data-hub-surface=""
@@ -249,20 +325,35 @@ function HubTopBar({
       <nav
         role="tablist"
         aria-orientation="horizontal"
-        aria-label="主视图"
+        aria-label="主视图（← → 切换）"
         className="flex items-center gap-0.5 rounded-lg bg-muted/60 p-0.5"
+        onKeyDown={(event) => {
+          const delta =
+            event.key === "ArrowLeft" || event.key === "ArrowUp"
+              ? -1
+              : event.key === "ArrowRight" || event.key === "ArrowDown"
+                ? 1
+                : 0;
+          if (delta === 0) return;
+          event.preventDefault();
+          event.stopPropagation();
+          moveTab(delta);
+        }}
       >
         {HUB_VIEWS.map(({ id, label, icon: Icon }) => {
           const on = id === active;
           return (
             <button
               key={id}
+              id={`hub-tab-${id}`}
               type="button"
               role="tab"
               aria-selected={on}
+              tabIndex={on ? 0 : -1}
+              title={`${label}（← → 切换）`}
               onClick={() => onSelect(id)}
               className={cn(
-                "flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors focus-visible:outline-none",
+                "flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
                 on ? "bg-background text-foreground" : "text-muted-foreground hover:text-foreground",
               )}
             >
@@ -274,6 +365,11 @@ function HubTopBar({
       </nav>
 
       <div className="ml-auto flex shrink-0 items-center gap-1.5 pl-3">
+        <span className="hidden items-center gap-1 text-[0.65rem] text-muted-foreground lg:flex">
+          <kbd className="rounded border border-border/70 bg-muted/60 px-1 py-0.5 leading-none">←</kbd>
+          <kbd className="rounded border border-border/70 bg-muted/60 px-1 py-0.5 leading-none">→</kbd>
+          切换
+        </span>
         {shortcut && (
           <span className="rounded-md bg-muted/60 px-2 py-1 text-[0.65rem] text-muted-foreground">
             {shortcut} 唤起 / 收起

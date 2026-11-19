@@ -6,6 +6,7 @@ pub mod note;
 pub mod note_folder;
 pub mod note_link;
 pub mod tag;
+pub mod work_log;
 
 /// 秒级时间戳别名（与 `crate::db::now_secs` 同口径）。
 pub fn now() -> u64 {
