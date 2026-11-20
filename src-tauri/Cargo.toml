@@ -1,6 +1,6 @@
 [package]
 name = "prism3"
-version = "0.4.2"
+version = "0.4.3"
 description = "Prism3 desktop application"
 authors = ["you"]
 edition = "2021"
