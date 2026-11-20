@@ -1,8 +1,8 @@
 import { Headphones, Keyboard, Mouse } from "lucide-react";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { DeviceSummaryList } from "@/components/devices/device-summary-list";
+import { DeviceSummaryList, BatteryBar } from "@/components/devices/device-summary-list";
 import { useEarbuds } from "@/hooks/use-earbuds";
 import { useMouseBattery } from "@/hooks/use-mouse-battery";
 import { useWirelessBatteries } from "@/hooks/use-wireless-batteries";
@@ -10,12 +10,32 @@ import { connectedDevices } from "@/lib/devices";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/stores/app-store";
 
+/** 托盘里一台设备的一段电量：耳机会有「左 / 右 / 仓」三行，其余只有一行。 */
+interface TrayRow {
+  label: string | null;
+  percent: number | null;
+  approx?: boolean;
+}
+
+interface TrayDevice {
+  id: string;
+  name: string;
+  icon: typeof Headphones;
+  rows: TrayRow[];
+}
+
+const fmt = (percent: number | null, approx?: boolean) =>
+  percent === null ? "—" : `${approx ? "≈" : ""}${percent}`;
+
 /**
- * 任务栏托盘里的「设备电量」：一个图标 + 主设备最紧张的那格电量，点开是完整电量列表。
+ * 任务栏托盘里的「设备电量」：每台设备一列，列内是若干行「标签 + 电量条 + 数值」。
  *
- * 为什么放托盘而不是桌面小组件：电量是**系统状态**，和时钟、网络同级；
- * 放在任务栏既不占桌面，也不用为了看电量去开窗口（Windows 托盘也是这个心智）。
- * 列表本体复用 `DeviceSummaryList`——与 hub 左栏、设备页同一份版式。
+ * 为什么不只报一个数：电量最有用的信息是**趋势与短板**（左右耳差 20% 就该换边用），
+ * 一条细进度条比一个百分比好扫。耳机天然是三行（左 / 右 / 仓），
+ * 鼠标、键盘各一行——所以这里按「设备列」排，而不是压成一行。
+ *
+ * 只塞得下 3 台（56px 高的任务栏）；更多的进浮层（点任意一列打开）。
+ * 列表本体与 hub 左栏、设备页同一份 `DeviceSummaryList`。
  */
 export function DeviceTray() {
   const [open, setOpen] = useState(false);
@@ -26,40 +46,40 @@ export function DeviceTray() {
 
   const devices = connectedDevices(earbuds.state, mouse, wireless);
 
-  // 托盘上一台设备一段：耳机给「左·右·仓」三格，其余给单格百分比。
-  // 全部平铺而不是只报一个最小值——一眼就能看出是哪一格在掉电。
-  const chips = devices.slice(0, 4).map((device) => {
+  const columns: TrayDevice[] = devices.slice(0, 3).map((device) => {
     if (device.kind === "earbuds") {
-      const values = [device.battery?.left, device.battery?.right, device.battery?.case];
-      const text = values.map((value) => (typeof value === "number" ? value : "—")).join("·");
-      const percent = Math.min(
-        ...values.filter((value): value is number => typeof value === "number"),
-      );
       return {
-        key: device.id,
+        id: device.id,
+        name: device.name,
         icon: Headphones,
-        text,
-        low: Number.isFinite(percent) && percent <= 20,
-        title: `${device.name} · 左 ${values[0] ?? "—"}% · 右 ${values[1] ?? "—"}% · 仓 ${values[2] ?? "—"}%`,
+        rows: [
+          { label: "左", percent: device.battery?.left ?? null },
+          { label: "右", percent: device.battery?.right ?? null },
+          { label: "仓", percent: device.battery?.case ?? null },
+        ],
       };
     }
 
-    const Icon =
+    const icon =
       device.kind === "mouse"
         ? Mouse
         : device.category === "keyboard"
           ? Keyboard
-          : Headphones;
-    const percent = device.percent;
+          : device.category === "headset"
+            ? Headphones
+            : Mouse;
+
     return {
-      key: device.id,
-      icon: Icon,
-      text:
-        percent === null
-          ? "—"
-          : `${device.kind === "wireless" && device.approx ? "≈" : ""}${percent}%`,
-      low: percent !== null && percent <= 20,
-      title: `${device.name} · ${percent === null ? "未上报电量" : `${percent}%`}`,
+      id: device.id,
+      name: device.name,
+      icon,
+      rows: [
+        {
+          label: null,
+          percent: device.percent,
+          approx: device.kind === "wireless" && device.approx,
+        },
+      ],
     };
   });
 
@@ -112,59 +132,83 @@ export function DeviceTray() {
     </>
   );
 
+  if (columns.length === 0) {
+    return (
+      <button
+        type="button"
+        aria-label="设备电量"
+        title="没有已连接的设备"
+        onClick={() => setOpen((value) => !value)}
+        className={cn(
+          "flex h-8 items-center gap-1.5 rounded-full px-2 transition-colors",
+          open ? "bg-brand/10" : "hover:bg-black/6 dark:hover:bg-white/10",
+        )}
+      >
+        <Headphones className="size-3.5 text-muted-foreground" strokeWidth={2} />
+        <span className="text-[10px] font-medium text-muted-foreground">—</span>
+      </button>
+    );
+  }
+
   return (
     <>
-      <div className="flex items-center gap-0.5">
-        {chips.length === 0 ? (
-          <button
-            type="button"
-            aria-label="设备电量"
-            aria-expanded={open}
-            title="没有已连接的设备"
-            onClick={() => setOpen((value) => !value)}
-            className={cn(
-              "flex h-8 items-center gap-1.5 rounded-full px-2 transition-colors",
-              open ? "bg-brand/10" : "hover:bg-black/6 dark:hover:bg-white/10",
-            )}
-          >
-            <Headphones className="size-3.5 text-muted-foreground" strokeWidth={2} />
-            <span className="text-[10.5px] font-medium text-muted-foreground">—</span>
-          </button>
-        ) : (
-          chips.map((chip) => {
-            const Icon = chip.icon;
-            return (
+      <div className="flex items-center">
+        {columns.map((column, index) => {
+          const Icon = column.icon;
+          return (
+            <Fragment key={column.id}>
+              {index > 0 ? (
+                <span
+                  className="mx-1 h-7 w-px bg-[color:var(--taskbar-border)]"
+                  aria-hidden
+                />
+              ) : null}
               <button
-                key={chip.key}
                 type="button"
-                aria-label="设备电量"
+                aria-label={`设备电量：${column.name}`}
                 aria-expanded={open}
-                title={chip.title}
+                title={column.name}
                 onClick={() => setOpen((value) => !value)}
                 className={cn(
-                  "flex h-8 items-center gap-1 rounded-full px-1.5 transition-colors",
+                  "flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors",
                   open ? "bg-brand/10" : "hover:bg-black/6 dark:hover:bg-white/10",
                 )}
               >
-                <Icon
-                  className={cn("size-3.5", chip.low ? "text-amber-500" : "text-muted-foreground")}
-                  strokeWidth={2}
-                />
-                <span
-                  className={cn(
-                    "text-[10.5px] font-medium tabular-nums",
-                    chip.low ? "text-amber-600 dark:text-amber-400" : "text-foreground",
-                  )}
-                >
-                  {chip.text}
+                <Icon className="size-[15px] shrink-0 text-muted-foreground" strokeWidth={2} />
+                <span className="flex flex-col gap-[5px]">
+                  {column.rows.map((row) => (
+                    <span
+                      key={row.label ?? "value"}
+                      className="flex items-center gap-1.5 text-[11px] leading-none"
+                    >
+                      {row.label ? (
+                        <span className="w-[12px] text-muted-foreground">{row.label}</span>
+                      ) : null}
+                      <BatteryBar
+                        percent={row.percent}
+                        className="h-[5px] w-[46px] shrink-0 bg-black/10 dark:bg-white/15"
+                      />
+                      <span
+                        className={cn(
+                          "w-[26px] text-right font-medium tabular-nums",
+                          row.percent !== null && row.percent <= 20
+                            ? "text-amber-600 dark:text-amber-400"
+                            : "text-foreground",
+                        )}
+                      >
+                        {fmt(row.percent, row.approx)}
+                      </span>
+                    </span>
+                  ))}
                 </span>
               </button>
-            );
-          })
-        )}
-        {devices.length > 4 ? (
-          <span className="px-1 text-[10px] text-muted-foreground tabular-nums">
-            +{devices.length - 4}
+            </Fragment>
+          );
+        })}
+
+        {devices.length > 3 ? (
+          <span className="pl-1 text-[10px] text-muted-foreground tabular-nums">
+            +{devices.length - 3}
           </span>
         ) : null}
       </div>
