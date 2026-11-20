@@ -1,13 +1,8 @@
-import { ArrowDown, ArrowUp, ClipboardList, Cpu, HardDrive, MonitorSmartphone } from "lucide-react";
+import { ArrowDown, ArrowUp, ClipboardList, Cpu, HardDrive } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { DeviceSummaryList } from "@/components/devices/device-summary-list";
 import { useClipboardList } from "@/hooks/use-clipboard-list";
-import { useEarbuds } from "@/hooks/use-earbuds";
-import { useMouseBattery } from "@/hooks/use-mouse-battery";
 import { useSystemMonitor } from "@/hooks/use-system-monitor";
-import { useWirelessBatteries } from "@/hooks/use-wireless-batteries";
-import { connectedDevices } from "@/lib/devices";
 import { cn } from "@/lib/utils";
 
 /** 桌面右侧的小组件列（参考站的「桌面小组件」位置：右上，纵向堆叠）。 */
@@ -21,7 +16,6 @@ export function DesktopWidgets() {
       }}
     >
       <ClockWidget />
-      <DevicesWidget />
       <SystemWidget />
       <ClipboardWidget />
     </div>
@@ -128,35 +122,6 @@ function ClockIcon({ className }: { className?: string }) {
 }
 
 const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)} GB`;
-
-/**
- * 设备电量：与 hub 左栏、设备页同源（都走 `connectedDevices` 纯投影），
- * 这里只把同一份 `DeviceSummaryList` 排进桌面小组件——电量条比一串百分比好扫。
- */
-function DevicesWidget() {
-  const earbuds = useEarbuds();
-  const mouse = useMouseBattery(true);
-  const wireless = useWirelessBatteries(true);
-  const devices = connectedDevices(earbuds.state, mouse, wireless);
-
-  return (
-    <WidgetCard
-      index={1}
-      title="设备"
-      icon={MonitorSmartphone}
-      action={
-        <span className="text-[10px] text-muted-foreground tabular-nums">
-          {devices.length > 0 ? `${devices.length} 台在线` : "未连接"}
-        </span>
-      }
-    >
-      <DeviceSummaryList devices={devices.slice(0, 2)} compact />
-      {devices.length > 2 ? (
-        <p className="mt-1 text-[10px] text-muted-foreground">还有 {devices.length - 2} 台设备</p>
-      ) : null}
-    </WidgetCard>
-  );
-}
 
 function SystemWidget() {
   const { snapshot } = useSystemMonitor({ trackHistory: false });

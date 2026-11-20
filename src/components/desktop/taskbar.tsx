@@ -7,6 +7,8 @@ import { cn } from "@/lib/utils";
 import { useAppStore } from "@/stores/app-store";
 import { useWindowStore } from "@/stores/window-store";
 
+import { DeviceTray } from "./device-tray";
+
 const STATUS_TEXT = {
   normal: "运行正常",
   busy: "负载偏高",
@@ -121,6 +123,8 @@ export function Taskbar({
       </div>
 
       <div className="ml-auto flex items-center gap-2 pr-1">
+        <DeviceTray />
+
         <span
           className="flex items-center gap-1.5 rounded-full bg-black/4 px-2 py-1 dark:bg-white/8"
           title={STATUS_TEXT[status]}

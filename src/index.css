@@ -105,8 +105,11 @@
         linear-gradient(180deg, var(--desktop-base-a) 0%, var(--desktop-base-b) 100%);
 
     /* ---- 浮层窗口：近乎不透明的表面，标题栏半透明 ----
-       窗口是可读表面，必须比桌面「实」；阴影给足，才有离桌面的高度感。 */
-    --window-bg: rgba(253, 254, 255, 0.94);
+       窗口是可读表面，必须比桌面「实」；阴影给足，才有离桌面的高度感。
+       透明度乘设置页的「玻璃不透明度」（`--glass-dim`，30–100 → 0.38–1.28），
+       但夹在 0.55 以上：滑块拉到底也只是更透，不会读到壁纸上去。 */
+    --window-alpha: clamp(0.55, calc(0.94 * var(--glass-dim, 1)), 0.99);
+    --window-bg: rgba(253, 254, 255, var(--window-alpha));
     /* 内容底比卡片灰一档：卡片是纯白，才有「白纸浮在灰面上」的层次 */
     --window-body: #f2f5fa;
     --window-titlebar: rgba(255, 255, 255, 0.62);
@@ -120,7 +123,8 @@
         0 1px 4px rgba(16, 40, 80, 0.06);
 
     /* ---- 任务栏 / 开始菜单 ---- */
-    --taskbar-bg: rgba(255, 255, 255, 0.8);
+    --taskbar-alpha: clamp(0.5, calc(0.8 * var(--glass-dim, 1)), 0.96);
+    --taskbar-bg: rgba(255, 255, 255, var(--taskbar-alpha));
     --taskbar-border: rgba(15, 23, 42, 0.07);
     --taskbar-shadow: 0 -200px 0 -199px rgba(15, 23, 42, 0.06);
 
