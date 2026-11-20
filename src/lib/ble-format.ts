@@ -18,6 +18,19 @@ export function displayDeviceName(name: string | null, address: string): string 
 }
 
 /**
+ * 广播里厂商公司标识（蓝牙 SIG 分配号）的展示文本，形如 `0x5452` / `0x0B0D / 0x5452`。
+ *
+ * 设备页把它放在地址后面：同品牌换型号未必还是同一个号，看一眼比猜型号可靠；
+ * 空列表给 `无厂商数据`，而不是留一段空白让人以为是渲染丢了。
+ */
+export function companyIdsText(companyIds: number[]): string {
+  if (companyIds.length === 0) return "无厂商数据";
+  return companyIds
+    .map((id) => `0x${id.toString(16).toUpperCase().padStart(4, "0")}`)
+    .join(" / ");
+}
+
+/**
  * 是否有一只耳机不在线（电量读数里那只耳机是 `null`）。
  *
  * ① 实测（用户，见协议笔记 §14.3 第 4 条）：**只有一只耳机在线时，耳机不接受降噪梯度的切换**——

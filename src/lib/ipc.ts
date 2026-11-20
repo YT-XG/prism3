@@ -466,11 +466,20 @@ export interface BleCandidate {
    * 身份只认 `address`。
    */
   manufacturerPayload: string;
+  /**
+   * 广播里**全部**厂商公司标识（蓝牙 SIG 分配号，升序；空 payload 的条目不算）。
+   *
+   * 同一品牌不同型号未必共用同一个号（籁特易耳是 RoseLink 平台的贴牌，见协议笔记），
+   * 所以「能不能连」不靠型号名判断：要看这里的号，连接后再由后端按服务 / 特征校验。
+   */
+  companyIds: number[];
   /** 是否已在本机记住的设备列表里。 */
   known: boolean;
   /**
-   * 广播里是否带本平台的厂商数据（company id `0x5452`）。
-   * 扫描**不再按它过滤**：false 的设备也列出来（有名字显示名字），只是不能添加 / 连接。
+   * 广播里是否带**白名单里的**厂商数据（`0x5452` 等，见 Rust `VENDOR_COMPANY_IDS`）。
+   *
+   * 只是提示，**不是准入条件**：false 的设备也能添加并尝试连接；真正的协议校验发生在
+   * 连接之后（没有本平台的服务 / 特征会返回明确错误），避免「同平台换了 SIG 号就永远连不上」。
    */
   supported: boolean;
 }

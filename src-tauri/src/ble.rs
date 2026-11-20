@@ -68,11 +68,17 @@ pub const NOTIFY_CHARACTERISTIC_UUID: Uuid =
 pub const DEVICE_NAME_CHARACTERISTIC_UUID: Uuid =
     Uuid::from_u128(0x0000_2a00_0000_1000_8000_0080_5f9b_34fb);
 
-/// 广播里厂商数据的公司标识（蓝牙 SIG 分配号 `0x5452`）。
+/// 厂商数据的公司标识**白名单**（蓝牙 SIG 分配号）。
 ///
-/// 只用于**标记候选是否可添加**（见 `has_vendor_manufacturer_data`），不作身份判据；
-/// 扫描结果**不再按它过滤**（要求「全部列出」——同品牌不同协议 / 已配对的设备也要看得见）。
-const DEVICE_COMPANY_ID: u16 = 0x5452;
+/// 只有 `0x5452` 是实测确认的（星环 Ultra；见 `docs/逆向/StarRing-Ultra-BLE协议.md` §15）。
+/// 籁特易耳是 C 端品牌、固件来自 RoseLink / 弱水时砂平台，**同平台贴牌、以及同品牌其它
+/// 型号（星环 2 / 星城…）完全可能换一个 SIG 号**，所以这里刻意做成一张表：
+///
+/// - 它只是「快速通道」：命中就在设备页直接标成可添加；**没命中也允许添加**，真正的
+///   协议校验放在连接之后（服务 / 特征对不上会返回 `AppError::ProtocolMismatch`）；
+/// - 要加新号**不要凭型号猜**：扫一次，候选行里的 `companyIds` 就是这台设备实际广播的
+///   SIG 号（见 `BleCandidate::company_ids`），确认过再追加到本数组。
+const VENDOR_COMPANY_IDS: &[u16] = &[0x5452];
 
 /// 帧头：请求固定 `08 EE 00 00 00`。
 const REQUEST_PREFIX: [u8; 5] = [0x08, 0xEE, 0x00, 0x00, 0x00];
@@ -339,12 +345,19 @@ pub struct BleCandidate {
     pub name: Option<String>,
     /// 广播里的信号强度；平台没报告时为 `0`（不臆造）。
     pub rssi: i16,
-    /// 厂商数据原文（小写十六进制）；只取广播里实际存在的字节。
+    /// 厂商数据原文（小写十六进制，取白名单里命中第一条的 payload）；只给广播里实际存在的字节。
     pub manufacturer_payload: String,
     /// 地址是否已在配置的 `ble_devices` 里。
     pub known: bool,
-    /// 广播里是否带本平台的厂商数据（company id `0x5452`）。
-    /// **现在不过滤**：扫到的设备全部列出，只有 `supported` 为 true 的才允许添加 / 连接。
+    /// 广播里**全部**厂商公司标识（升序，只收 payload 非空的）。
+    ///
+    /// 这是「要不要把某个 SIG 号加进 `VENDOR_COMPANY_IDS`」的唯一依据：同品牌换型号
+    /// 未必还是 `0x5452`，看这一项比看型号名可靠。
+    pub company_ids: Vec<u16>,
+    /// 广播里是否带**白名单里的**厂商数据（`VENDOR_COMPANY_IDS`）。
+    ///
+    /// 只是提示：`false` 也允许添加 —— 协议是否真的相同由连接后的服务 / 特征决定，
+    /// 对不上会给出 `ProtocolMismatch` 明确错误，而不是在这里靠 SIG 号替用户拍板。
     pub supported: bool,
 }
 
@@ -1563,10 +1576,22 @@ async fn session_loop(app: &AppHandle, generation: u64, mut outbox: UnboundedRec
         match run_once(app, generation, &mut outbox).await {
             Err(err) => {
                 log::warn!("建立蓝牙链路失败：{err}");
+                // 协议不符是**终局**：设备没有本平台的服务 / 特征，重试不会改变结论。
+                // 看门狗每 `WATCH_IDLE` 就会再扫再连一遍，把手机 / 别家耳机当成
+                // 「耳机还没取出」反复连 —— 既没意义，也会一直干扰对方设备。
+                // 因此这里置「用户主动断开」同一个抑制标志并停掉看门狗，等用户
+                // 手动点「连接」时再试（`connect_earbuds` 会清掉抑制）。
+                let protocol_mismatch = matches!(err, AppError::ProtocolMismatch(_));
                 commit(app, generation, |inner| {
                     let changed = inner.set_phase(BlePhase::Error);
                     inner.set_error(Some(err.to_string())) || changed
                 });
+                if protocol_mismatch {
+                    let state = app.state::<BleState>();
+                    state.suppress();
+                    state.stop_watch();
+                    log::warn!("协议不符，已停止自动重连（手动点「连接」可重试）");
+                }
                 break;
             }
             Ok(RoundOutcome::Stopped) => break,
@@ -1743,24 +1768,20 @@ async fn subscribe(peripheral: &Peripheral) -> AppResult<Established> {
     let characteristics = peripheral.characteristics();
     // 两个特征都限定在目标服务内：UUID 相同的特征可能出现在别的服务里，
     // 只按特征 UUID 找会订阅到不相干的通道。
-    let write = characteristics
+    let write = match characteristics
         .iter()
         .find(|item| item.service_uuid == SERVICE_UUID && item.uuid == WRITE_CHARACTERISTIC_UUID)
-        .cloned()
-        .ok_or_else(|| {
-            AppError::Other(format!(
-                "服务 {SERVICE_UUID} 未提供写入特征 {WRITE_CHARACTERISTIC_UUID}"
-            ))
-        })?;
-    let notify = characteristics
+    {
+        Some(characteristic) => characteristic.clone(),
+        None => return Err(missing_capability(peripheral, "写入特征").await),
+    };
+    let notify = match characteristics
         .iter()
         .find(|item| item.service_uuid == SERVICE_UUID && item.uuid == NOTIFY_CHARACTERISTIC_UUID)
-        .cloned()
-        .ok_or_else(|| {
-            AppError::Other(format!(
-                "服务 {SERVICE_UUID} 未提供通知特征 {NOTIFY_CHARACTERISTIC_UUID}"
-            ))
-        })?;
+    {
+        Some(characteristic) => characteristic.clone(),
+        None => return Err(missing_capability(peripheral, "通知特征").await),
+    };
 
     peripheral
         .subscribe(&notify)
@@ -1776,6 +1797,42 @@ async fn subscribe(peripheral: &Peripheral) -> AppResult<Established> {
         write,
         notifications,
     })
+}
+
+/// 连上了，但 GATT 里没有本平台的私有服务 / 特征。
+///
+/// 这类失败被归为 `ProtocolMismatch`（不是 IO 抖动），因为「同一台设备不会突然长出特征」。
+/// 报错必须分开说清两种常见原因，否则用户只会看到「连不上」：
+///
+/// - **耳机还在充电仓里**：实测在仓时只暴露标准 GAP/GATT（`0x1800` / `0x1801`），
+///   厂商服务 `011bf5da-…` 根本不存在（协议笔记 §15）——设备行为，不是 bug；
+/// - **这台设备根本不是同平台产品**（手机 / 别的品牌耳机 / 键盘），
+///   广播里也就不会有白名单里的厂商 ID。
+///
+/// 判据用「它刚才的广播里有没有白名单厂商 ID」：有 → 多半是同一副耳机还在仓里。
+async fn missing_capability(peripheral: &Peripheral, what: &str) -> AppError {
+    let advertises_vendor = peripheral
+        .properties()
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|properties| has_vendor_manufacturer_data(&properties));
+    AppError::ProtocolMismatch(mismatch_message(advertises_vendor, what))
+}
+
+/// `missing_capability` 的纯文本部分（便于单测两种分支的措辞）。
+fn mismatch_message(advertises_vendor: bool, what: &str) -> String {
+    if advertises_vendor {
+        format!(
+            "耳机没有暴露本平台的服务 {SERVICE_UUID}（缺{what}）——它可能还在充电仓里：\
+             在仓时只暴露标准 GAP/GATT，把耳机取出来后重试"
+        )
+    } else {
+        format!(
+            "这台设备的 GATT 里没有本平台的私有服务 {SERVICE_UUID}（缺{what}）：\
+             它广播的厂商 ID 不在白名单里，协议可能不同"
+        )
+    }
 }
 
 /// 链路就绪后的记账：读一次 GATT Device Name，再把这台设备写进配置与快照。
@@ -2148,9 +2205,13 @@ async fn find_peripheral(adapter: &Adapter, target: BDAddr) -> AppResult<Periphe
 
 /// 扫描附近的候选耳机（`scan_ble_devices` 的实现）。
 ///
-/// **列出扫到的全部 BLE 设备**（不再按厂商数据过滤）：
-/// `supported` 标记广播里是否带本平台厂商数据（`0x5452`），只有它为 true 的能添加 / 连接；
-/// 其余带名字的照样显示名字，方便区分「设备没在广播」与「协议不对」。
+/// **列出扫到的全部 BLE 设备**：
+/// - `supported` 标记广播里是否带白名单厂商数据（`VENDOR_COMPANY_IDS`），**只是提示**——
+///   没命中也允许添加，协议是否相同由连接后的服务 / 特征判定（对不上会返回
+///   `AppError::ProtocolMismatch`，并停掉自动重连）；
+/// - `company_ids` 带上这台设备实际广播的**全部** SIG 公司标识，用来判断「同品牌换型号
+///   是不是换了号」，比看名字可靠。
+///
 /// 适配器不可用是错误，**空列表是正常结果**（附近没有广播）。
 ///
 /// `known` 是已知设备列表（配置镜像）：只用来打 `known` 标记与回落到缓存名，
@@ -2220,17 +2281,16 @@ async fn collect_candidates(
         };
         seen.insert(address.to_string());
         let candidate = candidate_of(address, &properties, known);
-        if !candidate.supported {
-            // 不带本平台厂商数据的广播也列出来（名字优先），只是不允许添加；
-            // 排查「为什么扫不到」时这行日志能看出它到底报了什么。
-            log::debug!(
-                "非本平台广播 addr={} name={:?} company={:?} rssi={:?}",
-                address,
-                properties.local_name,
-                properties.manufacturer_data.keys().collect::<Vec<_>>(),
-                properties.rssi
-            );
-        }
+        // 每条候选都记一行：`company_ids` 是「这台到底报哪个 SIG 号」的唯一现场证据，
+        // 排查「同型号为什么连不上 / 要不要把某个号加进白名单」全靠它。
+        log::debug!(
+            "候选 addr={} name={:?} company={:?} supported={} rssi={:?}",
+            address,
+            candidate.name,
+            candidate.company_ids,
+            candidate.supported,
+            properties.rssi
+        );
         match out
             .iter_mut()
             .find(|item| item.address == candidate.address)
@@ -2246,11 +2306,11 @@ async fn collect_candidates(
     Ok(())
 }
 
-/// 由广播快照构造候选项：**只认厂商数据命中 `0x5452` 的设备**。
+/// 由广播快照构造候选项。
 ///
-/// - 这是**过滤**而不是身份判据：payload 的内容（含末尾 6 字节）不稳定，不能用来
-///   认设备（实测记录见 `pick_target` 的注释）；
-/// - `manufacturer_payload` 原样给出广播里实际存在的字节（小写十六进制），不补齐、不臆造；
+/// - `supported` **只是提示**（广播里有没有白名单厂商 ID），不再是准入条件；
+/// - `company_ids` 原样带出这台设备实际广播的全部 SIG 号 —— 加白名单时看它，不猜型号；
+/// - `manufacturer_payload` 原样给出白名单命中那条的字节（小写十六进制），不补齐、不臆造；
 /// - 名字优先用广播名（耳机没有），缺失时回落到配置里的缓存名 —— 列表里显示一个
 ///   能认出来的名字，正是「否则就是一屏匿名 MAC」要解决的问题；
 /// - 平台没报告 rssi 时为 `0`（不猜成某个信号值）。
@@ -2259,7 +2319,7 @@ fn candidate_of(
     properties: &PeripheralProperties,
     known: &[BleDeviceEntry],
 ) -> BleCandidate {
-    let payload = properties.manufacturer_data.get(&DEVICE_COMPANY_ID);
+    let payload = vendor_payload(properties);
     let address = address.to_string();
     let cached = known
         .iter()
@@ -2267,7 +2327,10 @@ fn candidate_of(
     BleCandidate {
         name: advertised_name(properties).or_else(|| cached.and_then(|entry| entry.name.clone())),
         rssi: properties.rssi.unwrap_or(0),
-        manufacturer_payload: payload.map(|payload| hex_lower(payload)).unwrap_or_default(),
+        manufacturer_payload: payload
+            .map(|payload| hex_lower(payload))
+            .unwrap_or_default(),
+        company_ids: observed_company_ids(properties),
         supported: has_vendor_manufacturer_data(properties),
         known: cached.is_some(),
         address,
@@ -2310,16 +2373,38 @@ async fn pick_target(adapter: &Adapter, target: BDAddr) -> btleplug::Result<Opti
     Ok(None)
 }
 
-/// 厂商数据的第二种用途（**只做过滤，不做身份**）：广播里有没有公司标识 `0x5452`。
+/// 厂商数据的用途（**只做过滤提示，不做身份**）：广播里有没有**白名单**公司标识且 payload 非空。
 ///
-/// `scan_ble_devices` 靠它把候选列表收敛到本厂商的设备上 —— 耳机既不广播名字也不广播
-/// 服务 UUID，不过滤的话列表就是一整屏无法辨认的 MAC 地址。它**不能**用来认设备：
-/// payload 的内容（包括末尾那 6 字节）不是稳定身份，见 `pick_target` 的注释。
+/// 早先只认单个 `0x5452`；现在是一张表（`VENDOR_COMPANY_IDS`），因为同平台贴牌 / 同品牌
+/// 其它型号可能换 SIG 号。**它不能**用来认设备：payload 的内容（包括末尾那 6 字节）不是
+/// 稳定身份，见 `pick_target` 的注释；也**不是**连接前的硬门槛，见 `BleCandidate::supported`。
 fn has_vendor_manufacturer_data(properties: &PeripheralProperties) -> bool {
+    vendor_payload(properties).is_some()
+}
+
+/// 白名单里第一个命中且 payload 非空的厂商数据（按公司标识升序取，避免 HashMap 顺序抖动）。
+fn vendor_payload(properties: &PeripheralProperties) -> Option<&Vec<u8>> {
     properties
         .manufacturer_data
-        .get(&DEVICE_COMPANY_ID)
-        .is_some_and(|payload| !payload.is_empty())
+        .iter()
+        .filter(|(id, payload)| VENDOR_COMPANY_IDS.contains(id) && !payload.is_empty())
+        .min_by_key(|(id, _)| **id)
+        .map(|(_, payload)| payload)
+}
+
+/// 广播里出现的**全部**厂商公司标识（升序；空 payload 不算，因为它不携带任何信息）。
+///
+/// 落在候选行上给用户 / 排查者看：籁特易耳同品牌不同型号到底报的是哪个 SIG 号，
+/// 靠这一项读出来，而不是靠猜型号。
+fn observed_company_ids(properties: &PeripheralProperties) -> Vec<u16> {
+    let mut ids: Vec<u16> = properties
+        .manufacturer_data
+        .iter()
+        .filter(|(_, payload)| !payload.is_empty())
+        .map(|(id, _)| *id)
+        .collect();
+    ids.sort_unstable();
+    ids
 }
 
 /// 广播里的设备名（`local_name` 优先，退回 `advertisement_name`）。
@@ -3172,10 +3257,11 @@ mod tests {
         probe.join().expect("探针线程不应 panic");
     }
 
-    /// 手动探针：验证候选扫描**只挑出厂商数据命中 `0x5452` 的设备**，并如实上报广播内容。
+    /// 手动探针：验证候选扫描**列出全部 BLE 设备、并如实标出各自广播的厂商公司标识**。
     ///
-    /// 只扫描、不连接（不占用耳机唯一的 LE 中央槽位），守的是那条过滤与候选字段本身：
-    /// 耳机既不广播名字也不广播服务 UUID，不过滤的话列表就是一整屏匿名 MAC。
+    /// 只扫描、不连接（不占用耳机唯一的 LE 中央槽位），守的是候选字段本身：
+    /// 耳机既不广播名字也不广播服务 UUID，所以列表必须靠地址 + 厂商公司标识才认得出；
+    /// 目标耳机是否命中白名单（`supported`）也在这里一并确认。
     /// 用 `cargo test --lib -- --ignored --nocapture ble_scan_lists_candidates` 跑。
     ///
     /// **一次实测记录（也是曾经写错判据的地方）**：同一台耳机、自身地址始终是
@@ -3214,17 +3300,19 @@ mod tests {
                 println!("候选设备 {} 个（已知列表为空）：", candidates.len());
                 for candidate in &candidates {
                     println!(
-                        "  {} name={:?} rssi={} payload={} known={}",
+                        "  {} name={:?} rssi={} company={:?} supported={} payload={} known={}",
                         candidate.address,
                         candidate.name,
                         candidate.rssi,
+                        candidate.company_ids,
+                        candidate.supported,
                         candidate.manufacturer_payload,
                         candidate.known
                     );
                 }
                 assert!(
                     !candidates.is_empty(),
-                    "耳机在范围内时应当至少扫到一个 0x5452 设备"
+                    "耳机在范围内时应当至少扫到一个 BLE 设备"
                 );
                 let observed = candidates
                     .iter()
@@ -3237,21 +3325,36 @@ mod tests {
                     });
                 println!("目标耳机广播：{}", observed.manufacturer_payload);
 
+                assert!(
+                    observed.supported,
+                    "目标耳机必须命中白名单（广播里带厂商 ID）：company={:?}",
+                    observed.company_ids
+                );
+
                 for candidate in &candidates {
+                    // 没命中白名单的设备也允许出现（手机 / 键盘），它们的 payload 可能是空的；
+                    // 只有「号称 supported」的候选才必须带一份真正的厂商数据。
+                    if candidate.supported {
+                        assert!(
+                            !candidate.manufacturer_payload.is_empty()
+                                && candidate.manufacturer_payload.len() % 2 == 0,
+                            "supported 候选必须带白名单厂商数据：{}",
+                            candidate.address
+                        );
+                        assert!(
+                            candidate
+                                .manufacturer_payload
+                                .chars()
+                                .all(|character| character.is_ascii_hexdigit()
+                                    && !character.is_ascii_uppercase()),
+                            "厂商数据必须是**小写**十六进制：{}",
+                            candidate.manufacturer_payload
+                        );
+                    }
                     assert!(
-                        !candidate.manufacturer_payload.is_empty()
-                            && candidate.manufacturer_payload.len() % 2 == 0,
-                        "候选必须带厂商数据（实际观测到的字节）：{}",
+                        candidate.supported || candidate.manufacturer_payload.is_empty(),
+                        "没命中白名单的候选不该带白名单 payload：{}",
                         candidate.address
-                    );
-                    assert!(
-                        candidate
-                            .manufacturer_payload
-                            .chars()
-                            .all(|character| character.is_ascii_hexdigit()
-                                && !character.is_ascii_uppercase()),
-                        "厂商数据必须是**小写**十六进制：{}",
-                        candidate.manufacturer_payload
                     );
                     assert!(
                         candidate.rssi < 0,
@@ -3584,7 +3687,7 @@ mod tests {
         // 两种 payload 都属于**同一台**设备：身份只能靠地址，tail 变什么都不影响命中。
         for payload in [tail_is_self, tail_is_other] {
             let properties = PeripheralProperties {
-                manufacturer_data: HashMap::from([(DEVICE_COMPANY_ID, payload.clone())]),
+                manufacturer_data: HashMap::from([(VENDOR_COMPANY_IDS[0], payload.clone())]),
                 ..PeripheralProperties::default()
             };
             assert_eq!(
@@ -3608,7 +3711,7 @@ mod tests {
 
         // 空 payload 不算命中；完全没有厂商数据也不算（名字缺失同样不能当命中）。
         let empty = PeripheralProperties {
-            manufacturer_data: HashMap::from([(DEVICE_COMPANY_ID, Vec::new())]),
+            manufacturer_data: HashMap::from([(VENDOR_COMPANY_IDS[0], Vec::new())]),
             ..PeripheralProperties::default()
         };
         assert!(!has_vendor_manufacturer_data(&empty));
@@ -3621,7 +3724,7 @@ mod tests {
         // 只要带公司标识就够（哪怕 payload 只有 1 字节）—— 尾巴不再是判据，
         // 因此「长度不够」不再能筛掉候选。
         let short = PeripheralProperties {
-            manufacturer_data: HashMap::from([(DEVICE_COMPANY_ID, vec![0x00])]),
+            manufacturer_data: HashMap::from([(VENDOR_COMPANY_IDS[0], vec![0x00])]),
             ..PeripheralProperties::default()
         };
         assert!(has_vendor_manufacturer_data(&short));
@@ -3989,6 +4092,7 @@ mod tests {
             rssi: -42,
             manufacturer_payload: "00030001000b016400120203047c0f".into(),
             known: true,
+            company_ids: vec![VENDOR_COMPANY_IDS[0]],
             supported: true,
         };
         let value = serde_json::to_value(&candidate).expect("候选项应当可序列化");
@@ -4001,10 +4105,22 @@ mod tests {
         keys.sort_unstable();
         assert_eq!(
             keys,
-            vec!["address", "known", "manufacturerPayload", "name", "rssi", "supported"]
+            vec![
+                "address",
+                "companyIds",
+                "known",
+                "manufacturerPayload",
+                "name",
+                "rssi",
+                "supported"
+            ]
         );
         assert_eq!(value["rssi"], -42);
         assert_eq!(value["name"], "StarRing Ultra_BLE");
+        assert_eq!(
+            value["companyIds"],
+            serde_json::json!([VENDOR_COMPANY_IDS[0]])
+        );
     }
 
     #[test]
@@ -4037,7 +4153,7 @@ mod tests {
             0x0f,
         ];
         let properties = PeripheralProperties {
-            manufacturer_data: HashMap::from([(DEVICE_COMPANY_ID, payload)]),
+            manufacturer_data: HashMap::from([(VENDOR_COMPANY_IDS[0], payload)]),
             rssi: Some(-35),
             ..PeripheralProperties::default()
         };
@@ -4075,7 +4191,7 @@ mod tests {
 
         // 平台没报告信号强度时为 0，而不是编一个值出来。
         let unnamed = PeripheralProperties {
-            manufacturer_data: HashMap::from([(DEVICE_COMPANY_ID, vec![0x00])]),
+            manufacturer_data: HashMap::from([(VENDOR_COMPANY_IDS[0], vec![0x00])]),
             rssi: None,
             ..PeripheralProperties::default()
         };
@@ -4090,6 +4206,64 @@ mod tests {
             ..PeripheralProperties::default()
         };
         assert!(!candidate_of(address, &other, &[]).supported);
+    }
+
+    /// 把「这台设备到底报哪个 SIG 号」如实带出去 —— 这里也是「加白名单」的唯一现场依据。
+    #[test]
+    fn company_ids_report_every_observed_sig_number() {
+        let address = target_address().expect("设备地址应当可解析");
+
+        // 同品牌换型号的典型现场：白名单号与另一个号同时出现。
+        let mixed = PeripheralProperties {
+            manufacturer_data: HashMap::from([
+                (VENDOR_COMPANY_IDS[0], vec![0x00, 0x01]),
+                (0x0B0D, vec![0x02, 0x03]),
+            ]),
+            ..PeripheralProperties::default()
+        };
+        let candidate = candidate_of(address, &mixed, &[]);
+        assert!(candidate.supported);
+        assert_eq!(
+            candidate.company_ids,
+            vec![0x0B0D, VENDOR_COMPANY_IDS[0]],
+            "升序、全量，一个号都不能丢"
+        );
+        assert_eq!(
+            candidate.manufacturer_payload, "0001",
+            "payload 取白名单命中那条，而不是随便一条"
+        );
+
+        // 只有陌生号：照样列出、照样允许尝试（`supported` 只是提示），因此 payload 为空。
+        let foreign = PeripheralProperties {
+            manufacturer_data: HashMap::from([(0x0B0D, vec![0x02, 0x03])]),
+            ..PeripheralProperties::default()
+        };
+        let candidate = candidate_of(address, &foreign, &[]);
+        assert!(!candidate.supported);
+        assert_eq!(candidate.company_ids, vec![0x0B0D]);
+        assert!(candidate.manufacturer_payload.is_empty());
+
+        // 空 payload 不携带信息：不计入公司标识列表。
+        let empty = PeripheralProperties {
+            manufacturer_data: HashMap::from([(0x0B0D, Vec::new())]),
+            ..PeripheralProperties::default()
+        };
+        let candidate = candidate_of(address, &empty, &[]);
+        assert!(candidate.company_ids.is_empty());
+        assert!(candidate.manufacturer_payload.is_empty());
+        assert!(!candidate.supported);
+    }
+
+    /// 协议不符的报错必须把「耳机还在仓里」与「根本不是同平台设备」分开说。
+    #[test]
+    fn protocol_mismatch_message_distinguishes_charging_case_from_foreign_device() {
+        let in_case = mismatch_message(true, "写入特征");
+        assert!(in_case.contains("充电仓"), "{in_case}");
+        assert!(in_case.contains(&SERVICE_UUID.to_string()), "{in_case}");
+
+        let foreign = mismatch_message(false, "通知特征");
+        assert!(foreign.contains("白名单"), "{foreign}");
+        assert!(!foreign.contains("充电仓"), "{foreign}");
     }
 
     #[test]

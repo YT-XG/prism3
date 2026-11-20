@@ -31,7 +31,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useEarbuds } from "@/hooks/use-earbuds";
 import { useMouseBattery } from "@/hooks/use-mouse-battery";
 import { useWirelessBatteries } from "@/hooks/use-wireless-batteries";
-import { displayDeviceName, oneBudUnavailable } from "@/lib/ble-format";
+import { companyIdsText, displayDeviceName, oneBudUnavailable } from "@/lib/ble-format";
 import {
   connectedDevices,
   earbudsBatterySummary,
@@ -209,7 +209,9 @@ export function DevicesPanel() {
         <CardHeader>
           <CardTitle>添加设备</CardTitle>
           <CardDescription>
-            扫描会列出附近所有 BLE 设备（有广播名的直接显示名字）；带本平台厂商数据的可添加，其余标「不支持」。RSSI 越接近 0 信号越强。
+            扫描会列出附近所有 BLE 设备，并标出各自广播的厂商 ID（`0x5452` 是本平台已知的那个）。
+            厂商 ID 不在名单里也能添加：连接后再按服务 / 特征判定协议，对不上会当场报错。
+            RSSI 越接近 0 信号越强。
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
@@ -254,22 +256,22 @@ export function DevicesPanel() {
                       </span>
                       {candidate.known && <Badge variant="secondary">已在列表</Badge>}
                       {candidate.supported ? null : (
-                        <Badge variant="outline">不支持</Badge>
+                        <Badge variant="outline">厂商 ID 未登记</Badge>
                       )}
                     </span>
                     <span className="truncate text-xs text-muted-foreground">
-                      {candidate.address} · {candidate.rssi} dBm
+                      {candidate.address} · {companyIdsText(candidate.companyIds)} ·{" "}
+                      {candidate.rssi} dBm
                     </span>
                   </div>
 
                   <Button
                     variant="outline"
                     size="xs"
-                    disabled={!candidate.supported}
                     title={
                       candidate.supported
                         ? "添加这台设备"
-                        : "广播里没有本平台的厂商数据，连不上（可能是别的协议或已配对不广播）"
+                        : "广播里没有白名单里的厂商 ID（可能是别的协议）。添加后会尝试连接：没有本平台的服务 / 特征会当场报错，不会反复重连"
                     }
                     onClick={() => void controls.addDevice(candidate)}
                   >

@@ -993,10 +993,12 @@ pub fn disconnect_earbuds(app: AppHandle) -> AppResult<()> {
     Ok(())
 }
 
-/// 扫描附近的候选耳机设备。
+/// 扫描附近的候选 BLE 设备。
 ///
-/// 只返回厂商数据命中公司标识 `0x5452` 的设备（耳机不广播名字、不广播服务 UUID，
-/// 不过滤就是一屏无法辨认的 MAC 地址）。适配器不可用是错误，**空列表是正常结果**。
+/// 返回扫到的**全部**设备（耳机不广播名字、不广播服务 UUID，不带厂商数据就只剩一屏 MAC，
+/// 所以每项都带上广播里的 `companyIds`）。`supported` 只表示「命中白名单厂商 ID」，
+/// 是提示而不是准入：没命中也允许添加，协议是否相同由连接后的服务 / 特征判定。
+/// 适配器不可用是错误，**空列表是正常结果**。
 #[tauri::command(async)]
 pub async fn scan_ble_devices(app: AppHandle) -> AppResult<Vec<BleCandidate>> {
     let known = app.state::<BleState>().known_devices();
