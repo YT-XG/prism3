@@ -106,10 +106,14 @@
 
     /* ---- 浮层窗口：近乎不透明的表面，标题栏半透明 ----
        窗口是可读表面，必须比桌面「实」；阴影给足，才有离桌面的高度感。
-       透明度乘设置页的「玻璃不透明度」（`--glass-dim`，30–100 → 0.38–1.28），
-       但夹在 0.55 以上：滑块拉到底也只是更透，不会读到壁纸上去。 */
-    --window-alpha: clamp(0.55, calc(0.94 * var(--glass-dim, 1)), 0.99);
-    --window-bg: rgba(253, 254, 255, var(--window-alpha));
+       透明度 = `--window-base-alpha` × 设置页的「玻璃不透明度」（`--glass-dim`，30–100 → 0.38–1.28），
+       夹在 0.55 以上：滑块拉到底也只是更透，不会读到壁纸上去。
+       **底色拆成 `--window-rgb` + `--window-alpha` 两段**：暗色 / 壁纸态只改 rgb 与 base alpha，
+       透明度的乘法在四个上下文里都保持生效（否则滑块只在「亮色 + 无壁纸」时有效）。 */
+    --window-rgb: 253 254 255;
+    --window-base-alpha: 0.94;
+    --window-alpha: clamp(0.55, calc(var(--window-base-alpha) * var(--glass-dim, 1)), 0.99);
+    --window-bg: rgb(var(--window-rgb) / var(--window-alpha));
     /* 内容底比卡片灰一档：卡片是纯白，才有「白纸浮在灰面上」的层次 */
     --window-body: #f2f5fa;
     --window-titlebar: rgba(255, 255, 255, 0.62);
@@ -123,8 +127,10 @@
         0 1px 4px rgba(16, 40, 80, 0.06);
 
     /* ---- 任务栏 / 开始菜单 ---- */
-    --taskbar-alpha: clamp(0.5, calc(0.8 * var(--glass-dim, 1)), 0.96);
-    --taskbar-bg: rgba(255, 255, 255, var(--taskbar-alpha));
+    --taskbar-rgb: 255 255 255;
+    --taskbar-base-alpha: 0.8;
+    --taskbar-alpha: clamp(0.5, calc(var(--taskbar-base-alpha) * var(--glass-dim, 1)), 0.96);
+    --taskbar-bg: rgb(var(--taskbar-rgb) / var(--taskbar-alpha));
     --taskbar-border: rgba(15, 23, 42, 0.07);
     --taskbar-shadow: 0 -200px 0 -199px rgba(15, 23, 42, 0.06);
 
@@ -200,7 +206,8 @@
     --desktop-base-b: #080b12;
     --desktop-glow: radial-gradient(1000px 620px at 52% 30%, rgba(70, 110, 190, 0.16), transparent 70%);
 
-    --window-bg: rgba(24, 27, 35, 0.95);
+    --window-rgb: 24 27 35;
+    --window-base-alpha: 0.95;
     --window-body: #101219;
     --window-titlebar: rgba(255, 255, 255, 0.04);
     --window-border: rgba(255, 255, 255, 0.1);
@@ -211,7 +218,8 @@
         0 20px 60px -30px rgba(0, 0, 0, 0.6),
         0 1px 4px rgba(0, 0, 0, 0.3);
 
-    --taskbar-bg: rgba(18, 21, 28, 0.72);
+    --taskbar-rgb: 18 21 28;
+    --taskbar-base-alpha: 0.72;
     --taskbar-border: rgba(255, 255, 255, 0.08);
     --dock-label: #e7ebf4;
     --dock-label-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
@@ -257,15 +265,19 @@
    注意窗口内容区（--window-body）不降透明度：可读性优先，壁纸只在标题栏与边缘参与。 */
 html[data-wallpaper]:not(.dark) {
     --desktop-bg: none;
-    --window-bg: rgba(253, 254, 255, 0.86);
-    --taskbar-bg: rgba(255, 255, 255, 0.62);
+    --window-rgb: 253 254 255;
+    --window-base-alpha: 0.86;
+    --taskbar-rgb: 255 255 255;
+    --taskbar-base-alpha: 0.62;
     --dock-label-shadow: 0 1px 3px rgba(255, 255, 255, 0.95);
 }
 html[data-wallpaper].dark {
     --desktop-bg: none;
-    --window-bg: rgba(20, 23, 30, 0.86);
+    --window-rgb: 20 23 30;
+    --window-base-alpha: 0.86;
     --window-body: rgba(17, 20, 26, 0.92);
-    --taskbar-bg: rgba(16, 19, 25, 0.62);
+    --taskbar-rgb: 16 19 25;
+    --taskbar-base-alpha: 0.62;
     --dock-label-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
 }
 

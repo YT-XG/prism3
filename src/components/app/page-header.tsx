@@ -3,51 +3,44 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * 主窗口页面头部：标题 + 一句说明 + 右侧操作。
+ * 页面顶部的**操作条**：只放右侧的状态标记与按钮，不再画大标题。
  *
- * 所有页面共用一份，保证标题字号、行高与上下留白一致——此前各页自己写 `h1`，
- * 出现了 16px / 18px 两种字号、说明文字或粗或细的问题，扫视时页与页之间对不上。
- * 结构固定为 `h1` 紧跟 `p`，`index.css` 里「壁纸下的标题轮廓光」规则依赖这个顺序。
+ * 应用跑在桌面窗口里，标题栏（`app-window.tsx`，图标 + 应用名）已经说清「这是哪个页」，
+ * 页内再写一遍「剪贴板」「首页」只是把同一句话说两次、还占掉一行高度。
+ * 所以这里只保留真正需要放在顶部的东西：
+ *
+ * - `actions`：编辑布局 / 生成周报 / 添加项目这类页级动作；
+ * - `badge`：「采集预热中」这类状态。
+ *
+ * 两者都没有时**返回 `null`**，页面直接从内容开始（不留空白条）。
+ * `title` 仍然必填，但只作为屏幕阅读器的页面标题（`sr-only h1`），不参与视觉层级。
  */
 export function PageHeader({
   title,
-  description,
   badge,
   actions,
   className,
 }: {
+  /** 页面名：仅用于无障碍标题，视觉上不渲染。 */
   title: string;
-  description?: ReactNode;
-  /** 标题右侧的状态标记（如「采集预热中」）。 */
+  /** 右侧的状态标记（如「采集预热中」）。 */
   badge?: ReactNode;
   /** 右侧操作区：按钮、开关等。 */
   actions?: ReactNode;
   className?: string;
 }) {
+  if (!badge && !actions) return null;
+
   return (
     <header
       className={cn(
-        "flex shrink-0 flex-wrap items-start justify-between gap-x-5 gap-y-3",
+        "mb-4 flex shrink-0 flex-wrap items-center justify-end gap-2",
         className,
       )}
     >
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <h1 className="font-heading text-[1.34rem] leading-[1.2] font-semibold tracking-[-0.028em] [text-wrap:balance]">
-            {title}
-          </h1>
-          {badge}
-        </div>
-        {description ? (
-          <p className="mt-1.5 max-w-[70ch] text-[0.8125rem] leading-[1.6] text-muted-foreground">
-            {description}
-          </p>
-        ) : null}
-      </div>
-
-      {actions ? (
-        <div className="flex shrink-0 items-center gap-2">{actions}</div>
-      ) : null}
+      <h1 className="sr-only">{title}</h1>
+      {badge}
+      {actions}
     </header>
   );
 }
