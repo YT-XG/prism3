@@ -70,6 +70,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          # 缓存由 master 上的 warm-rust-cache 维护（默认分支的缓存对所有 ref 可见）。
+          # 这里必须 save-if: false —— tag 上存下来的缓存只有该 tag 能读，下一个 tag 读不到，
+          # 却要花 ~3 分钟上传。
+          shared-key: prism3-release
+          save-if: false
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
