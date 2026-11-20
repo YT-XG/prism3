@@ -33,6 +33,18 @@ export function PageHost({ windowId }: { windowId: string }) {
     );
   }
 
+  // 窗口还开着、应用已被删：给个说明，别渲染一片空白
+  if (view === null) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
+        <p className="text-sm font-medium text-foreground">这个应用已被删除</p>
+        <p className="text-xs text-muted-foreground">
+          关掉窗口即可；也可以从图标坞的「创建应用」重新建一个。
+        </p>
+      </div>
+    );
+  }
+
   if (view === "home") {
     return (
       <div className="h-full min-h-0">
