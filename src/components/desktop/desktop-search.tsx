@@ -1,16 +1,14 @@
 import { ArrowRight, FileText, Folder, Search as SearchIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { useAppCatalog, useAppMeta } from "@/hooks/use-app-catalog";
 import { useFileSearch } from "@/hooks/use-file-search";
-import { APPS, appDef } from "@/lib/apps";
 import type { SearchHit } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
-import { useAppStore } from "@/stores/app-store";
+import { useAppStore, type AppView } from "@/stores/app-store";
 import { useWindowStore } from "@/stores/window-store";
 
-type Row =
-  | { kind: "app"; id: (typeof APPS)[number]["id"] }
-  | { kind: "file"; hit: SearchHit };
+type Row = { kind: "app"; id: string } | { kind: "file"; hit: SearchHit };
 
 /**
  * 桌面正中的搜索条：应用名 + 本机文件名一起搜。
@@ -27,6 +25,7 @@ export function DesktopSearch() {
   const fileSearchEnabled = useAppStore((state) => state.config?.fileSearch ?? false);
   const setActiveView = useAppStore((state) => state.setActiveView);
   const openWindow = useWindowStore((state) => state.open);
+  const catalog = useAppCatalog();
 
   const trimmed = query.trim();
   const { hits, indexState, activate } = useFileSearch({
@@ -36,11 +35,11 @@ export function DesktopSearch() {
 
   const appRows = useMemo(() => {
     const lower = trimmed.toLowerCase();
-    const matched = APPS.filter((app) =>
+    const matched = catalog.filter((app) =>
       `${app.label}${app.title}${app.description}`.toLowerCase().includes(lower),
     );
-    return (lower ? matched : APPS.slice(0, 4)).slice(0, 4);
-  }, [trimmed]);
+    return (lower ? matched : catalog.slice(0, 4)).slice(0, 4);
+  }, [catalog, trimmed]);
 
   const rows = useMemo<Row[]>(
     () => [
@@ -54,9 +53,11 @@ export function DesktopSearch() {
     setActive(0);
   }, [query]);
 
-  const launch = (id: (typeof APPS)[number]["id"]) => {
-    setActiveView(id);
-    openWindow(id);
+  const launch = (id: string) => {
+    const meta = catalog.find((app) => app.id === id);
+    if (!meta) return;
+    if (meta.kind === "builtin") setActiveView(meta.id as AppView);
+    else openWindow(meta.id, meta.size);
     setQuery("");
     inputRef.current?.blur();
     setFocused(false);
@@ -137,34 +138,14 @@ export function DesktopSearch() {
           {rows.map((row, index) => {
             const selected = index === active;
             if (row.kind === "app") {
-              const app = appDef(row.id);
-              const Icon = app.icon;
               return (
-                <button
+                <AppRow
                   key={`app-${row.id}`}
-                  type="button"
-                  onMouseEnter={() => setActive(index)}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => openRow(row)}
-                  className={cn(
-                    "flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-left",
-                    selected && "bg-brand/10",
-                  )}
-                >
-                  <span
-                    className="flex size-[26px] items-center justify-center rounded-[8px] text-white"
-                    style={{
-                      backgroundImage: `linear-gradient(150deg, ${app.tint[0]}, ${app.tint[1]})`,
-                    }}
-                  >
-                    <Icon className="size-[14px]" strokeWidth={2} />
-                  </span>
-                  <span className="text-[12.5px] font-medium text-foreground">{app.label}</span>
-                  <span className="truncate text-[11px] text-muted-foreground">
-                    {app.description}
-                  </span>
-                  <span className="ml-auto text-[10px] text-muted-foreground">打开</span>
-                </button>
+                  id={row.id}
+                  selected={selected}
+                  onHover={() => setActive(index)}
+                  onOpen={() => openRow(row)}
+                />
               );
             }
 
@@ -210,5 +191,48 @@ export function DesktopSearch() {
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** 搜索结果里的一行应用：内置用 lucide 图标，自建用 emoji（标题栏 / 坞上一致）。 */
+function AppRow({
+  id,
+  selected,
+  onHover,
+  onOpen,
+}: {
+  id: string;
+  selected: boolean;
+  onHover: () => void;
+  onOpen: () => void;
+}) {
+  const app = useAppMeta(id);
+  const Icon = app.icon;
+
+  return (
+    <button
+      type="button"
+      onMouseEnter={onHover}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={onOpen}
+      className={cn(
+        "flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-left",
+        selected && "bg-brand/10",
+      )}
+    >
+      <span
+        className="flex size-[26px] items-center justify-center rounded-[8px] text-white"
+        style={{ backgroundImage: `linear-gradient(150deg, ${app.tint[0]}, ${app.tint[1]})` }}
+      >
+        {Icon ? (
+          <Icon className="size-[14px]" strokeWidth={2} />
+        ) : (
+          <span className="text-[12px] leading-none">{app.emoji ?? "📦"}</span>
+        )}
+      </span>
+      <span className="text-[12.5px] font-medium text-foreground">{app.label}</span>
+      <span className="truncate text-[11px] text-muted-foreground">{app.description}</span>
+      <span className="ml-auto text-[10px] text-muted-foreground">打开</span>
+    </button>
   );
 }
