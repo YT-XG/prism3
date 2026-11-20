@@ -150,6 +150,27 @@ pub fn read_battery() -> AppResult<MouseBattery> {
     read_battery_inner()
 }
 
+/// 把固件回报的原始电量映射成界面上的电量。
+///
+/// 规则（与厂商驱动的口径一致）：
+/// - 有效值 > 0：照用；
+/// - 回报 0 或压根没应答：**有线 / 充电中一律按满电**——鼠标由 USB 供电，
+///   固件这时不提供电量，显示成「未上报 · 可能已休眠」反而像坏了；
+/// - 无线且没在充电：保持 `None`（真的没上报，绝不臆造 0%）。
+fn map_battery(wireless: bool, percent: Option<u8>, charging: bool) -> (Option<u8>, bool) {
+    match percent {
+        // 有线时无论固件怎么说，鼠标都靠 USB 供电 → 一律按充电态显示
+        Some(value) if value > 0 => (Some(value), charging || !wireless),
+        _ => {
+            if charging || !wireless {
+                (Some(100), true)
+            } else {
+                (None, false)
+            }
+        }
+    }
+}
+
 #[cfg(windows)]
 fn read_battery_inner() -> AppResult<MouseBattery> {
     let Some((path, wireless)) = win::find_battery_interface() else {
@@ -157,18 +178,19 @@ fn read_battery_inner() -> AppResult<MouseBattery> {
     };
     let Some((percent, charging)) = win::read_battery_frame(&path)? else {
         // 打开了接口但没拿到有效帧：仍算连上（有线模式下就是这个表现）。
+        let (percent, charging) = map_battery(wireless, None, false);
         return Ok(MouseBattery {
             connected: true,
             wireless,
-            percent: None,
-            charging: false,
+            percent,
+            charging,
         });
     };
+    let (percent, charging) = map_battery(wireless, Some(percent), charging);
     Ok(MouseBattery {
         connected: true,
         wireless,
-        // 厂商驱动把 0 当「没有电量信息」（有线模式），这里保持一致。
-        percent: (percent > 0).then_some(percent),
+        percent,
         charging,
     })
 }
@@ -381,6 +403,28 @@ mod win {
 
 #[cfg(test)]
 mod tests {
+    use super::map_battery;
+
+    /// 有线（没有无线接收器）时按满电显示，而不是「未上报」。
+    #[test]
+    fn wired_is_shown_as_full() {
+        assert_eq!(map_battery(false, None, false), (Some(100), true));
+        assert_eq!(map_battery(false, Some(0), false), (Some(100), true));
+        // 有线时固件偶尔回一个非零值：照用，但仍是充电态
+        assert_eq!(map_battery(false, Some(64), false), (Some(64), true));
+    }
+
+    /// 无线：有效值照用；0 且没充电才算「未上报」，绝不落成 0%。
+    #[test]
+    fn wireless_keeps_unknown() {
+        assert_eq!(map_battery(true, Some(88), false), (Some(88), false));
+        assert_eq!(map_battery(true, Some(0), false), (None, false));
+        assert_eq!(map_battery(true, None, false), (None, false));
+        // 无线但正在充电（插着线）：按满电
+        assert_eq!(map_battery(true, Some(0), true), (Some(100), true));
+        assert_eq!(map_battery(true, None, true), (Some(100), true));
+    }
+
     use super::*;
 
     /// 本机 ML903 接收器实测应答（`02/00/83` 请求）：`[7]=0x00` 未充电、`[8]=0x41`(65%)。
