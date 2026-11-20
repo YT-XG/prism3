@@ -8,10 +8,13 @@ import { Toaster } from "@/components/ui/sonner";
 import { useConfig } from "@/hooks/use-config";
 import { useUpdateNotifications } from "@/hooks/use-update";
 import { ipc } from "@/lib/ipc";
-import { useAppStore } from "@/stores/app-store";
+import { useAppStore, type AppView } from "@/stores/app-store";
 
 /** 快捷小窗「打开某条速记」的事件名（面板侧 `emitTo("main", ...)`）。 */
 const OPEN_NOTE_EVENT = "notes:open";
+
+/** 组合窗口「在主窗口打开」的事件名：payload 就是要切到的视图 id。 */
+const NAVIGATE_MAIN_EVENT = "main:navigate";
 
 function App() {
   useConfig();
@@ -26,6 +29,26 @@ function App() {
       if (!active) return;
       useAppStore.getState().openNote(event.payload);
       // 主窗口可能正缩在托盘或最小化：先把它带到前台，否则用户看不到打开结果。
+      void ipc.focusMainWindow();
+    }).then((off) => {
+      if (active) unlisten = off;
+      else off();
+    });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
+
+  // 组合窗口页头的「在主窗口打开」→ 主窗口切到同一页并置前。
+  // 组合窗口是主入口（大多数场景都在这里用），只有需要大空间的操作才交回主窗口，
+  // 所以这里不加任何「是不是从别处跳来的」状态，切页即完事。
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void listen<AppView>(NAVIGATE_MAIN_EVENT, (event) => {
+      if (!active || !event.payload) return;
+      useAppStore.getState().setActiveView(event.payload);
       void ipc.focusMainWindow();
     }).then((off) => {
       if (active) unlisten = off;

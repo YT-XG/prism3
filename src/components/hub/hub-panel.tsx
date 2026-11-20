@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
+import { emitTo } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Activity,
+  ArrowUpRight,
   ClipboardList,
   Clock,
   FolderGit2,
@@ -36,6 +38,9 @@ import { useAppStore } from "@/stores/app-store";
 function hideHub() {
   void ipc.hideHub();
 }
+
+/** 「在主窗口打开」的事件名：主窗口侧监听后切页并把自己带到前台。 */
+const NAVIGATE_MAIN_EVENT = "main:navigate";
 
 /** 主视图 id：就是左侧导航那一列，点哪个就把右边换成哪一页。 */
 type HubViewId = "clipboard" | "notes" | "work" | "projects" | "search";
@@ -191,6 +196,15 @@ export function HubPanel() {
     setView(id);
   }, []);
 
+  /**
+   * 「在主窗口打开」：组合窗口是主入口，但笔记的文件夹树 / 大纲、项目的编辑弹窗
+   * 这些需要大空间的操作仍留在主窗口。这里只负责通知 + 收起，由主窗口自己切页。
+   */
+  const openInMainWindow = useCallback(() => {
+    void emitTo("main", NAVIGATE_MAIN_EVENT, view);
+    hideHub();
+  }, [view]);
+
   /** 当前视图的镜像：键盘监听只挂一次，不能闭包里拿着首次渲染的 `view`。 */
   const viewRef = useRef(view);
   viewRef.current = view;
@@ -298,6 +312,7 @@ export function HubPanel() {
                 view={view}
                 focused={focused}
                 pasteOnClick={pasteOnClick}
+                onOpenInMain={openInMainWindow}
               />
 
               <div className="flex min-h-0 flex-1 flex-col px-6 pb-5">
@@ -516,15 +531,17 @@ function HubNav({
   );
 }
 
-/** 主视图页头：图标软底方块 + 标题 + 一句操作提示；右侧是方向键提示。 */
+/** 主视图页头：图标软底方块 + 标题 + 一句操作提示；右侧是方向键提示与「在主窗口打开」。 */
 function HubPaneHeader({
   view,
   focused,
   pasteOnClick,
+  onOpenInMain,
 }: {
   view: HubViewId;
   focused: boolean;
   pasteOnClick: boolean;
+  onOpenInMain: () => void;
 }) {
   const meta = HUB_VIEWS.find((item) => item.id === view) ?? HUB_VIEWS[0];
   const Icon = meta.icon;
@@ -545,11 +562,27 @@ function HubPaneHeader({
         </div>
       </div>
 
-      <span className="hidden shrink-0 items-center gap-1 pt-1.5 text-[0.65rem] text-muted-foreground md:flex">
-        <kbd className="rounded border border-border/60 bg-muted/40 px-1 py-0.5 leading-none">←</kbd>
-        <kbd className="rounded border border-border/60 bg-muted/40 px-1 py-0.5 leading-none">→</kbd>
-        切换
-      </span>
+      <div className="flex shrink-0 items-center gap-1 pt-1">
+        <span className="hidden items-center gap-1 text-[0.65rem] text-muted-foreground md:flex">
+          <kbd className="rounded border border-border/60 bg-muted/40 px-1 py-0.5 leading-none">
+            ←
+          </kbd>
+          <kbd className="rounded border border-border/60 bg-muted/40 px-1 py-0.5 leading-none">
+            →
+          </kbd>
+          切换
+        </span>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="text-muted-foreground hover:text-foreground"
+          aria-label="在主窗口打开"
+          title="在主窗口打开（需要大空间时用）"
+          onClick={onOpenInMain}
+        >
+          <ArrowUpRight className="size-3.5" />
+        </Button>
+      </div>
     </header>
   );
 }
