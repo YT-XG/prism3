@@ -1,10 +1,10 @@
-# 预热 Rust 缓存（只跑在默认分支 master 上）。
+# 发版构建提速（只跑在默认分支 master 上）。
 #
 # 为什么需要这个文件：GitHub Actions 的缓存**按 ref 作用域**——tag 上保存的缓存只有那个
 # tag 自己能读，下一个 tag（v0.3.13 → v0.4.0）永远读不到，于是每次发版都从零编译
 # ~11–14 分钟，再花 ~3 分钟把缓存上传给「下一个永远不会读它的 tag」。
 # 而默认分支（master）的缓存**对所有 ref 可见**，tag 构建也能读。
-# 所以：缓存由这里在 master 上维护，release.yml 只读不写。
+# 所以：缓存由这里在 master 上维护，release.yml 只 restore、不 save。
 #
 # 触发：只改 Rust / 锁文件时才跑，避免前端小改动也去编译一遍。
 name: warm-rust-cache
@@ -43,12 +43,26 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+      # key 用「去掉 version 行之后的 Cargo.toml」。直接哈希 Cargo.lock 的话，每次发版
+      # bump 版本都会改 lock 里的本地包条目 → key 必变 → 永远 miss。
+      - name: Compute dependency hash
+        id: deps
+        shell: bash
+        run: |
+          grep -v '^version = ' src-tauri/Cargo.toml > "$RUNNER_TEMP/Cargo.deps.toml"
+          echo "hash=$(sha256sum "$RUNNER_TEMP/Cargo.deps.toml" | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      # 与 release.yml 的 key / restore-keys 必须完全一致，否则缓存对不上。
+      - name: Restore cargo cache
+        uses: actions/cache@v4
         with:
-          workspaces: src-tauri
-          # 与 release.yml 保持一致；两边不同会让 key 对不上、缓存白存。
-          shared-key: prism3-release
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-${{ runner.os }}-${{ steps.deps.outputs.hash }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
 
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
@@ -56,7 +70,7 @@ jobs:
       # 必须先构建前端：`generate_context!` 在编译期读 frontendDist，
       # 没有 dist 目录时 cargo build 会直接失败。
       - name: Build frontend
-        run: pnpm build
+        run: pnpm build:app
 
       - name: Build release (warms target/)
         run: cargo build --release --manifest-path src-tauri/Cargo.toml

@@ -99,11 +99,10 @@ wmi = "0.17"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
-# 发版构建的时间大头是「最后一个 crate 的全量 LTO 链接」（CI 只有 4 vCPU）。
-# thin LTO + 4 个 codegen unit 实测能砍掉约 1/3 的构建时间，代价是二进制略大（~5%），
-# 对 Tauri 这种体量的壳子完全可以接受；真要抠体积再临时切回 lto = true。
-codegen-units = 4
-lto = "thin"
+# 体积优先：全量 LTO + 单 codegen unit 是安装包最小的组合（thin LTO 体积大 ~5%）。
+# 构建慢的问题不在这里抠，交给 CI 缓存复用（见 .github/workflows/warm-rust-cache.yml）。
+codegen-units = 1
+lto = true
 opt-level = 3
 panic = "abort"
 strip = true

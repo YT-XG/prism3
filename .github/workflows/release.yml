@@ -44,6 +44,33 @@ jobs:
           gh release create --repo "${GITHUB_REPOSITORY}" "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" --notes "Prism3 ${GITHUB_REF_NAME}"
 
+  # 类型检查单独一个 ubuntu job：和 Windows 构建**并行**跑，既省钱又不占关键路径。
+  # 构建侧因此只跑 `vite build`（beforeBuildCommand = pnpm build:app）。
+  typecheck:
+    name: Typecheck frontend
+    needs: prepare-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm exec tsc
+
   build:
     name: Build Windows installer
     needs: prepare-release
@@ -66,15 +93,26 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+      # 缓存由 master 上的 warm-rust-cache 维护（默认分支的缓存对所有 ref 可见）。
+      # 这里用 cache/restore：**只读不写** —— tag 上存下来的缓存只有该 tag 能读，
+      # 下一个 tag 读不到，却要花 ~3 分钟上传。
+      - name: Compute dependency hash
+        id: deps
+        shell: bash
+        run: |
+          grep -v '^version = ' src-tauri/Cargo.toml > "$RUNNER_TEMP/Cargo.deps.toml"
+          echo "hash=$(sha256sum "$RUNNER_TEMP/Cargo.deps.toml" | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore cargo cache
+        uses: actions/cache/restore@v4
         with:
-          workspaces: src-tauri
-          # 缓存由 master 上的 warm-rust-cache 维护（默认分支的缓存对所有 ref 可见）。
-          # 这里必须 save-if: false —— tag 上存下来的缓存只有该 tag 能读，下一个 tag 读不到，
-          # 却要花 ~3 分钟上传。
-          shared-key: prism3-release
-          save-if: false
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-${{ runner.os }}-${{ steps.deps.outputs.hash }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -104,7 +142,7 @@ jobs:
 
   publish:
     name: Publish release + manifests
-    needs: [prepare-release, build]
+    needs: [prepare-release, build, typecheck]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
