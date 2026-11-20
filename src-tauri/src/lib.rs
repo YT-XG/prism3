@@ -355,6 +355,7 @@ pub fn run() {
             commands::cancel_file_index,
             commands::open_search_result,
             commands::open_project_folder,
+   commands::open_external_url,
             commands::suggest_project_commands,
             commands::get_project_git_state,
             commands::check_project_port,

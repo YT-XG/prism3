@@ -5,6 +5,7 @@ import { DesktopSearch } from "@/components/desktop/desktop-search";
 import { DesktopWallpaper } from "@/components/desktop/desktop-wallpaper";
 import { DesktopWidgets } from "@/components/desktop/desktop-widgets";
 import { StartMenu } from "@/components/desktop/start-menu";
+import { CustomAppDialog } from "@/components/apps/custom-app-dialog";
 import { Taskbar } from "@/components/desktop/taskbar";
 import { TopBar } from "@/components/desktop/top-bar";
 import { WindowLayer } from "@/components/desktop/window-layer";
@@ -51,6 +52,8 @@ export function AppShell() {
       <WindowLayer />
 
       {menuOpen ? <StartMenu onClose={() => setMenuOpen(false)} /> : null}
+
+      <CustomAppDialog />
 
       <Taskbar menuOpen={menuOpen} onToggleMenu={() => setMenuOpen((open) => !open)} />
     </div>

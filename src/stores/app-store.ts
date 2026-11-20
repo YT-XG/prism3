@@ -29,6 +29,12 @@ interface AppState {
    * 项目页挂载后 consume 一次（选中对应项目并展开控制台）。
    */
   pendingProjectRun: { projectId: string; runId: string | null } | null;
+  /** 「创建应用」对话框是否打开（外壳只挂一份，图标坞 / 开始菜单都往这里发）。 */
+  customAppDialogOpen: boolean;
+  /** 正在编辑的自建应用 id；null = 新建。 */
+  editingCustomAppId: string | null;
+  openCustomAppDialog: (id?: string | null) => void;
+  closeCustomAppDialog: () => void;
   setActiveView: (view: AppView) => void;
   /** 切到速记页并请求打开某条笔记。 */
   openNote: (id: number) => void;
@@ -49,6 +55,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeView: "home",
   pendingNoteId: null,
   pendingProjectRun: null,
+  customAppDialogOpen: false,
+  editingCustomAppId: null,
+
+  openCustomAppDialog: (id = null) => {
+    set({ customAppDialogOpen: true, editingCustomAppId: id });
+  },
+
+  closeCustomAppDialog: () => {
+    set({ customAppDialogOpen: false, editingCustomAppId: null });
+  },
 
   /**
    * 切到某个视图。桌面外壳下「切页」= 打开/聚焦那个应用的浮层窗口，

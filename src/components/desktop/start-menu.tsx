@@ -1,10 +1,10 @@
-import { Search } from "lucide-react";
+import { Plus, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppVersion } from "@/hooks/use-app-version";
-import { APPS } from "@/lib/apps";
+import { useAppCatalog, type AppMeta } from "@/hooks/use-app-catalog";
 import { cn } from "@/lib/utils";
-import { useAppStore } from "@/stores/app-store";
+import { useAppStore, type AppView } from "@/stores/app-store";
 import { useWindowStore } from "@/stores/window-store";
 
 /**
@@ -18,15 +18,17 @@ export function StartMenu({ onClose }: { onClose: () => void }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const version = useAppVersion();
   const setActiveView = useAppStore((state) => state.setActiveView);
+  const openCustomAppDialog = useAppStore((state) => state.openCustomAppDialog);
   const openWindow = useWindowStore((state) => state.open);
+  const catalog = useAppCatalog();
 
   const apps = useMemo(() => {
     const lower = query.trim().toLowerCase();
-    if (!lower) return APPS;
-    return APPS.filter((app) =>
+    if (!lower) return catalog;
+    return catalog.filter((app) =>
       `${app.label}${app.title}${app.description}`.toLowerCase().includes(lower),
     );
-  }, [query]);
+  }, [catalog, query]);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -37,9 +39,12 @@ export function StartMenu({ onClose }: { onClose: () => void }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
-  const launch = (id: (typeof APPS)[number]["id"]) => {
-    setActiveView(id);
-    openWindow(id);
+  const launch = (app: AppMeta) => {
+    if (app.kind === "builtin") {
+      setActiveView(app.id as AppView);
+    } else {
+      openWindow(app.id, app.size);
+    }
     onClose();
   };
 
@@ -79,7 +84,7 @@ export function StartMenu({ onClose }: { onClose: () => void }) {
                 key={app.id}
                 type="button"
                 role="menuitem"
-                onClick={() => launch(app.id)}
+                onClick={() => launch(app)}
                 className={cn(
                   "flex flex-col items-center gap-1.5 rounded-xl px-1 pt-2.5 pb-2 transition-colors",
                   "hover:bg-black/5 focus-visible:bg-black/5 focus-visible:outline-none dark:hover:bg-white/8",
@@ -91,7 +96,11 @@ export function StartMenu({ onClose }: { onClose: () => void }) {
                     backgroundImage: `linear-gradient(150deg, ${app.tint[0]}, ${app.tint[1]})`,
                   }}
                 >
-                  <Icon className="size-[19px]" strokeWidth={1.9} />
+                  {Icon ? (
+                    <Icon className="size-[19px]" strokeWidth={1.9} />
+                  ) : (
+                    <span className="text-[18px] leading-none">{app.emoji ?? "📦"}</span>
+                  )}
                 </span>
                 <span className="text-[11px] leading-none font-medium text-foreground">
                   {app.label}
@@ -111,8 +120,20 @@ export function StartMenu({ onClose }: { onClose: () => void }) {
           className="flex items-center justify-between border-t px-3 py-2 text-[10.5px] text-muted-foreground"
           style={{ borderColor: "var(--taskbar-border)" }}
         >
-          <span>PRISM3{version ? ` v${version}` : ""} · 桌面</span>
-          <span>点击应用打开窗口 · Esc 关闭</span>
+          <button
+            type="button"
+            onClick={() => {
+              openCustomAppDialog();
+              onClose();
+            }}
+            className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-medium transition-colors hover:bg-black/5 hover:text-foreground dark:hover:bg-white/8"
+          >
+            <Plus className="size-3" aria-hidden />
+            创建应用
+          </button>
+          <span>
+            PRISM3{version ? ` v${version}` : ""} · Esc 关闭
+          </span>
         </div>
       </div>
     </>

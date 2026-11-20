@@ -766,6 +766,12 @@ pub fn open_search_result(
 /// 打开一个本地项目的目录（资源管理器）。
 ///
 /// 项目路径来自用户配置，走 Rust 侧 opener：前端没有任意路径的 opener 权限。
+/// 用系统浏览器打开一个 http(s) 链接（「创建应用」的链接型应用共用项目页那条 opener 链路）。
+#[tauri::command]
+pub fn open_external_url(app: tauri::AppHandle, url: String) -> AppResult<()> {
+    crate::projects::open_url(&app, &url)
+}
+
 #[tauri::command]
 pub fn open_project_folder(app: AppHandle, path: String) -> AppResult<()> {
     crate::projects::open_folder(&app, &path)

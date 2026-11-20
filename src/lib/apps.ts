@@ -11,6 +11,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import type { CustomApp } from "@/lib/ipc";
 import type { AppView } from "@/stores/app-store";
 
 /** 一个「应用」在外壳里的身份：图标、标题、默认窗口尺寸、图标底座配色。 */
@@ -147,3 +148,44 @@ export const DOCK_ORDER: AppView[] = [
   "devices",
   "settings",
 ];
+
+/**
+ * 用户自建的应用（「创建应用」）：**链接**或**一段自定义 HTML**。
+ *
+ * 与内置应用的区别只在打开方式——链接交给系统浏览器，HTML 在沙箱 iframe 里跑；
+ * 其余（图标、窗口尺寸、任务栏归属）走同一套外壳，所以自建应用看起来就是普通应用。
+ * 数据落在 `AppConfig.customApps`（整份 `set_config` 写回，没有专用命令）。
+ */
+export type { CustomApp } from "@/lib/ipc";
+
+/** 自建窗口 id 的前缀：`AppView` 是固定联合类型，自建应用只能用字符串 id。 */
+export const CUSTOM_PREFIX = "custom:";
+
+export const customWindowId = (id: string) => `${CUSTOM_PREFIX}${id}`;
+export const isCustomWindowId = (id: string) => id.startsWith(CUSTOM_PREFIX);
+export const customIdOf = (windowId: string) => windowId.slice(CUSTOM_PREFIX.length);
+
+/** 自建应用可用的底座配色（与内置应用同一套色相，避免自建的一眼像外挂）。 */
+export const CUSTOM_TINTS: [string, string][] = [
+  ["#5b9bff", "#187aff"],
+  ["#4ade9f", "#0ea5a5"],
+  ["#ffc061", "#f08a1d"],
+  ["#a78bfa", "#6b5bf0"],
+  ["#fb8fb0", "#e04a72"],
+  ["#5ac8fa", "#0a84c9"],
+  ["#7c8cff", "#4553dc"],
+  ["#94a3b8", "#5b6675"],
+];
+
+export function pickTint(seed: string): [string, string] {
+  let hash = 0;
+  for (let index = 0; index < seed.length; index++) {
+    hash = (hash * 31 + seed.charCodeAt(index)) >>> 0;
+  }
+  return CUSTOM_TINTS[hash % CUSTOM_TINTS.length];
+}
+
+/** 自建应用的默认窗口尺寸：HTML 给大一点（多半是整页），链接给小一点（信息页）。 */
+export function customSize(kind: CustomApp["kind"]): { w: number; h: number } {
+  return kind === "html" ? { w: 960, h: 680 } : { w: 620, h: 460 };
+}

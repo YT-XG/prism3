@@ -1,7 +1,7 @@
 import { Copy, Minus, Square, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { appDef } from "@/lib/apps";
+import { useAppMeta } from "@/hooks/use-app-catalog";
 import { cn } from "@/lib/utils";
 import { useWindowStore, type AppWindowState } from "@/stores/window-store";
 
@@ -25,7 +25,7 @@ const CLOSE_MS = 130;
  * 也避免 store 抖动导致任务栏、开始菜单跟着重画。
  */
 export function AppWindow({ state, focused }: { state: AppWindowState; focused: boolean }) {
-  const app = appDef(state.id);
+  const app = useAppMeta(state.id);
   const Icon = app.icon;
 
   const setRect = useWindowStore((store) => store.setRect);
@@ -151,7 +151,11 @@ export function AppWindow({ state, focused }: { state: AppWindowState; focused: 
             style={{ backgroundImage: `linear-gradient(150deg, ${app.tint[0]}, ${app.tint[1]})` }}
             aria-hidden
           >
-            <Icon className="size-[11px]" strokeWidth={2.2} />
+            {Icon ? (
+              <Icon className="size-[11px]" strokeWidth={2.2} />
+            ) : (
+              <span className="text-[10px] leading-none">{app.emoji ?? "📦"}</span>
+            )}
           </span>
           <span className="truncate text-[12px] font-medium text-foreground">{app.title}</span>
 
@@ -179,7 +183,7 @@ export function AppWindow({ state, focused }: { state: AppWindowState; focused: 
           className="min-h-0 flex-1 overflow-hidden"
           style={{ background: "var(--window-body)" }}
         >
-          <PageHost view={state.id} />
+          <PageHost windowId={state.id} />
         </div>
       </div>
 

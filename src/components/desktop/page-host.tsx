@@ -8,9 +8,10 @@ import { SearchPanel } from "@/components/search/search-panel";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { WorkPanel } from "@/components/work/work-panel";
 import { SettingsPanel } from "@/components/app/settings-panel";
+import { CustomAppView } from "@/components/apps/custom-app-view";
+import { useCustomAppById } from "@/hooks/use-app-catalog";
+import { isCustomWindowId } from "@/lib/apps";
 import { cn } from "@/lib/utils";
-
-import type { AppView } from "@/stores/app-store";
 
 /**
  * 窗口内容宿主：把九个页面原样装进浮层窗口。
@@ -20,7 +21,18 @@ import type { AppView } from "@/stores/app-store";
  *   `display: table` 包装层，子元素 `h-full` 撑不满，卡片会被内容撑成一条；
  * - 其余页面用 ScrollArea 包一层，滚动条由组件自己画。
  */
-export function PageHost({ view }: { view: AppView }) {
+export function PageHost({ windowId }: { windowId: string }) {
+  const customApp = useCustomAppById(windowId);
+  const view = isCustomWindowId(windowId) ? null : windowId;
+
+  if (customApp) {
+    return (
+      <div className="h-full min-h-0">
+        <CustomAppView app={customApp} />
+      </div>
+    );
+  }
+
   if (view === "home") {
     return (
       <div className="h-full min-h-0">

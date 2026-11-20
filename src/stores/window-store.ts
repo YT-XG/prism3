@@ -2,8 +2,6 @@ import { create } from "zustand";
 
 import { appDef } from "@/lib/apps";
 
-import type { AppView } from "./app-store";
-
 export interface Rect {
   x: number;
   y: number;
@@ -12,7 +10,8 @@ export interface Rect {
 }
 
 export interface AppWindowState {
-  id: AppView;
+  /** 窗口 id：内置应用是 `AppView`，自建应用是 `custom:<短 id>`。 */
+  id: string;
   rect: Rect;
   /** 层级：越大越靠前。 */
   z: number;
@@ -65,11 +64,13 @@ function clampRect(rect: Rect, bounds = desktopBounds()): Rect {
 }
 
 /** 居中 + 级联：同一批窗口依次错开 26px，避免完全叠死。 */
-function defaultRect(id: AppView, openCount: number): Rect {
-  const def = appDef(id);
+function defaultRect(
+  size: { w: number; h: number },
+  openCount: number,
+): Rect {
   const bounds = desktopBounds();
-  const w = Math.min(def.size.w, bounds.w);
-  const h = Math.min(def.size.h, bounds.h);
+  const w = Math.min(size.w, bounds.w);
+  const h = Math.min(size.h, bounds.h);
   const step = (openCount % 5) * 26;
   return clampRect(
     {
@@ -82,8 +83,17 @@ function defaultRect(id: AppView, openCount: number): Rect {
   );
 }
 
+/** 内置应用从 `appDef` 拿默认尺寸；自建应用必须由调用方传 `size`。 */
+function buildinSize(id: string): { w: number; h: number } {
+  try {
+    return appDef(id as Parameters<typeof appDef>[0]).size;
+  } catch {
+    return { w: 720, h: 520 };
+  }
+}
+
 /** 把某个窗口提到最前，并把 z 重新编号成 1..n（避免 z 无限增长盖过任务栏）。 */
-function raise(list: AppWindowState[], id: AppView): AppWindowState[] {
+function raise(list: AppWindowState[], id: string): AppWindowState[] {
   const sorted = [...list].sort((a, b) => a.z - b.z);
   const target = sorted.find((item) => item.id === id);
   if (!target) return list;
@@ -95,18 +105,18 @@ function raise(list: AppWindowState[], id: AppView): AppWindowState[] {
 
 interface WindowStore {
   windows: AppWindowState[];
-  focused: AppView | null;
-  /** 打开（或聚焦）一个应用窗口。 */
-  open: (id: AppView) => void;
-  close: (id: AppView) => void;
-  focus: (id: AppView) => void;
-  minimize: (id: AppView) => void;
-  toggleMaximize: (id: AppView) => void;
+  focused: string | null;
+  /** 打开（或聚焦）一个应用窗口；`size` 只在首次打开时用于定初始矩形。 */
+  open: (id: string, size?: { w: number; h: number }) => void;
+  close: (id: string) => void;
+  focus: (id: string) => void;
+  minimize: (id: string) => void;
+  toggleMaximize: (id: string) => void;
   /** 拖动 / 缩放结束时提交几何。 */
-  setRect: (id: AppView, rect: Rect) => void;
+  setRect: (id: string, rect: Rect) => void;
   /** 视口变化后把窗口收回桌面范围。 */
   clampAll: () => void;
-  isOpen: (id: AppView) => boolean;
+  isOpen: (id: string) => boolean;
 }
 
 /**
@@ -120,7 +130,7 @@ export const useWindowStore = create<WindowStore>((set, get) => ({
   windows: [],
   focused: null,
 
-  open: (id) => {
+  open: (id, size) => {
     const { windows } = get();
     const existing = windows.find((item) => item.id === id);
 
@@ -143,7 +153,10 @@ export const useWindowStore = create<WindowStore>((set, get) => ({
         ...windows.map((item, index) => ({ ...item, z: index + 1 })),
         {
           id,
-          rect: defaultRect(id, windows.length),
+          rect: defaultRect(
+            size ?? buildinSize(id),
+            windows.length,
+          ),
           z: windows.length + 1,
           minimized: false,
           maximized: false,

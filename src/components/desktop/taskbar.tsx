@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 
 import { PrismMark } from "@/components/app/prism-mark";
 import { useAppStatus } from "@/hooks/use-app-status";
-import { appDef, DOCK_ORDER } from "@/lib/apps";
+import { useAppMeta } from "@/hooks/use-app-catalog";
+import { DOCK_ORDER } from "@/lib/apps";
 import { cn } from "@/lib/utils";
-import { useAppStore } from "@/stores/app-store";
 import { useWindowStore } from "@/stores/window-store";
 
 import { DeviceTray } from "./device-tray";
@@ -39,7 +39,6 @@ export function Taskbar({
   const openWindow = useWindowStore((state) => state.open);
   const focusWindow = useWindowStore((state) => state.focus);
   const minimizeWindow = useWindowStore((state) => state.minimize);
-  const setActiveView = useAppStore((state) => state.setActiveView);
   const status = useAppStatus();
 
   const running = DOCK_ORDER.map((id) => windows.find((item) => item.id === id)).filter(
@@ -80,44 +79,19 @@ export function Taskbar({
         ) : null}
 
         {running.map((item) => {
-          const app = appDef(item.id);
-          const Icon = app.icon;
           const active = focused === item.id && !item.minimized;
-
           return (
-            <button
+            <TaskbarApp
               key={item.id}
-              type="button"
-              title={app.title}
-              onClick={() => {
-                setActiveView(item.id);
+              id={item.id}
+              minimized={item.minimized}
+              active={active}
+              onActivate={() => {
                 if (item.minimized) openWindow(item.id);
                 else if (active) minimizeWindow(item.id);
                 else focusWindow(item.id);
               }}
-              className={cn(
-                "relative flex h-9 shrink-0 items-center gap-2 rounded-lg px-2.5 transition-colors",
-                active
-                  ? "bg-white/70 shadow-[0_1px_3px_rgba(16,40,80,.12)] dark:bg-white/12"
-                  : "hover:bg-white/45 dark:hover:bg-white/8",
-                item.minimized && "opacity-70",
-              )}
-            >
-              <span
-                className="flex size-[22px] items-center justify-center rounded-[7px] text-white"
-                style={{
-                  backgroundImage: `linear-gradient(150deg, ${app.tint[0]}, ${app.tint[1]})`,
-                }}
-              >
-                <Icon className="size-[13px]" strokeWidth={2} />
-              </span>
-              <span className="hidden max-w-28 truncate text-[11.5px] font-medium text-foreground min-[1180px]:inline">
-                {app.label}
-              </span>
-              {active ? (
-                <span className="absolute inset-x-2 -bottom-[3px] h-[2px] rounded-full bg-brand" />
-              ) : null}
-            </button>
+            />
           );
         })}
       </div>
@@ -164,3 +138,51 @@ function TrayClock() {
   );
 }
 
+
+/** 任务栏上的一个「运行中的应用」：图标 + 名称 + 当前态下划线（支持自建应用的 emoji 图标）。 */
+function TaskbarApp({
+  id,
+  minimized,
+  active,
+  onActivate,
+}: {
+  id: string;
+  minimized: boolean;
+  active: boolean;
+  onActivate: () => void;
+}) {
+  const app = useAppMeta(id);
+  const Icon = app.icon;
+
+  return (
+    <button
+      type="button"
+      title={app.title}
+      onClick={onActivate}
+      className={cn(
+        "relative flex h-9 shrink-0 items-center gap-2 rounded-lg px-2.5 transition-colors",
+        active
+          ? "bg-white/70 shadow-[0_1px_3px_rgba(16,40,80,.12)] dark:bg-white/12"
+          : "hover:bg-white/45 dark:hover:bg-white/8",
+        minimized && "opacity-70",
+      )}
+    >
+      <span
+        className="flex size-[22px] items-center justify-center rounded-[7px] text-white"
+        style={{ backgroundImage: `linear-gradient(150deg, ${app.tint[0]}, ${app.tint[1]})` }}
+      >
+        {Icon ? (
+          <Icon className="size-[13px]" strokeWidth={2} />
+        ) : (
+          <span className="text-[11px] leading-none">{app.emoji ?? "📦"}</span>
+        )}
+      </span>
+      <span className="hidden max-w-28 truncate text-[11.5px] font-medium text-foreground min-[1180px]:inline">
+        {app.label}
+      </span>
+      {active ? (
+        <span className="absolute inset-x-2 -bottom-[3px] h-[2px] rounded-full bg-brand" />
+      ) : null}
+    </button>
+  );
+}

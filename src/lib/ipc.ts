@@ -99,6 +99,8 @@ export interface AppConfig {
   clipboardPasteOnClick: boolean;
   /** 任务栏电量托盘显示方式：进度条 + 百分比（默认）/ 仅进度条 / 仅百分比。 */
   batteryTrayStyle: BatteryTrayStyle;
+  /** 用户自建应用（「创建应用」）。 */
+  customApps: CustomApp[];
   /**
    * 首页 Bento 布局（前端 `serializeHomeLayout` 生成的 JSON 字符串）。
    * 空串 = 默认布局；后端只当不透明字符串存取，解析与校验都在前端。
@@ -487,6 +489,22 @@ export interface BleState {
   watching: boolean;
 }
 
+/**
+ * 用户自建应用（「创建应用」）：`link` = 一个网址，`html` = 一段自写 HTML。
+ * 与 `AppConfig.customApps` 一一对应。
+ */
+export interface CustomApp {
+  id: string;
+  name: string;
+  /** 一个 emoji。 */
+  icon: string;
+  kind: "link" | "html";
+  url: string;
+  html: string;
+  /** 图标底座的渐变两段色。 */
+  tint: [string, string];
+}
+
 /** 任务栏电量托盘的显示方式（见 `AppConfig.batteryTrayStyle`）。 */
 export type BatteryTrayStyle = "barPercent" | "bar" | "percent";
 
@@ -645,6 +663,9 @@ export const ipc = {
   rebuildFileIndex: () => invoke<void>("rebuild_file_index"),
   /** 取消在途扫描（已建好的索引保留可用）。 */
   cancelFileIndex: () => invoke<void>("cancel_file_index"),
+  /** 用系统浏览器打开一个 http(s) 链接（「创建应用」的链接型应用）。 */
+  openExternalUrl: (url: string) => invoke<void>("open_external_url", { url }),
+
   /** 打开 / 在资源管理器中定位一条搜索结果（由 Rust 侧 opener 执行）。 */
   openSearchResult: (path: string, action: OpenAction) =>
     invoke<void>("open_search_result", { path, action }),

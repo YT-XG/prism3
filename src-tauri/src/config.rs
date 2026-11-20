@@ -71,6 +71,21 @@ pub struct ProjectEntry {
     pub commands: Vec<ProjectCommand>,
 }
 
+/// 用户自建应用（「创建应用」）：`kind = "link"` 用 `url`，`kind = "html"` 用 `html`。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CustomAppEntry {
+    pub id: String,
+    pub name: String,
+    /// 图标：一个 emoji。
+    pub icon: String,
+    pub kind: String,
+    pub url: String,
+    pub html: String,
+    /// 图标底座的渐变两段色。
+    pub tint: Vec<String>,
+}
+
 /// 应用配置，持久化为 `%APPDATA%\<identifier>\config.json`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -122,6 +137,8 @@ pub struct AppConfig {
     pub clipboard_capture_images: bool,
     /// 点击一条记录时是否自动「回到上一个焦点并粘贴」；关闭后只复制到剪贴板。
     pub clipboard_paste_on_click: bool,
+    /// 用户自建的应用（桌面图标坞 / 开始菜单 / 任务栏共用）。
+    pub custom_apps: Vec<CustomAppEntry>,
     /// 任务栏电量托盘的显示方式：`barPercent`（进度条 + 百分比，默认）/ `bar` / `percent`。
     /// 未知值由前端回退到默认（后端只当字符串存）。
     pub battery_tray_style: String,
@@ -163,6 +180,7 @@ impl Default for AppConfig {
             clipboard_retention_days: 30,
             clipboard_capture_images: true,
             clipboard_paste_on_click: true,
+            custom_apps: Vec::new(),
             battery_tray_style: "barPercent".to_string(),
             home_layout: String::new(),
             note_editor_mode: "wysiwyg".to_string(),
@@ -305,6 +323,7 @@ mod tests {
         assert!(config.clipboard_capture_images);
         assert!(config.clipboard_paste_on_click);
         assert_eq!(config.battery_tray_style, "barPercent");
+        assert!(config.custom_apps.is_empty());
     }
 
     #[test]
