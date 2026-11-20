@@ -41,6 +41,12 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 use tokio_stream::{Stream, StreamExt};
 use uuid::Uuid;
+use windows::core::{PCWSTR, PWSTR};
+use windows::Win32::Foundation::ERROR_SUCCESS;
+use windows::Win32::System::Registry::{
+    RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_LOCAL_MACHINE,
+    KEY_READ, REG_SZ, REG_VALUE_TYPE,
+};
 
 use crate::config::{AppConfig, AppState, BleDeviceEntry};
 use crate::error::{AppError, AppResult};
@@ -2280,7 +2286,12 @@ async fn collect_candidates(
             continue;
         };
         seen.insert(address.to_string());
-        let candidate = candidate_of(address, &properties, known);
+        let mut candidate = candidate_of(address, &properties, known);
+        // 广播里没名字（手机 / 耳机都是这样）时，补一次 Windows 的 PnP 名字：
+        // 只有「本机见过这台设备」才有值，拿不到就保持 `None`（界面回落到地址）。
+        if candidate.name.is_none() {
+            candidate.name = system_device_name(&candidate.address);
+        }
         // 每条候选都记一行：`company_ids` 是「这台到底报哪个 SIG 号」的唯一现场证据，
         // 排查「同型号为什么连不上 / 要不要把某个号加进白名单」全靠它。
         log::debug!(
@@ -2427,6 +2438,158 @@ async fn advertised_name_of(peripheral: &Peripheral) -> Option<String> {
             None
         }
     }
+}
+
+/// Windows PnP 设备缓存里的蓝牙名字（`BTHLE` = LE 设备，`BTHENUM` = 经典蓝牙）。
+///
+/// 手机、键盘这类设备**广播里根本没有名字**（本项目的耳机也没有），名字只可能来自
+/// 「本机见过它」：配对过、或在 Windows 设置里连过，系统就会在
+/// `HKLM\SYSTEM\CurrentControlSet\Enum\{BTHLE,BTHENUM}\Dev_<MAC>\<实例>` 下留一个
+/// `FriendlyName`。这里**只读**，且只在候选没有广播名 / 缓存名时补位；
+/// 拿不到就继续显示地址——**绝不臆造名字**。
+///
+/// 为什么读注册表而不是 WinRT `BluetoothLEDevice`：后者要 COM 套间初始化，而扫描跑在
+/// 会话线程自己的 current-thread 运行时里；注册表是同步只读、无 COM、无副作用。
+fn system_device_name(address: &str) -> Option<String> {
+    let node = dev_node(address)?;
+    ["BTHLE", "BTHENUM"].iter().find_map(|branch| {
+        friendly_name_under(&format!("SYSTEM\\CurrentControlSet\\Enum\\{branch}"), &node)
+    })
+}
+
+/// `73:23:86:D0:74:C9` → `Dev_732386D074C9`（忽略 `:` / `-` 分隔符与大小写）。
+///
+/// 实测命名不统一：`BTHLE` 下是小写十六进制（`Dev_ee17c4f721fd`），`BTHENUM` 下是
+/// 大写（`Dev_120203047C0F`），所以比较一律走 `eq_ignore_ascii_case`。
+fn dev_node(address: &str) -> Option<String> {
+    let hex: String = address
+        .chars()
+        .filter(|character| !matches!(character, ':' | '-'))
+        .collect();
+    if hex.len() != 12 || !hex.chars().all(|character| character.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(format!("Dev_{}", hex.to_ascii_uppercase()))
+}
+
+/// 在 `Enum\{branch}` 下找到同名 `Dev_*` 子键，读它第一个实例的 `FriendlyName`。
+fn friendly_name_under(branch: &str, node: &str) -> Option<String> {
+    let key = open_hklm(branch)?;
+    let mut found = None;
+    for index in 0.. {
+        let Some(subkey) = enum_subkey(key, index) else {
+            break;
+        };
+        if !subkey.eq_ignore_ascii_case(node) {
+            continue;
+        }
+        if let Some(name) = first_instance_name(&format!("{branch}\\{subkey}")) {
+            found = Some(name);
+            break;
+        }
+    }
+    close_key(key);
+    found
+}
+
+/// 设备节点下的第一个实例（`<实例>` 形如 `7&2f3a…&0`），取它的 `FriendlyName`。
+fn first_instance_name(subkey: &str) -> Option<String> {
+    let key = open_hklm(subkey)?;
+    let mut found = None;
+    for index in 0.. {
+        let Some(instance) = enum_subkey(key, index) else {
+            break;
+        };
+        let Some(instance_key) = open_hklm(&format!("{subkey}\\{instance}")) else {
+            continue;
+        };
+        found = read_string(instance_key, "FriendlyName");
+        close_key(instance_key);
+        if found.is_some() {
+            break;
+        }
+    }
+    close_key(key);
+    found
+}
+
+/// 只读打开 `HKLM` 下的一个子键。
+fn open_hklm(subkey: &str) -> Option<HKEY> {
+    let path = wide(subkey);
+    let mut key = HKEY::default();
+    let status = unsafe {
+        RegOpenKeyExW(
+            HKEY_LOCAL_MACHINE,
+            PCWSTR(path.as_ptr()),
+            Some(0),
+            KEY_READ,
+            &mut key,
+        )
+    };
+    (status == ERROR_SUCCESS).then_some(key)
+}
+
+/// 枚举一个键的第 `index` 个子键名（越界 / 出错一律返回 `None`，调用方据此收尾）。
+fn enum_subkey(key: HKEY, index: u32) -> Option<String> {
+    let mut buffer = [0u16; 256];
+    let mut length = buffer.len() as u32;
+    let status = unsafe {
+        RegEnumKeyExW(
+            key,
+            index,
+            Some(PWSTR(buffer.as_mut_ptr())),
+            &mut length,
+            None,
+            Some(PWSTR::null()),
+            None,
+            None,
+        )
+    };
+    (status == ERROR_SUCCESS).then(|| String::from_utf16_lossy(&buffer[..length as usize]))
+}
+
+/// 读一个 `REG_SZ` 字符串值（非字符串类型 / 读失败 / 空串都返回 `None`）。
+fn read_string(key: HKEY, value: &str) -> Option<String> {
+    let name = wide(value);
+    let mut kind = REG_VALUE_TYPE::default();
+    let mut buffer = [0u8; 1024];
+    let mut length = buffer.len() as u32;
+    let status = unsafe {
+        RegQueryValueExW(
+            key,
+            PCWSTR(name.as_ptr()),
+            None,
+            Some(&mut kind),
+            Some(buffer.as_mut_ptr()),
+            Some(&mut length),
+        )
+    };
+    if status != ERROR_SUCCESS || kind != REG_SZ {
+        return None;
+    }
+    let bytes = &buffer[..length as usize];
+    // REG_SZ 是 UTF-16LE：按 2 字节一组解码（不用 `chunks_exact` —— clippy 更推荐 `as_chunks`，
+    // 而这里显式按索引取字节最直白）。
+    let units: Vec<u16> = (0..bytes.len() / 2)
+        .map(|index| u16::from_le_bytes([bytes[index * 2], bytes[index * 2 + 1]]))
+        .collect();
+    let text = String::from_utf16_lossy(&units);
+    let trimmed = text.trim_end_matches('\0').trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// 关闭注册表键（失败没有补救手段，忽略返回值）。
+fn close_key(key: HKEY) {
+    unsafe {
+        let _ = RegCloseKey(key);
+    }
+}
+
+/// UTF-16 + NUL 结尾的宽字符串（Win32 API 的入参形式）。
+fn wide(text: &str) -> Vec<u16> {
+    let mut units: Vec<u16> = text.encode_utf16().collect();
+    units.push(0);
+    units
 }
 
 /// 扫描超时时把「到底看到了什么」打到 info 日志：扫不到的排查全靠这一行。
@@ -4252,6 +4415,45 @@ mod tests {
         assert!(candidate.company_ids.is_empty());
         assert!(candidate.manufacturer_payload.is_empty());
         assert!(!candidate.supported);
+    }
+
+    /// 设备名节点只由地址推导：分隔符忽略、大小写统一，非法地址一律不查注册表。
+    #[test]
+    fn device_nodes_are_derived_from_the_address_alone() {
+        assert_eq!(
+            dev_node("73:23:86:D0:74:C9").as_deref(),
+            Some("Dev_732386D074C9")
+        );
+        // 实测两个分支的命名大小写不一致，这里统一成大写再比较。
+        assert_eq!(
+            dev_node("12:02:03:04:7c:0f").as_deref(),
+            Some("Dev_120203047C0F")
+        );
+        assert_eq!(
+            dev_node("73-23-86-D0-74-C9").as_deref(),
+            Some("Dev_732386D074C9")
+        );
+        // 长度不对 / 非十六进制：放弃查询，绝不用错地址去猜别人的名字。
+        assert_eq!(dev_node("73:23:86:D0:74"), None);
+        assert_eq!(dev_node("ZZ:23:86:D0:74:C9"), None);
+        assert_eq!(dev_node(""), None);
+        assert_eq!(system_device_name("not-an-address"), None);
+    }
+
+    /// 手动探针：确认能从 Windows 的 PnP 缓存里读到本机已配对蓝牙设备的 `FriendlyName`。
+    ///
+    /// 依赖「这台机器上确实配对过那些设备」，因此只能手动跑：
+    /// `cargo test --lib -- --ignored --nocapture probe_reads_windows_bluetooth_names`。
+    /// 没有名字不代表实现坏了（没配对 / 从没配过对），只代表系统不认识它。
+    #[test]
+    #[ignore = "需要本机配对过对应蓝牙设备"]
+    fn probe_reads_windows_bluetooth_names() {
+        for address in [DEVICE_ADDRESS, "EE:17:C4:F7:21:FD"] {
+            println!("{address} -> {:?}", system_device_name(address));
+        }
+        // 格式非法时绝不查注册表（只要求不 panic、不返回名字）。
+        assert_eq!(system_device_name("nope"), None);
+        println!("以输出为准：有名字 = Enum\\BTHLE|BTHENUM 里存在该设备的节点");
     }
 
     /// 协议不符的报错必须把「耳机还在仓里」与「根本不是同平台设备」分开说。

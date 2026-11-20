@@ -211,7 +211,8 @@ export function DevicesPanel() {
           <CardDescription>
             扫描会列出附近所有 BLE 设备，并标出各自广播的厂商 ID（`0x5452` 是本平台已知的那个）。
             厂商 ID 不在名单里也能添加：连接后再按服务 / 特征判定协议，对不上会当场报错。
-            RSSI 越接近 0 信号越强。
+            名字只有「本机见过」的设备才有（广播名 / 缓存名 / Windows 已配对设备名），
+            否则显示地址。RSSI 越接近 0 信号越强。
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">

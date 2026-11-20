@@ -455,6 +455,12 @@ export interface BleDeviceEntry extends BleDeviceSnapshotEntry {
 /** 与 Rust 侧扫描结果一一对应：`scan_ble_devices` 的返回项。 */
 export interface BleCandidate {
   address: string;
+  /**
+   * 显示名：广播名 → 配置里的缓存名 → **Windows 设备缓存里的系统名**，都可能为 `null`。
+   *
+   * 手机 / 耳机都不在广播里带名字，所以这一项经常是 `null`（界面回落到地址）；
+   * 有值时也可能来自 Windows 的 PnP 缓存（本机配对过的设备才有），见 Rust `system_device_name`。
+   */
   name: string | null;
   /** 信号强度（dBm，越接近 0 越强）。 */
   rssi: number;

@@ -6,8 +6,9 @@ const BLE_SUFFIX = /\s*_ble\s*$/i;
 /**
  * 耳机的展示名：去掉名字末尾的 `_BLE` 后缀（大小写不敏感，后缀前后允许空白）。
  *
- * 耳机**广播**不带名字（`name` 为 null 是正常现象，不要当错误），因此名字缺失时
- * 退回设备地址；名字只剩后缀时同样退回地址，避免渲染出一个空标题。
+ * 耳机**广播**不带名字（`name` 为 null 是正常现象，不要当错误）；名字可能来自连接后的
+ * GATT Device Name、配置里的缓存名，或 Windows 的 PnP 设备缓存（`system_device_name`）。
+ * 名字缺失时退回设备地址；名字只剩后缀时同样退回地址，避免渲染出一个空标题。
  */
 export function displayDeviceName(name: string | null, address: string): string {
   const trimmed = name?.trim() ?? "";

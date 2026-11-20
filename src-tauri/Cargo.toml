@@ -12,7 +12,7 @@ edition = "2021"
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "prism3_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -75,7 +75,9 @@ semver = "1"
 # Globalization 用 MultiByteToWideChar 按系统 ANSI 代码页解子进程输出（见 projects.rs），
 # Devices_DeviceAndDriverInstallation / HumanInterfaceDevice + Storage_FileSystem
 # 用于鼠标电量（见 mouse.rs）：SetupDi 枚举 HID 接口、HidD_SetFeature/GetFeature
-# 读写 feature report，CreateFileW 打开设备路径。
+# 读写 feature report，CreateFileW 打开设备路径；
+# System_Registry 只读蓝牙设备名（见 ble.rs 的 system_device_name：手机这类广播里
+# 没有名字的设备，名字只能从 Windows 的 PnP 设备缓存 Enum\BTHLE|BTHENUM 里取）。
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "Win32_Devices_DeviceAndDriverInstallation",
@@ -90,6 +92,7 @@ windows = { version = "0.62", features = [
     "Win32_System_IO",
     "Win32_System_Memory",
     "Win32_System_Performance",
+    "Win32_System_Registry",
     "Win32_System_Threading",
     "Win32_Security",
     "Win32_UI_Input_KeyboardAndMouse",
