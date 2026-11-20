@@ -15,7 +15,7 @@ interface DragState {
 }
 
 /** 关闭动画时长，必须与 `index.css` 的 `window-close` 一致。 */
-const CLOSE_MS = 130;
+const CLOSE_MS = 165;
 
 /**
  * 一个浮层窗口：标题栏（图标 + 标题 + 三个窗口键）、可拖动、右下角可缩放。
@@ -60,20 +60,31 @@ export function AppWindow({ state, focused }: { state: AppWindowState; focused: 
     const el = elRef.current;
     if (!el) return;
 
-    const onMove = (event: PointerEvent) => {
-      const dx = event.clientX - drag.startX;
-      const dy = event.clientY - drag.startY;
+    // 一帧只写一次样式：pointermove 可能 120Hz+，逐条写会让主线程和合成器互相等。
+    let frame = 0;
+    let lastX = 0;
+    let lastY = 0;
+
+    const apply = () => {
+      frame = 0;
       if (drag.mode === "move") {
-        el.style.transform = `translate(${dx}px, ${dy}px)`;
-        return;
+        // translate3d 强制走合成层；只改 transform 不触发重排，窗口内容不用重绘。
+        el.style.transform = `translate3d(${lastX}px, ${lastY}px, 0)`;
+      } else {
+        el.style.width = `${Math.max(app.min.w, drag.rect.w + lastX)}px`;
+        el.style.height = `${Math.max(app.min.h, drag.rect.h + lastY)}px`;
       }
-      const w = Math.max(app.min.w, drag.rect.w + dx);
-      const h = Math.max(app.min.h, drag.rect.h + dy);
-      el.style.width = `${w}px`;
-      el.style.height = `${h}px`;
+    };
+
+    const onMove = (event: PointerEvent) => {
+      lastX = event.clientX - drag.startX;
+      lastY = event.clientY - drag.startY;
+      if (frame) return;
+      frame = requestAnimationFrame(apply);
     };
 
     const onUp = (event: PointerEvent) => {
+      if (frame) cancelAnimationFrame(frame);
       const dx = event.clientX - drag.startX;
       const dy = event.clientY - drag.startY;
       if (drag.mode === "move") {
@@ -132,8 +143,10 @@ export function AppWindow({ state, focused }: { state: AppWindowState; focused: 
           background: "var(--window-bg)",
           borderColor: "var(--window-border)",
           boxShadow: focused ? "var(--window-shadow)" : "var(--window-shadow-inactive)",
-          backdropFilter: "blur(26px) saturate(1.25)",
-          WebkitBackdropFilter: "blur(26px) saturate(1.25)",
+          // 拖动 / 缩放时关掉整窗高斯模糊：窗口每动一帧都要重算一遍背景，
+          // 这是「拖起来一顿一顿」的主因；停手后 100ms 内就恢复，肉眼几乎察觉不到。
+          backdropFilter: drag ? "none" : "blur(26px) saturate(1.25)",
+          WebkitBackdropFilter: drag ? "none" : "blur(26px) saturate(1.25)",
         }}
       >
         <div

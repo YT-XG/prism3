@@ -13,7 +13,7 @@ import { useWindowStore } from "@/stores/window-store";
  * 结构照参考站：一个搜索框 + 应用宫格 + 底部一条说明。
  * 玻璃用「窗口级」的不透明度（它盖住壁纸，必须挡住后面的图标）。
  */
-export function StartMenu({ onClose }: { onClose: () => void }) {
+export function StartMenu({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const version = useAppVersion();
@@ -54,7 +54,10 @@ export function StartMenu({ onClose }: { onClose: () => void }) {
       <div
         role="menu"
         aria-label="开始菜单"
-        className="menu-in absolute left-2 z-50 flex w-[520px] flex-col overflow-hidden rounded-2xl border"
+        className={cn(
+          "absolute left-2 z-50 flex w-[520px] flex-col overflow-hidden rounded-2xl border",
+          open ? "menu-in" : "menu-out",
+        )}
         style={{
           bottom: "calc(var(--taskbar-h) + 10px)",
           background: "var(--window-bg)",

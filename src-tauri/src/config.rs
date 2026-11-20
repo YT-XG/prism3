@@ -86,6 +86,22 @@ pub struct CustomAppEntry {
     pub tint: Vec<String>,
 }
 
+/// 出厂自带的网页应用（「赛博斗蛐蛐」）——只是预置一条 `custom_apps` 记录，
+/// 用户可以在「创建应用」里删掉，删掉后 `custom_apps_seeded` 为 true，不会再被塞回来。
+pub const DEFAULT_CUSTOM_APP_URL: &str = "https://yt-xg.github.io/";
+
+fn default_custom_app() -> CustomAppEntry {
+    CustomAppEntry {
+        id: "play-yt-xg".to_string(),
+        name: "赛博斗蛐蛐".to_string(),
+        icon: "🎮".to_string(),
+        kind: "link".to_string(),
+        url: DEFAULT_CUSTOM_APP_URL.to_string(),
+        html: String::new(),
+        tint: vec!["#8b5cf6".to_string(), "#6d28d9".to_string()],
+    }
+}
+
 /// 应用配置，持久化为 `%APPDATA%\<identifier>\config.json`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -139,6 +155,9 @@ pub struct AppConfig {
     pub clipboard_paste_on_click: bool,
     /// 用户自建的应用（桌面图标坞 / 开始菜单 / 任务栏共用）。
     pub custom_apps: Vec<CustomAppEntry>,
+    /// 是否已经补过「出厂自带应用」。老配置没有这个字段 → false → `load` 里补一次；
+    /// 补完写回 true，用户之后删掉也不会复活。
+    pub custom_apps_seeded: bool,
     /// 任务栏电量托盘的显示方式：`barPercent`（进度条 + 百分比，默认）/ `bar` / `percent`。
     /// 未知值由前端回退到默认（后端只当字符串存）。
     pub battery_tray_style: String,
@@ -180,7 +199,8 @@ impl Default for AppConfig {
             clipboard_retention_days: 30,
             clipboard_capture_images: true,
             clipboard_paste_on_click: true,
-            custom_apps: Vec::new(),
+            custom_apps: vec![default_custom_app()],
+            custom_apps_seeded: true,
             battery_tray_style: "barPercent".to_string(),
             home_layout: String::new(),
             note_editor_mode: "wysiwyg".to_string(),
@@ -323,7 +343,9 @@ mod tests {
         assert!(config.clipboard_capture_images);
         assert!(config.clipboard_paste_on_click);
         assert_eq!(config.battery_tray_style, "barPercent");
-        assert!(config.custom_apps.is_empty());
+        assert_eq!(config.custom_apps.len(), 1);
+        assert_eq!(config.custom_apps[0].url, DEFAULT_CUSTOM_APP_URL);
+        assert!(config.custom_apps_seeded);
     }
 
     #[test]

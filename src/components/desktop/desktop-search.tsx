@@ -2,6 +2,7 @@ import { ArrowRight, FileText, Folder, Search as SearchIcon } from "lucide-react
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppCatalog, useAppMeta } from "@/hooks/use-app-catalog";
+import { usePresence } from "@/hooks/use-presence";
 import { useFileSearch } from "@/hooks/use-file-search";
 import type { SearchHit } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -74,7 +75,9 @@ export function DesktopSearch() {
     setFocused(false);
   };
 
-  const showPanel = focused && rows.length > 0;
+  const panelOpen = focused && rows.length > 0;
+  const panelPresence = usePresence(panelOpen, 130);
+  const showPanel = panelPresence.rendered;
 
   return (
     <div
@@ -130,7 +133,8 @@ export function DesktopSearch() {
       {showPanel ? (
         <div
           className={cn(
-            "menu-in mt-2 overflow-hidden rounded-2xl border p-1.5",
+            "mt-2 overflow-hidden rounded-2xl border p-1.5",
+            panelOpen ? "menu-in" : "pop-out",
             "border-white/80 bg-white/92 shadow-[0_28px_60px_-30px_rgba(16,40,80,.6)] backdrop-blur-2xl",
             "dark:border-white/12 dark:bg-[#1b1e26]/95",
           )}

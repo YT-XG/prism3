@@ -9,6 +9,7 @@ import { CustomAppDialog } from "@/components/apps/custom-app-dialog";
 import { Taskbar } from "@/components/desktop/taskbar";
 import { TopBar } from "@/components/desktop/top-bar";
 import { WindowLayer } from "@/components/desktop/window-layer";
+import { usePresence } from "@/hooks/use-presence";
 import { useWindowStore } from "@/stores/window-store";
 
 /**
@@ -24,6 +25,8 @@ import { useWindowStore } from "@/stores/window-store";
  */
 export function AppShell() {
   const [menuOpen, setMenuOpen] = useState(false);
+  // 关开始菜单时多留一帧，让 `menu-out` 跑完再卸载
+  const menuPresence = usePresence(menuOpen, 140);
   const clampAll = useWindowStore((state) => state.clampAll);
 
   // 窗口尺寸（拖边、最大化、系统缩放）变化后把窗口收回桌面范围。
@@ -51,7 +54,9 @@ export function AppShell() {
 
       <WindowLayer />
 
-      {menuOpen ? <StartMenu onClose={() => setMenuOpen(false)} /> : null}
+      {menuPresence.rendered ? (
+        <StartMenu open={menuOpen} onClose={() => setMenuOpen(false)} />
+      ) : null}
 
       <CustomAppDialog />
 

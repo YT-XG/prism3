@@ -417,7 +417,7 @@ html[data-wallpaper] main h1 + p {
     animation: window-open 200ms cubic-bezier(0.22, 0.8, 0.24, 1) both;
     }
   .app-window[data-state="closing"] {
-    animation: window-close 130ms cubic-bezier(0.4, 0, 1, 1) both;
+    animation: window-close 165ms cubic-bezier(0.4, 0, 1.1, 1) both;
     }
   /* 最大化/还原时给一点位移过渡；拖动期间加 `data-dragging` 关掉它，避免跟手发飘 */
   .window-frame {
@@ -498,7 +498,7 @@ html[data-wallpaper] main h1 + p {
   }
   to {
     opacity: 0;
-    transform: scale(0.97);
+    transform: scale(0.965) translateY(6px);
   }
 }
 
@@ -535,6 +535,29 @@ html[data-wallpaper] main h1 + p {
   }
 }
 
+@keyframes menu-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+}
+
+/* 面板推出去：竖直方向收起来，比淡出更像「收」 */
+@keyframes pop-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+
 @keyframes taskbar-in {
   from {
     transform: translateY(100%);
@@ -550,6 +573,8 @@ html[data-wallpaper] main h1 + p {
   .rise-in,
   .drop-in,
   .menu-in,
+  .menu-out,
+  .pop-out,
   .taskbar-in,
   .app-window[data-state="open"],
   .app-window[data-state="closing"] {

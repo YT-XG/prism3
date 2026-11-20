@@ -8,6 +8,7 @@ import { useMouseBattery } from "@/hooks/use-mouse-battery";
 import { useWirelessBatteries } from "@/hooks/use-wireless-batteries";
 import { connectedDevices } from "@/lib/devices";
 import { cn } from "@/lib/utils";
+import { usePresence } from "@/hooks/use-presence";
 import { useAppStore } from "@/stores/app-store";
 
 /** 托盘里一台设备的一段电量：耳机会有「左 / 右 / 仓」三行，其余只有一行。 */
@@ -39,6 +40,7 @@ const fmt = (percent: number | null, approx?: boolean) =>
  */
 export function DeviceTray() {
   const [open, setOpen] = useState(false);
+  const presence = usePresence(open, 140);
   const earbuds = useEarbuds();
   const mouse = useMouseBattery(true);
   const wireless = useWirelessBatteries(true);
@@ -97,7 +99,10 @@ export function DeviceTray() {
       <div
         role="dialog"
         aria-label="设备电量"
-        className="menu-in fixed right-3 z-[60] w-[304px] rounded-2xl border p-3"
+        className={cn(
+          "fixed right-3 z-[60] w-[304px] rounded-2xl border p-3",
+          open ? "menu-in" : "pop-out",
+        )}
         style={{
           bottom: "calc(var(--taskbar-h) + 8px)",
           background: "var(--window-bg)",
@@ -224,7 +229,7 @@ export function DeviceTray() {
         ) : null}
       </div>
 
-      {open ? createPortal(popover, document.body) : null}
+      {presence.rendered ? createPortal(popover, document.body) : null}
     </>
   );
 }
