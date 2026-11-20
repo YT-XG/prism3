@@ -296,7 +296,11 @@ mod win {
 
     /// 找出电量接口的设备路径（无线优先）。返回 `(路径, 是否无线)`。
     pub(super) fn find_battery_interface() -> Option<(String, bool)> {
-        let mut found: Option<(String, bool)> = None;
+        // 有线 / 无线两个接口可能**同时存在**（插着 USB 线、接收器也插着）。
+        // 先记下来、循环结束后优先返回有线：有线时固件不回电量，但我们按「USB 供电 = 满电」显示；
+        // 如果直接返回接收器，用户就会看到「有线连接却显示未上报·可能已休眠」。
+        let mut wired: Option<(String, bool)> = None;
+        let mut wireless_found: Option<(String, bool)> = None;
         unsafe {
             let guid = HidD_GetHidGuid();
             let set = SetupDiGetClassDevsW(
@@ -354,16 +358,16 @@ mod win {
                     continue;
                 }
                 if wireless {
-                    let _ = SetupDiDestroyDeviceInfoList(set);
-                    return Some((path, true));
+                    if wireless_found.is_none() {
+                        wireless_found = Some((path, true));
+                    }
+                    continue;
                 }
-                if found.is_none() {
-                    found = Some((path, false));
-                }
+                wired = Some((path, false));
             }
             let _ = SetupDiDestroyDeviceInfoList(set);
         }
-        found
+        wired.or(wireless_found)
     }
 
     /// 发一次电量请求并读回应答，返回 `(百分比, 是否充电)`。
