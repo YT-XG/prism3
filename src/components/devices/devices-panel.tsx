@@ -209,7 +209,7 @@ export function DevicesPanel() {
         <CardHeader>
           <CardTitle>添加设备</CardTitle>
           <CardDescription>
-            耳机广播既不带名字也不带服务 UUID，候选多半只显示地址；RSSI 越接近 0 信号越强。
+            扫描会列出附近所有 BLE 设备（有广播名的直接显示名字）；带本平台厂商数据的可添加，其余标「不支持」。RSSI 越接近 0 信号越强。
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
@@ -235,7 +235,14 @@ export function DevicesPanel() {
             </p>
           ) : (
             <ul className="flex flex-col gap-1">
-              {controls.candidates.map((candidate) => (
+              {/* 支持本平台协议的排前面，其次按信号强度（后端已按 RSSI 排过）。 */}
+              {[...controls.candidates]
+                .sort(
+                  (left, right) =>
+                    Number(right.supported) - Number(left.supported) ||
+                    right.rssi - left.rssi,
+                )
+                .map((candidate) => (
                 <li
                   key={candidate.address}
                   className="flex items-center justify-between gap-3 rounded-md bg-muted/50 px-2.5 py-1.5"
@@ -246,6 +253,9 @@ export function DevicesPanel() {
                         {displayDeviceName(candidate.name, candidate.address)}
                       </span>
                       {candidate.known && <Badge variant="secondary">已在列表</Badge>}
+                      {candidate.supported ? null : (
+                        <Badge variant="outline">不支持</Badge>
+                      )}
                     </span>
                     <span className="truncate text-xs text-muted-foreground">
                       {candidate.address} · {candidate.rssi} dBm
@@ -255,6 +265,12 @@ export function DevicesPanel() {
                   <Button
                     variant="outline"
                     size="xs"
+                    disabled={!candidate.supported}
+                    title={
+                      candidate.supported
+                        ? "添加这台设备"
+                        : "广播里没有本平台的厂商数据，连不上（可能是别的协议或已配对不广播）"
+                    }
                     onClick={() => void controls.addDevice(candidate)}
                   >
                     添加

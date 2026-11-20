@@ -468,6 +468,11 @@ export interface BleCandidate {
   manufacturerPayload: string;
   /** 是否已在本机记住的设备列表里。 */
   known: boolean;
+  /**
+   * 广播里是否带本平台的厂商数据（company id `0x5452`）。
+   * 扫描**不再按它过滤**：false 的设备也列出来（有名字显示名字），只是不能添加 / 连接。
+   */
+  supported: boolean;
 }
 
 /** 与 Rust 侧 `BleState` 一一对应：命令返回值与 `ble:state` 事件载荷同构。 */

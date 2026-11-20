@@ -70,7 +70,8 @@ pub const DEVICE_NAME_CHARACTERISTIC_UUID: Uuid =
 
 /// 广播里厂商数据的公司标识（蓝牙 SIG 分配号 `0x5452`）。
 ///
-/// 只用于**过滤候选设备**（见 `has_vendor_manufacturer_data`），不作身份判据。
+/// 只用于**标记候选是否可添加**（见 `has_vendor_manufacturer_data`），不作身份判据；
+/// 扫描结果**不再按它过滤**（要求「全部列出」——同品牌不同协议 / 已配对的设备也要看得见）。
 const DEVICE_COMPANY_ID: u16 = 0x5452;
 
 /// 帧头：请求固定 `08 EE 00 00 00`。
@@ -342,6 +343,9 @@ pub struct BleCandidate {
     pub manufacturer_payload: String,
     /// 地址是否已在配置的 `ble_devices` 里。
     pub known: bool,
+    /// 广播里是否带本平台的厂商数据（company id `0x5452`）。
+    /// **现在不过滤**：扫到的设备全部列出，只有 `supported` 为 true 的才允许添加 / 连接。
+    pub supported: bool,
 }
 
 /// 一帧已通过门控 / 长度 / 校验和的应答。
@@ -2144,9 +2148,10 @@ async fn find_peripheral(adapter: &Adapter, target: BDAddr) -> AppResult<Periphe
 
 /// 扫描附近的候选耳机（`scan_ble_devices` 的实现）。
 ///
-/// **只返回厂商数据命中公司标识 `0x5452` 的设备**：耳机既不广播名字也不广播服务 UUID，
-/// 不过滤的话列表就是一整屏无法辨认的 MAC 地址；只看厂商数据也就顺带覆盖了可能的
-/// 其它同族设备。适配器不可用是错误，**空列表是正常结果**（附近没有耳机）。
+/// **列出扫到的全部 BLE 设备**（不再按厂商数据过滤）：
+/// `supported` 标记广播里是否带本平台厂商数据（`0x5452`），只有它为 true 的能添加 / 连接；
+/// 其余带名字的照样显示名字，方便区分「设备没在广播」与「协议不对」。
+/// 适配器不可用是错误，**空列表是正常结果**（附近没有广播）。
 ///
 /// `known` 是已知设备列表（配置镜像）：只用来打 `known` 标记与回落到缓存名，
 /// 因此这里不需要 `AppHandle`，真机探针也能直接调用。
@@ -2185,10 +2190,11 @@ pub async fn scan_candidates(known: &[BleDeviceEntry]) -> AppResult<Vec<BleCandi
             .cmp(&left.rssi)
             .then_with(|| left.address.cmp(&right.address))
     });
+    let supported = candidates.iter().filter(|item| item.supported).count();
     log::info!(
-        "蓝牙扫描：适配器看到 {} 个设备，其中 {} 个命中厂商过滤",
+        "蓝牙扫描：适配器看到 {} 个设备，其中 {} 个带本平台厂商数据",
         seen.len(),
-        candidates.len()
+        supported
     );
     if seen.is_empty() {
         log::warn!(
@@ -2213,17 +2219,18 @@ async fn collect_candidates(
             continue;
         };
         seen.insert(address.to_string());
-        let Some(candidate) = candidate_of(address, &properties, known) else {
-            // 被厂商过滤挡掉的广播：把它的公司 ID 记下来，排查「为什么扫不到」时直接看日志。
+        let candidate = candidate_of(address, &properties, known);
+        if !candidate.supported {
+            // 不带本平台厂商数据的广播也列出来（名字优先），只是不允许添加；
+            // 排查「为什么扫不到」时这行日志能看出它到底报了什么。
             log::debug!(
-                "跳过非候选广播 addr={} name={:?} company={:?} rssi={:?}",
+                "非本平台广播 addr={} name={:?} company={:?} rssi={:?}",
                 address,
                 properties.local_name,
                 properties.manufacturer_data.keys().collect::<Vec<_>>(),
                 properties.rssi
             );
-            continue;
-        };
+        }
         match out
             .iter_mut()
             .find(|item| item.address == candidate.address)
@@ -2251,22 +2258,20 @@ fn candidate_of(
     address: BDAddr,
     properties: &PeripheralProperties,
     known: &[BleDeviceEntry],
-) -> Option<BleCandidate> {
-    if !has_vendor_manufacturer_data(properties) {
-        return None;
-    }
-    let payload = properties.manufacturer_data.get(&DEVICE_COMPANY_ID)?;
+) -> BleCandidate {
+    let payload = properties.manufacturer_data.get(&DEVICE_COMPANY_ID);
     let address = address.to_string();
     let cached = known
         .iter()
         .find(|entry| entry.address.eq_ignore_ascii_case(&address));
-    Some(BleCandidate {
+    BleCandidate {
         name: advertised_name(properties).or_else(|| cached.and_then(|entry| entry.name.clone())),
         rssi: properties.rssi.unwrap_or(0),
-        manufacturer_payload: hex_lower(payload),
+        manufacturer_payload: payload.map(|payload| hex_lower(payload)).unwrap_or_default(),
+        supported: has_vendor_manufacturer_data(properties),
         known: cached.is_some(),
         address,
-    })
+    }
 }
 
 /// 在已发现的设备里挑出目标。
@@ -3587,18 +3592,19 @@ mod tests {
                 DEVICE_ADDRESS,
                 "身份判据里没有 payload 的位置"
             );
-            // 厂商标识仍是**候选过滤**的正确依据：带 0x5452 就进列表（内容原样带出）。
-            let candidate = candidate_of(target, &properties, &[]).expect("厂商标识命中即为候选");
+            // 带 0x5452 的设备标记为 supported（内容原样带出）。
+            let candidate = candidate_of(target, &properties, &[]);
+            assert!(candidate.supported, "带 0x5452 必须是 supported");
             assert_eq!(candidate.manufacturer_payload, hex_lower(&payload));
         }
 
-        // 公司标识不对 → 不进候选（与身份判据无关，这里只是过滤）。
+        // 公司标识不对 → 仍然列出，但 supported = false（不再过滤掉）。
         let other = PeripheralProperties {
             manufacturer_data: HashMap::from([(0x004C, vec![0x12, 0x02, 0x03, 0x04, 0x7C, 0x0F])]),
             ..PeripheralProperties::default()
         };
         assert!(!has_vendor_manufacturer_data(&other));
-        assert!(candidate_of(target, &other, &[]).is_none());
+        assert!(!candidate_of(target, &other, &[]).supported);
 
         // 空 payload 不算命中；完全没有厂商数据也不算（名字缺失同样不能当命中）。
         let empty = PeripheralProperties {
@@ -3606,11 +3612,11 @@ mod tests {
             ..PeripheralProperties::default()
         };
         assert!(!has_vendor_manufacturer_data(&empty));
-        assert!(candidate_of(target, &empty, &[]).is_none());
+        assert!(!candidate_of(target, &empty, &[]).supported);
         assert!(!has_vendor_manufacturer_data(
             &PeripheralProperties::default()
         ));
-        assert!(candidate_of(target, &PeripheralProperties::default(), &[]).is_none());
+        assert!(!candidate_of(target, &PeripheralProperties::default(), &[]).supported);
 
         // 只要带公司标识就够（哪怕 payload 只有 1 字节）—— 尾巴不再是判据，
         // 因此「长度不够」不再能筛掉候选。
@@ -3619,7 +3625,7 @@ mod tests {
             ..PeripheralProperties::default()
         };
         assert!(has_vendor_manufacturer_data(&short));
-        assert!(candidate_of(target, &short, &[]).is_some());
+        assert!(candidate_of(target, &short, &[]).supported);
     }
 
     #[test]
@@ -3983,6 +3989,7 @@ mod tests {
             rssi: -42,
             manufacturer_payload: "00030001000b016400120203047c0f".into(),
             known: true,
+            supported: true,
         };
         let value = serde_json::to_value(&candidate).expect("候选项应当可序列化");
         let mut keys: Vec<&str> = value
@@ -3994,7 +4001,7 @@ mod tests {
         keys.sort_unstable();
         assert_eq!(
             keys,
-            vec!["address", "known", "manufacturerPayload", "name", "rssi"]
+            vec!["address", "known", "manufacturerPayload", "name", "rssi", "supported"]
         );
         assert_eq!(value["rssi"], -42);
         assert_eq!(value["name"], "StarRing Ultra_BLE");
@@ -4035,7 +4042,8 @@ mod tests {
             ..PeripheralProperties::default()
         };
 
-        let candidate = candidate_of(address, &properties, &[]).expect("厂商数据命中即视为候选");
+        let candidate = candidate_of(address, &properties, &[]);
+        assert!(candidate.supported, "带厂商数据 → supported");
         assert_eq!(candidate.address, DEVICE_ADDRESS);
         assert_eq!(candidate.rssi, -35);
         assert_eq!(candidate.name, None, "耳机不广播名字：缺失是正常现象");
@@ -4053,7 +4061,7 @@ mod tests {
             last_connected_at: Some(7),
             adaptive_anc: false,
         }];
-        let candidate = candidate_of(address, &properties, &cached).expect("应当仍是候选");
+        let candidate = candidate_of(address, &properties, &cached);
         assert!(candidate.known);
         assert_eq!(candidate.name.as_deref(), Some("StarRing Ultra_BLE"));
 
@@ -4062,7 +4070,7 @@ mod tests {
             local_name: Some("LE-audio".into()),
             ..properties.clone()
         };
-        let candidate = candidate_of(address, &named, &cached).expect("应当仍是候选");
+        let candidate = candidate_of(address, &named, &cached);
         assert_eq!(candidate.name.as_deref(), Some("LE-audio"));
 
         // 平台没报告信号强度时为 0，而不是编一个值出来。
@@ -4071,17 +4079,17 @@ mod tests {
             rssi: None,
             ..PeripheralProperties::default()
         };
-        let candidate = candidate_of(address, &unnamed, &[]).expect("应当仍是候选");
+        let candidate = candidate_of(address, &unnamed, &[]);
         assert_eq!(candidate.rssi, 0);
 
-        // 没有厂商数据 / 公司标识不对的设备一律不出现在候选里
-        // （否则列表就是一整屏无法辨认的 MAC 地址）。
-        assert!(candidate_of(address, &PeripheralProperties::default(), &[]).is_none());
+        // 没有厂商数据 / 公司标识不对的设备**仍然列出**，只是不支持添加——
+        // 这样「同一副耳机」能看出它到底在不在广播，而不是被静默过滤。
+        assert!(!candidate_of(address, &PeripheralProperties::default(), &[]).supported);
         let other = PeripheralProperties {
             manufacturer_data: HashMap::from([(0x004C, vec![0x12, 0x02, 0x03, 0x04, 0x7C, 0x0F])]),
             ..PeripheralProperties::default()
         };
-        assert!(candidate_of(address, &other, &[]).is_none());
+        assert!(!candidate_of(address, &other, &[]).supported);
     }
 
     #[test]
