@@ -2,6 +2,8 @@ import { create } from "zustand";
 
 import { ipc, type AppConfig } from "@/lib/ipc";
 
+import { useWindowStore } from "./window-store";
+
 export type AppView =
   | "home"
   | "settings"
@@ -48,9 +50,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   pendingNoteId: null,
   pendingProjectRun: null,
 
-  setActiveView: (view) => set({ activeView: view }),
+  /**
+   * 切到某个视图。桌面外壳下「切页」= 打开/聚焦那个应用的浮层窗口，
+   * 所以这里顺带调 `window-store.open`——组合窗口、首页卡片、设置页里的
+   * 跨页跳转因此都不用各自去开窗。
+   */
+  setActiveView: (view) => {
+    set({ activeView: view });
+    useWindowStore.getState().open(view);
+  },
 
-  openNote: (id) => set({ activeView: "notes", pendingNoteId: id }),
+  openNote: (id) => {
+    set({ activeView: "notes", pendingNoteId: id });
+    useWindowStore.getState().open("notes");
+  },
 
   consumePendingNote: () => {
     const id = get().pendingNoteId;
@@ -58,8 +71,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     return id;
   },
 
-  openProjectRun: (projectId, runId = null) =>
-    set({ activeView: "projects", pendingProjectRun: { projectId, runId } }),
+  openProjectRun: (projectId, runId = null) => {
+    set({ activeView: "projects", pendingProjectRun: { projectId, runId } });
+    useWindowStore.getState().open("projects");
+  },
 
   consumePendingProjectRun: () => {
     const pending = get().pendingProjectRun;

@@ -416,7 +416,6 @@ export function WorkPanel({
         {!hideHeader && (
           <PageHeader
             title="工作记录"
-            description="记下每天完成了什么；周报由记录自动汇总，不用再回忆。"
             actions={
               <Button size="sm" className="gap-1.5" onClick={() => setReportOpen(true)}>
                 <FileText className="size-3.5" aria-hidden />
@@ -443,11 +442,6 @@ export function WorkPanel({
               <CalendarClock className="size-3.5" aria-hidden />
               计划未来
             </Button>
-            <span className="text-[11px] text-muted-foreground">
-              {entryMode === "planned"
-                ? "先列出来，完成后在计划列表点 ✓ 转为完成记录"
-                : "记录已经做完的事；周报自动汇总"}
-            </span>
             {hideHeader && (
               <Button
                 variant="ghost"

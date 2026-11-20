@@ -264,11 +264,6 @@ export function HomeDashboard() {
       <PageHeader
         className="mb-4"
         title="首页"
-        description={
-          editing
-            ? "拖动卡片标题移动 · 右下角改尺寸 · 改动即时保存"
-            : "常用模块一览，布局会自动保存"
-        }
         actions={
           <>
             {editing && (

@@ -274,7 +274,6 @@ function PanelHeader() {
   return (
     <PageHeader
       title="设备"
-      description="已连接的耳机、鼠标与无线外设在这里汇总：耳机可进二级页调降噪 / 音效，鼠标与无线外设只读电量；下方的已记住设备与自动连接不依赖链路。"
     />
   );
 }

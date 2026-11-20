@@ -154,18 +154,24 @@ export function NoteEditor({ note, notes, revision, onOpenNote, onCreateNote }: 
 
   if (!note || noteId == null) {
     return (
-      <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 text-center">
-        <NotebookPen className="size-7 text-muted-foreground" aria-hidden />
-        <div>
-          <p className="text-sm font-medium">还没有打开速记</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            从左侧选一条，或新建一篇。
+      <div className="flex h-full min-h-0 flex-col items-center justify-center gap-5 px-6 text-center">
+        <span className="flex size-16 items-center justify-center rounded-[20px] bg-brand/10 text-brand ring-1 ring-brand/15">
+          <NotebookPen className="size-7" strokeWidth={1.7} aria-hidden />
+        </span>
+        <div className="max-w-[36ch]">
+          <p className="font-heading text-[15px] font-semibold text-foreground">还没有打开速记</p>
+          <p className="mt-2 text-[12.5px] leading-[1.7] text-muted-foreground">
+            从左侧目录选一条，或新建一篇。正文里的 <span className="text-foreground">[[双链]]</span>{" "}
+            会自动出现在编辑器底部。
           </p>
         </div>
-        <Button size="sm" onClick={onCreateNote}>
-          <FilePlus2 data-icon="inline-start" />
-          新建速记
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" onClick={onCreateNote}>
+            <FilePlus2 data-icon="inline-start" />
+            新建速记
+          </Button>
+          <span className="text-[11px] text-muted-foreground">也可以先点左侧的「+」按文件夹归类</span>
+        </div>
       </div>
     );
   }

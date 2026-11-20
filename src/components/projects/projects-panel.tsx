@@ -276,7 +276,6 @@ export function ProjectsPanel() {
     <div className="flex h-full min-h-0 w-full flex-col gap-4">
       <PageHeader
         title="项目"
-        description="左侧选择项目，右侧启动命令并实时查看输出（不弹命令行窗口）。"
         actions={
           <Button size="sm" onClick={() => setEditor(null)}>
             <Plus data-icon="inline-start" />

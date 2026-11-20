@@ -54,13 +54,18 @@ export function ClipboardPanel() {
   }, [activeIndex, entries]);
 
   const enabled = state?.enabled ?? config?.clipboardHistory ?? true;
+  // 「点击即粘贴」关掉时，点击与 Enter 都只复制，不发 Ctrl+V（设置页的开关语义）。
   const pasteOnClick = state?.pasteOnClick ?? config?.clipboardPasteOnClick ?? true;
 
   const handlePaste = useCallback(
     (entry: ClipEntryMeta) => {
-      void paste(entry.id);
+      if (pasteOnClick) {
+        void paste(entry.id);
+      } else {
+        void copy(entry.id);
+      }
     },
-    [paste],
+    [copy, paste, pasteOnClick],
   );
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -97,13 +102,6 @@ export function ClipboardPanel() {
     <div className="glass-card flex h-full min-h-0 flex-col gap-4 rounded-xl bg-card p-5">
       <PageHeader
         title="剪贴板"
-        description={
-          <>
-            记录复制过的文本与图片。点击一条记录
-            {pasteOnClick ? "即可回到上一个窗口并粘贴" : "即可复制到系统剪贴板"}
-            ；↑↓ 选择 · Enter {pasteOnClick ? "粘贴" : "复制"} · Ctrl+C 仅复制 · Delete 删除。
-          </>
-        }
       />
 
       <div className="relative shrink-0">
@@ -199,3 +197,4 @@ export function ClipboardPanel() {
     </div>
   );
 }
+

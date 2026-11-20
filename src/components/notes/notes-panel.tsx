@@ -98,7 +98,13 @@ export function NotesPanel() {
 
   return (
     <div className="flex h-full min-h-0 gap-4">
-      <div className="glass-card flex w-64 shrink-0 flex-col rounded-xl bg-card p-3">
+      <div
+        className="glass-card flex w-[272px] shrink-0 flex-col rounded-[14px] p-3"
+        style={{
+          backgroundImage: "none",
+          backgroundColor: "color-mix(in srgb, var(--foreground) 3.2%, var(--card))",
+        }}
+      >
         <NotesFolderTree
           notes={notes}
           folders={folders}
@@ -151,7 +157,7 @@ export function NotesPanel() {
         />
       </div>
 
-      <div className="glass-card flex min-w-0 flex-1 flex-col rounded-xl bg-card p-5">
+      <div className="glass-card flex min-w-0 flex-1 flex-col rounded-[14px] bg-card p-5">
         <NoteEditor
           note={activeNote}
           notes={notes}

@@ -74,7 +74,6 @@ export function MonitorPanel() {
       <PageHeader
         title="监控"
         badge={cpuUsage === null ? <Badge variant="secondary">采集预热中</Badge> : undefined}
-        description="每 1 秒采集一次，展示最近 60 秒的趋势；离开本页即停止采集。"
       />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

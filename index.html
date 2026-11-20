@@ -22,26 +22,34 @@
         var accent = localStorage.getItem("prism3:accent");
         if (accent && /^#[0-9a-f]{6}$/i.test(accent)) {
           document.documentElement.style.setProperty("--brand", accent);
+          document.documentElement.style.setProperty("--boot-brand", accent);
         }
       } catch (error) {
         // localStorage / matchMedia 不可用时按亮色走，不影响应用本身。
       }
     </script>
     <style>
-      /* 启动占位：页面首帧之前先画出与主题一致的底色和骨架。
+      /* 启动占位：页面首帧之前先画出与桌面一致的斜纹底色和骨架。
          开发模式下 Vite 要现场编译十几个模块（本机实测 3 秒以上），
-         生产模式下窗口也在 HTML 到达前是空白的 —— 两种场景都靠它遮住。 */
+         生产模式下窗口也在 HTML 到达前是空白的 —— 两种场景都靠它遮住。
+         斜纹必须与桌面同配方，否则启动占位淡出时会看到一次「换底」。 */
       :root {
-        --boot-bg: #f7f8fa;
-        --boot-fg: #26231d;
-        --boot-muted: #8d877d;
-        --boot-track: rgba(38, 35, 29, 0.1);
+        --boot-bg: #f4f8ff;
+        --boot-base-a: #f8fbff;
+        --boot-base-b: #e6f0ff;
+        --boot-brand: #187aff;
+        --boot-fg: #12151c;
+        --boot-muted: #5d6472;
+        --boot-track: rgba(18, 21, 28, 0.08);
       }
       html.dark {
-        --boot-bg: #12131b;
-        --boot-fg: #f2efe8;
-        --boot-muted: #a8a39a;
-        --boot-track: rgba(242, 239, 232, 0.14);
+        --boot-bg: #0e1015;
+        --boot-base-a: #0e121b;
+        --boot-base-b: #080b12;
+        --boot-brand: #4f9bff;
+        --boot-fg: #eef1f7;
+        --boot-muted: #9aa3b2;
+        --boot-track: rgba(238, 241, 247, 0.14);
       }
       html,
       body {
@@ -58,7 +66,13 @@
         align-items: center;
         justify-content: center;
         gap: 14px;
-        background: var(--boot-bg);
+        background:
+          repeating-linear-gradient(
+            135deg,
+            transparent 0 40px,
+            color-mix(in srgb, var(--boot-brand) 9%, transparent) 40px 80px
+          ),
+          linear-gradient(180deg, var(--boot-base-a) 0%, var(--boot-base-b) 100%);
         color: var(--boot-fg);
         font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
         pointer-events: none;
@@ -69,8 +83,8 @@
       }
       #boot-splash .boot-mark {
         display: flex;
-        color: var(--boot-fg);
-        opacity: 0.9;
+        color: var(--boot-brand);
+        opacity: 0.95;
       }
       #boot-splash .boot-name {
         font-size: 13px;
@@ -93,7 +107,7 @@
         width: 38%;
         height: 100%;
         border-radius: 999px;
-        background: var(--boot-fg);
+        background: var(--boot-brand);
         animation: boot-slide 1.15s ease-in-out infinite;
       }
       @keyframes boot-slide {

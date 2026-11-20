@@ -128,7 +128,6 @@ export function SearchPanel() {
     <div className="flex flex-col gap-4">
       <PageHeader
         title="文件搜索"
-        description="按文件名搜索本机已索引的目录。↑↓ 选择 · Enter 打开 · Shift+Enter 定位 · Ctrl+C 复制路径。"
       />
 
       <div className="relative">

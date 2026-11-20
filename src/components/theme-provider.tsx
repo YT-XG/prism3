@@ -17,7 +17,7 @@ export interface ThemePreset {
 }
 
 export const THEME_PRESETS: ThemePreset[] = [
-  { id: "plain", label: "纯白", hues: [220, 210, 230], sat: 12 },
+  { id: "plain", label: "晴空", hues: [217, 205, 228], sat: 60 },
   { id: "aurora", label: "极光", hues: [245, 330, 217], sat: 82 },
   { id: "slate", label: "石墨", hues: [220, 210, 232], sat: 18 },
   { id: "ocean", label: "深海", hues: [205, 190, 228], sat: 70 },
@@ -33,7 +33,7 @@ export const DEFAULT_PRESET = THEME_PRESETS[0].id;
 
 /** 8 个预设强调色（与 index.css 默认值同源；选中后内联覆盖 --brand）。 */
 export const ACCENT_COLORS: { value: string; label: string }[] = [
-  { value: "#5b5bf5", label: "靛蓝" },
+  { value: "#187aff", label: "晴空蓝" },
   { value: "#8b5cf6", label: "紫罗兰" },
   { value: "#3b82f6", label: "湖蓝" },
   { value: "#06b6d4", label: "青" },

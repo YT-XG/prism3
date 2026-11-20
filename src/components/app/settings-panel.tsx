@@ -195,7 +195,6 @@ export function SettingsPanel() {
     <div className="flex flex-col gap-4">
       <PageHeader
         title="设置"
-        description="这里的改动会通过 IPC 交给 Rust 侧持久化。"
       />
 
       <Card>
