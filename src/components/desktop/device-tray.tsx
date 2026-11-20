@@ -43,6 +43,10 @@ export function DeviceTray() {
   const mouse = useMouseBattery(true);
   const wireless = useWirelessBatteries(true);
   const setActiveView = useAppStore((state) => state.setActiveView);
+  // 显示方式由设置页决定（默认「进度条 + 百分比」）；未知值回退默认。
+  const style = useAppStore((state) => state.config?.batteryTrayStyle ?? "barPercent");
+  const showBar = style !== "percent";
+  const showPercent = style !== "bar";
 
   const devices = connectedDevices(earbuds.state, mouse, wireless);
 
@@ -184,20 +188,27 @@ export function DeviceTray() {
                       {row.label ? (
                         <span className="w-[12px] text-muted-foreground">{row.label}</span>
                       ) : null}
-                      <BatteryBar
-                        percent={row.percent}
-                        className="h-[5px] w-[46px] shrink-0 bg-black/10 dark:bg-white/15"
-                      />
-                      <span
-                        className={cn(
-                          "w-[26px] text-right font-medium tabular-nums",
-                          row.percent !== null && row.percent <= 20
-                            ? "text-amber-600 dark:text-amber-400"
-                            : "text-foreground",
-                        )}
-                      >
-                        {fmt(row.percent, row.approx)}
-                      </span>
+                      {showBar ? (
+                        <BatteryBar
+                          percent={row.percent}
+                          className={cn(
+                            "h-[5px] shrink-0 bg-black/10 dark:bg-white/15",
+                            showPercent ? "w-[46px]" : "w-[68px]",
+                          )}
+                        />
+                      ) : null}
+                      {showPercent ? (
+                        <span
+                          className={cn(
+                            "w-[26px] text-right font-medium tabular-nums",
+                            row.percent !== null && row.percent <= 20
+                              ? "text-amber-600 dark:text-amber-400"
+                              : "text-foreground",
+                          )}
+                        >
+                          {fmt(row.percent, row.approx)}
+                        </span>
+                      ) : null}
                     </span>
                   ))}
                 </span>

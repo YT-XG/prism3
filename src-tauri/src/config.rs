@@ -122,6 +122,9 @@ pub struct AppConfig {
     pub clipboard_capture_images: bool,
     /// 点击一条记录时是否自动「回到上一个焦点并粘贴」；关闭后只复制到剪贴板。
     pub clipboard_paste_on_click: bool,
+    /// 任务栏电量托盘的显示方式：`barPercent`（进度条 + 百分比，默认）/ `bar` / `percent`。
+    /// 未知值由前端回退到默认（后端只当字符串存）。
+    pub battery_tray_style: String,
     /// 首页 Bento 布局（前端 `serializeHomeLayout` 生成的 JSON 字符串）。
     /// 空串表示用默认布局；解析失败也回退默认，因此后端只当不透明字符串存。
     pub home_layout: String,
@@ -160,6 +163,7 @@ impl Default for AppConfig {
             clipboard_retention_days: 30,
             clipboard_capture_images: true,
             clipboard_paste_on_click: true,
+            battery_tray_style: "barPercent".to_string(),
             home_layout: String::new(),
             note_editor_mode: "wysiwyg".to_string(),
             note_trash_retention_days: 0,
@@ -300,6 +304,7 @@ mod tests {
         assert_eq!(config.clipboard_retention_days, 30);
         assert!(config.clipboard_capture_images);
         assert!(config.clipboard_paste_on_click);
+        assert_eq!(config.battery_tray_style, "barPercent");
     }
 
     #[test]

@@ -10,6 +10,7 @@ import {
   FileDown,
   FileUp,
   FolderSearch,
+  Headphones,
   ImagePlus,
   Monitor,
   Moon,
@@ -24,6 +25,7 @@ import { toast } from "sonner";
 import { PageHeader } from "@/components/app/page-header";
 import { UpdateCard } from "@/components/app/update-card";
 import { ClipboardStatus } from "@/components/clipboard/clipboard-status";
+import { BatteryBar } from "@/components/devices/device-summary-list";
 import { SearchIndexStatus } from "@/components/search/search-status";
 import {
   ACCENT_COLORS,
@@ -47,9 +49,23 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useClipboardState } from "@/hooks/use-clipboard-state";
 import { useFileIndexState } from "@/hooks/use-file-index-state";
-import { ipc, type AppConfig, type HotkeyStatus, type NoteEditorMode, type Theme } from "@/lib/ipc";
+import {
+  ipc,
+  type AppConfig,
+  type BatteryTrayStyle,
+  type HotkeyStatus,
+  type NoteEditorMode,
+  type Theme,
+} from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/stores/app-store";
+
+/** 任务栏电量托盘的三种显示方式（默认进度条 + 百分比）。 */
+const BATTERY_TRAY_STYLES: { value: BatteryTrayStyle; label: string }[] = [
+  { value: "barPercent", label: "进度条 + 百分比" },
+  { value: "bar", label: "仅进度条" },
+  { value: "percent", label: "仅百分比" },
+];
 
 /** 保留天数的可填范围（0 = 永久保留）。 */
 const MAX_RETENTION_DAYS = 3650;
@@ -301,6 +317,77 @@ export function SettingsPanel() {
                   className="absolute inset-0 size-full cursor-pointer opacity-0"
                 />
               </label>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>任务栏电量</CardTitle>
+          <CardDescription>
+            已连接设备的电量在任务栏托盘里怎么显示；耳机按左 / 右 / 仓分三行。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <div className="flex items-baseline justify-between">
+            <Label>显示方式</Label>
+            <span className="text-xs text-muted-foreground">默认进度条 + 百分比</span>
+          </div>
+
+          <div className="flex gap-1 rounded-lg bg-muted/60 p-1">
+            {BATTERY_TRAY_STYLES.map((option) => {
+              const selected = (config.batteryTrayStyle ?? "barPercent") === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => void apply({ batteryTrayStyle: option.value })}
+                  className={cn(
+                    "flex-1 rounded-md px-2 py-1.5 text-xs transition-colors",
+                    selected
+                      ? "bg-card font-medium text-foreground shadow-[0_1px_2px_rgba(16,40,80,0.08)]"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* 就地预览：拿三格示例电量，按当前选择画一遍托盘里的样子 */}
+          <div className="flex items-center gap-2 rounded-lg bg-muted/30 px-3 py-2">
+            <Headphones className="size-3.5 shrink-0 text-muted-foreground" />
+            <div className="flex flex-col gap-[5px]">
+              {(
+                [
+                  ["左", 88],
+                  ["右", 62],
+                  ["仓", 100],
+                ] as const
+              ).map(([label, value]) => (
+                <div key={label} className="flex items-center gap-1.5 text-[10px] leading-none">
+                  <span className="w-3 text-muted-foreground">{label}</span>
+                  {(config.batteryTrayStyle ?? "barPercent") !== "percent" ? (
+                    <BatteryBar
+                      percent={value}
+                      className={cn(
+                        "h-[5px] shrink-0 bg-black/10 dark:bg-white/15",
+                        (config.batteryTrayStyle ?? "barPercent") === "bar"
+                          ? "w-[68px]"
+                          : "w-[46px]",
+                      )}
+                    />
+                  ) : null}
+                  {(config.batteryTrayStyle ?? "barPercent") !== "bar" ? (
+                    <span className="w-[26px] text-right font-medium tabular-nums text-foreground">
+                      {value}
+                    </span>
+                  ) : null}
+                </div>
+              ))}
             </div>
           </div>
         </CardContent>

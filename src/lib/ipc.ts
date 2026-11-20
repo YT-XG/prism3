@@ -97,6 +97,8 @@ export interface AppConfig {
   clipboardCaptureImages: boolean;
   /** 点击一条记录时是否自动「回到上一个焦点并粘贴」；关闭后只复制到剪贴板。 */
   clipboardPasteOnClick: boolean;
+  /** 任务栏电量托盘显示方式：进度条 + 百分比（默认）/ 仅进度条 / 仅百分比。 */
+  batteryTrayStyle: BatteryTrayStyle;
   /**
    * 首页 Bento 布局（前端 `serializeHomeLayout` 生成的 JSON 字符串）。
    * 空串 = 默认布局；后端只当不透明字符串存取，解析与校验都在前端。
@@ -484,6 +486,9 @@ export interface BleState {
   /** 监听器正在周期性探测耳机是否出现（此时「开仓自动连接」才真正生效）。 */
   watching: boolean;
 }
+
+/** 任务栏电量托盘的显示方式（见 `AppConfig.batteryTrayStyle`）。 */
+export type BatteryTrayStyle = "barPercent" | "bar" | "percent";
 
 /** 剪贴板记录的类型（与 Rust 侧 `ClipKind` 一一对应）。 */
 export type ClipKind = "text" | "image";
