@@ -103,6 +103,8 @@ export interface AppConfig {
   customApps: CustomApp[];
   /** 是否已补过出厂自带应用（删掉后不会被重新塞回来）。 */
   customAppsSeeded: boolean;
+  /** 链接型自建应用是否交给系统浏览器打开；false（默认）表示在应用窗口内嵌打开。 */
+  customAppOpenExternal: boolean;
   /**
    * 首页 Bento 布局（前端 `serializeHomeLayout` 生成的 JSON 字符串）。
    * 空串 = 默认布局；后端只当不透明字符串存取，解析与校验都在前端。

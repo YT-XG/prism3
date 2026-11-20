@@ -321,7 +321,7 @@ export function CustomAppDialog() {
                 </div>
                 <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                   <ExternalLink className="size-3" aria-hidden />
-                  链接型应用不内嵌网页，点开会交给系统浏览器
+                  默认在窗口内嵌打开，也可点右上角按钮交给系统浏览器
                 </p>
               </div>
             </div>

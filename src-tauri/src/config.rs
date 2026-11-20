@@ -158,6 +158,8 @@ pub struct AppConfig {
     /// 是否已经补过「出厂自带应用」。老配置没有这个字段 → false → `load` 里补一次；
     /// 补完写回 true，用户之后删掉也不会复活。
     pub custom_apps_seeded: bool,
+    /// 链接型自建应用是否交给系统浏览器打开；`false`（默认）表示在应用窗口内嵌打开。
+    pub custom_app_open_external: bool,
     /// 任务栏电量托盘的显示方式：`barPercent`（进度条 + 百分比，默认）/ `bar` / `percent`。
     /// 未知值由前端回退到默认（后端只当字符串存）。
     pub battery_tray_style: String,
@@ -201,6 +203,7 @@ impl Default for AppConfig {
             clipboard_paste_on_click: true,
             custom_apps: vec![default_custom_app()],
             custom_apps_seeded: true,
+            custom_app_open_external: false,
             battery_tray_style: "barPercent".to_string(),
             home_layout: String::new(),
             note_editor_mode: "wysiwyg".to_string(),
@@ -346,6 +349,7 @@ mod tests {
         assert_eq!(config.custom_apps.len(), 1);
         assert_eq!(config.custom_apps[0].url, DEFAULT_CUSTOM_APP_URL);
         assert!(config.custom_apps_seeded);
+        assert!(!config.custom_app_open_external);
     }
 
     #[test]

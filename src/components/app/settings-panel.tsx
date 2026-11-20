@@ -15,6 +15,7 @@ import {
   Monitor,
   Moon,
   NotebookPen,
+  Plus,
   RotateCcw,
   Sun,
   Trash2,
@@ -87,6 +88,7 @@ export function SettingsPanel() {
   const indexState = useFileIndexState(true);
   const clipboardState = useClipboardState();
   const setActiveView = useAppStore((state) => state.setActiveView);
+  const openCustomAppDialog = useAppStore((state) => state.openCustomAppDialog);
   const [notesFeedback, setNotesFeedback] = useState<string | null>(null);
   const [notesBusy, setNotesBusy] = useState(false);
 
@@ -568,6 +570,37 @@ export function SettingsPanel() {
               </Button>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>创建应用</CardTitle>
+          <CardDescription>
+            自建应用里的「链接」类型默认在窗口内嵌打开，不跳浏览器。少数站点禁止被内嵌
+            （响应头带 X-Frame-Options / CSP frame-ancestors），那种页面会一片空白，
+            可以打开窗口工具栏的「在系统浏览器中打开」，或在这里统一切回浏览器。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-0.5">
+              <Label htmlFor="custom-app-external">用系统浏览器打开链接型应用</Label>
+              <span className="text-xs text-muted-foreground">关闭（默认）时在应用窗口内嵌打开。</span>
+            </div>
+            <Switch
+              id="custom-app-external"
+              checked={config.customAppOpenExternal}
+              onCheckedChange={(checked) => void apply({ customAppOpenExternal: checked })}
+            />
+          </div>
+
+          <div>
+            <Button variant="outline" size="sm" onClick={() => openCustomAppDialog()}>
+              <Plus data-icon="inline-start" />
+              创建应用
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
