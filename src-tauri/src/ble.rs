@@ -24,6 +24,7 @@
 //! ```
 //! `LEN` = 整帧总长度，`CKSUM` = 前方所有字节之和 `& 0xFF`。
 
+use std::collections::HashSet;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
@@ -2159,8 +2160,11 @@ pub async fn scan_candidates(known: &[BleDeviceEntry]) -> AppResult<Vec<BleCandi
 
     let deadline = tokio::time::Instant::now() + CANDIDATE_SCAN_WINDOW;
     let mut candidates: Vec<BleCandidate> = Vec::new();
+    // 适配器「一共看到多少台设备」——与命中厂商过滤的候选数分开记，
+    // 否则「扫不到」分不清是**适配器看不到 BLE 广播**还是**被厂商过滤挡了**。
+    let mut seen: HashSet<String> = HashSet::new();
     loop {
-        if let Err(err) = collect_candidates(&adapter, known, &mut candidates).await {
+        if let Err(err) = collect_candidates(&adapter, known, &mut candidates, &mut seen).await {
             // 单轮枚举失败不该中断整窗扫描：下一轮会重新枚举。
             log::debug!("枚举蓝牙设备失败（继续扫描）：{err}");
         }
@@ -2181,7 +2185,16 @@ pub async fn scan_candidates(known: &[BleDeviceEntry]) -> AppResult<Vec<BleCandi
             .cmp(&left.rssi)
             .then_with(|| left.address.cmp(&right.address))
     });
-    log::info!("扫描到 {} 个候选耳机设备", candidates.len());
+    log::info!(
+        "蓝牙扫描：适配器看到 {} 个设备，其中 {} 个命中厂商过滤",
+        seen.len(),
+        candidates.len()
+    );
+    if seen.is_empty() {
+        log::warn!(
+            "适配器没有看到任何 BLE 广播：可能是蓝牙适配器不支持 BLE、系统蓝牙未开启，或被其它程序独占"
+        );
+    }
     Ok(candidates)
 }
 
@@ -2190,14 +2203,25 @@ async fn collect_candidates(
     adapter: &Adapter,
     known: &[BleDeviceEntry],
     out: &mut Vec<BleCandidate>,
+    seen: &mut HashSet<String>,
 ) -> btleplug::Result<()> {
     for peripheral in adapter.peripherals().await? {
+        let address = peripheral.address();
         let Ok(Some(properties)) = peripheral.properties().await else {
             // 读不到广播快照的设备直接跳过：没有厂商数据就无法判定是不是耳机。
+            seen.insert(address.to_string());
             continue;
         };
-        let address = peripheral.address();
+        seen.insert(address.to_string());
         let Some(candidate) = candidate_of(address, &properties, known) else {
+            // 被厂商过滤挡掉的广播：把它的公司 ID 记下来，排查「为什么扫不到」时直接看日志。
+            log::debug!(
+                "跳过非候选广播 addr={} name={:?} company={:?} rssi={:?}",
+                address,
+                properties.local_name,
+                properties.manufacturer_data.keys().collect::<Vec<_>>(),
+                properties.rssi
+            );
             continue;
         };
         match out
