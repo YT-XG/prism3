@@ -276,7 +276,21 @@ export function WorkPanel({
   };
 
   return (
-    <div className="flex h-full min-h-0 gap-4">
+    <div className="flex h-full min-h-0 flex-col gap-4">
+      {/* 页级动作条放在两栏之上：否则左栏（项目列表）会比右栏内容高出这一行 */}
+      {!hideHeader && (
+        <PageHeader
+          title="工作记录"
+          actions={
+            <Button size="sm" className="gap-1.5" onClick={() => setReportOpen(true)}>
+              <FileText className="size-3.5" aria-hidden />
+              生成本周报告
+            </Button>
+          }
+        />
+      )}
+
+      <div className="flex min-h-0 flex-1 gap-4">
       <aside className="glass-card flex w-56 shrink-0 flex-col rounded-xl p-3">
         <div className="flex items-center justify-between">
           <h2 className="text-xs font-medium text-muted-foreground">项目</h2>
@@ -413,18 +427,6 @@ export function WorkPanel({
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col gap-3">
-        {!hideHeader && (
-          <PageHeader
-            title="工作记录"
-            actions={
-              <Button size="sm" className="gap-1.5" onClick={() => setReportOpen(true)}>
-                <FileText className="size-3.5" aria-hidden />
-                生成本周报告
-              </Button>
-            }
-          />
-        )}
-
         <div className="glass-card rounded-xl p-3">
           <div className="mb-2 flex flex-wrap items-center gap-1.5">
             <Button
@@ -668,6 +670,7 @@ export function WorkPanel({
             )}
           </div>
         </div>
+      </div>
       </div>
 
       <WorkLogEditDialog
