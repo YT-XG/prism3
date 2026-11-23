@@ -146,16 +146,32 @@ pub fn destroy_quick_panel_windows(app: &AppHandle) {
 
 /// 依配置同步快捷小窗窗口的存亡：启用则确保存在并广播状态，禁用则销毁。
 ///
-/// 刚创建的窗口其前端尚未挂载、收不到状态事件，但挂载后会主动 `get_config` 兜底。
+/// **运行期不要在调用线程上 `build()`**：`WebviewWindowBuilder::build` 会把创建请求
+/// 投递给主线程并等它返回，而同步 `#[tauri::command]`（`set_config` / `reset_config`）
+/// 恰好跑在主线程上——那就是「主线程等自己」，整个应用会冻住（现场表现：点了没反应、
+/// 主窗口也关不掉）。所以缺窗口时把创建丢到一条普通线程；窗口已存在时只广播状态，零开销。
+///
+/// 例外是 `setup` 里那次直调 `ensure_quick_panel_windows`：那时事件循环还没开跑，
+/// 主线程创建窗口是官方支持的路径。
 pub fn sync_quick_panel_windows(app: &AppHandle, config: &AppConfig) {
-    if config.quick_panel {
-        match ensure_quick_panel_windows(app) {
-            Ok(()) => emit_quick_panel_state(app, config),
-            Err(err) => log::error!("创建快捷小窗窗口失败：{err}"),
-        }
-    } else {
+    if !config.quick_panel {
         destroy_quick_panel_windows(app);
+        return;
     }
+
+    let missing = app.get_webview_window(QUICK_PANEL_LABEL).is_none()
+        || app.get_webview_window(QUICK_PANEL_BODY_LABEL).is_none();
+    if !missing {
+        emit_quick_panel_state(app, config);
+        return;
+    }
+
+    let app = app.clone();
+    let config = config.clone();
+    std::thread::spawn(move || match ensure_quick_panel_windows(&app) {
+        Ok(()) => emit_quick_panel_state(&app, &config),
+        Err(err) => log::error!("创建快捷小窗窗口失败：{err}"),
+    });
 }
 
 /// 依配置同步**文件索引**的存亡。
@@ -2119,6 +2135,167 @@ pub fn phone_key(app: AppHandle, serial: String, key: phone::PhoneKey) -> AppRes
 #[tauri::command(async)]
 pub fn phone_lock(app: AppHandle, serial: String) -> AppResult<String> {
     phone::lock(&app, &serial)
+}
+
+// ---------------------------------------------------------------------------
+// 手机「老板模式」：一枚置顶悬浮窗，上面只有「息屏」一个按键（见 phone-boss.tsx）
+// ---------------------------------------------------------------------------
+
+/// 老板模式悬浮窗的 label（前端 `quick-panel.tsx` 按它分派到 `PhoneBossPanel`）。
+pub const PHONE_BOSS_LABEL: &str = "phone-boss";
+
+/// 悬浮窗口尺寸（逻辑像素）：比胶囊本身大一圈，专门留出投影的余量——
+/// 窗口是透明的，投影一旦贴着窗口边缘就会被裁掉，挂件看起来就会「贴」在桌面上。
+const PHONE_BOSS_WIDTH: f64 = 168.0;
+const PHONE_BOSS_HEIGHT: f64 = 88.0;
+/// 胶囊在窗口里的内缩（与 `phone-boss.tsx` 的居中布局一致）。
+const PHONE_BOSS_INSET: f64 = 16.0;
+/// 胶囊距屏幕右下角的目标留白：右边 28、下边 96（避开任务栏）。
+const PHONE_BOSS_MARGIN_RIGHT: f64 = 28.0;
+const PHONE_BOSS_MARGIN_BOTTOM: f64 = 96.0;
+
+/// 默认落位：光标所在那块屏的右下角（多屏时出现在鼠标那一块，和组合窗口同一取法）。
+fn phone_boss_position(app: &AppHandle) -> (f64, f64) {
+    let Some(monitor) = app
+        .cursor_position()
+        .ok()
+        .and_then(|cursor| app.monitor_from_point(cursor.x, cursor.y).ok().flatten())
+        .or_else(|| app.primary_monitor().ok().flatten())
+    else {
+        // 拿不到显示器信息时按 1080p 右下角兜底（几乎不会发生）。
+        return (
+            1920.0 - PHONE_BOSS_WIDTH - PHONE_BOSS_MARGIN_RIGHT,
+            1080.0 - PHONE_BOSS_HEIGHT - PHONE_BOSS_MARGIN_BOTTOM,
+        );
+    };
+
+    let scale = monitor.scale_factor();
+    let origin_x = monitor.position().x as f64 / scale;
+    let origin_y = monitor.position().y as f64 / scale;
+    let width = monitor.size().width as f64 / scale;
+    let height = monitor.size().height as f64 / scale;
+    // 留白是给**胶囊**算的，窗口比胶囊大一圈（四周各 `PHONE_BOSS_INSET`），这里减掉。
+    (
+        origin_x + width - PHONE_BOSS_WIDTH - (PHONE_BOSS_MARGIN_RIGHT - PHONE_BOSS_INSET),
+        origin_y + height - PHONE_BOSS_HEIGHT - (PHONE_BOSS_MARGIN_BOTTOM - PHONE_BOSS_INSET),
+    )
+}
+
+/// 按需创建老板模式悬浮窗：透明、置顶、无边框、不占任务栏、**不抢焦点**
+/// （它是一块常年浮在别的窗口上面的小挂件，点按钮时也不该把用户正在用的窗口顶下去）。
+///
+/// **直接以 `visible(true)` 创建**：早先的做法是 `visible(false)` + 事后 `show()`，
+/// 实测出现过「窗口建出来了、`show()` 却没生效」的隐形孤儿窗（之后每次点开关都拿它
+/// 再 `show()` 一次，永远打不开）。创建即可见没有这个中间态；万一失败也能直接拿到错误。
+fn build_phone_boss_window(app: &AppHandle) -> AppResult<()> {
+    let (x, y) = phone_boss_position(app);
+    let window = WebviewWindowBuilder::new(
+        app,
+        PHONE_BOSS_LABEL,
+        WebviewUrl::App("quick-panel.html".into()),
+    )
+    // 标题保持中性：这个窗口不在任务栏 / Alt+Tab 里，但 Win+Tab 之类仍可能露出标题。
+    .title("Prism3 挂件")
+    .position(x, y)
+    .inner_size(PHONE_BOSS_WIDTH, PHONE_BOSS_HEIGHT)
+    .resizable(false)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .shadow(false)
+    .focused(false)
+    .focusable(false)
+    .visible(true)
+    .build()
+    .map_err(|err| {
+        // 这里必须留痕：`build()` 有可能**先建出原生窗口再失败**（WebView2 没挂上），
+        // 窗口会留在屏幕上一片空白，前端只看到一句 toast——只看界面根本判断不出是
+        // WebView 没起来还是渲染出错。
+        log::warn!("创建老板模式悬浮窗失败（窗口可能已被创建但不可用）：{err}");
+        AppError::Other(format!("创建老板模式悬浮窗失败：{err}"))
+    })?;
+    log::debug!(
+        "老板模式悬浮窗已创建：{}x{} @ ({x}, {y}) visible={:?}",
+        PHONE_BOSS_WIDTH,
+        PHONE_BOSS_HEIGHT,
+        window.is_visible()
+    );
+    Ok(())
+}
+
+/// 老板模式悬浮窗是否已打开（手机页挂载时兜底拉取，与开关按钮保持一致）。
+#[tauri::command]
+pub fn phone_boss_state(app: AppHandle) -> bool {
+    app.get_webview_window(PHONE_BOSS_LABEL)
+        .map(|window| window.is_visible().unwrap_or(false))
+        .unwrap_or(false)
+}
+
+/// 打开老板模式悬浮窗（不存在则现场创建），返回**真实的可见状态**。
+///
+/// **为什么是 `async` + `spawn_blocking`**：`WebviewWindowBuilder::build` 会把创建请求
+/// 投递给主线程并等它完成，而同步 `#[tauri::command]` 本身就跑在主线程上——直接建就是
+/// 「主线程等自己」，整个应用冻住。实测现场：点了「老板模式」之后所有按钮都没反应、
+/// 主窗口也关不掉、手机页永远停在「正在探测」（那条 IPC 的返回永远送不回来）。
+/// 运行期任何建/销毁窗口的路径都必须遵守这条（`sync_quick_panel_windows` 同理）。
+///
+/// 刻意**不对主窗口做任何事**：这一键只是「多一个随手能按的息屏按钮」。
+/// 自愈：窗口存在但不可见（旧版本留下的隐形孤儿窗）就先销毁再建。
+#[tauri::command]
+pub async fn open_phone_boss_window(app: AppHandle) -> AppResult<bool> {
+    tauri::async_runtime::spawn_blocking(move || open_phone_boss_blocking(&app))
+        .await
+        .map_err(|err| AppError::Other(format!("老板模式悬浮窗任务异常：{err}")))?
+}
+
+fn open_phone_boss_blocking(app: &AppHandle) -> AppResult<bool> {
+    log::debug!("打开老板模式悬浮窗");
+    if let Some(window) = app.get_webview_window(PHONE_BOSS_LABEL) {
+        if window.is_visible().unwrap_or(false) {
+            return Ok(true);
+        }
+        log::debug!("老板模式悬浮窗存在但不可见，销毁后重建");
+        let _ = window.destroy();
+    }
+
+    build_phone_boss_window(app)?;
+    let window = app
+        .get_webview_window(PHONE_BOSS_LABEL)
+        .ok_or_else(|| AppError::Other("老板模式悬浮窗创建后找不到窗口".into()))?;
+
+    // 正常情况下 `visible(true)` 创建就已经可见；这里再兜一次（并验证真可见）。
+    if !window.is_visible().unwrap_or(false) {
+        window
+            .show()
+            .map_err(|err| AppError::Other(format!("显示老板模式悬浮窗失败：{err}")))?;
+    }
+    let visible = window.is_visible().unwrap_or(false);
+    log::debug!("老板模式悬浮窗已打开 visible={visible}");
+    if !visible {
+        return Err(AppError::Other(
+            "老板模式悬浮窗已创建但没能显示（可检查显示器 / 远程桌面会话）".into(),
+        ));
+    }
+    Ok(true)
+}
+
+/// 关闭老板模式悬浮窗：**销毁**而不只是隐藏（不常用，隐藏着的 WebView 白占内存）。
+///
+/// 同样必须离开主线程：`destroy()` 也要等主线程处理完（原因见上）。
+#[tauri::command]
+pub async fn close_phone_boss_window(app: AppHandle) -> AppResult<bool> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(window) = app.get_webview_window(PHONE_BOSS_LABEL) {
+            if let Err(err) = window.destroy() {
+                log::warn!("销毁老板模式悬浮窗失败：{err}");
+                return Err(AppError::Other(format!("关闭老板模式悬浮窗失败：{err}")));
+            }
+        }
+        Ok(false)
+    })
+    .await
+    .map_err(|err| AppError::Other(format!("关闭老板模式悬浮窗任务异常：{err}")))?
 }
 
 fn emit_quick_panel_state(app: &AppHandle, config: &AppConfig) {

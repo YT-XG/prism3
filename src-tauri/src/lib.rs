@@ -68,7 +68,12 @@ pub fn run() {
         // 主窗口什么时候显示只由本文件（`setup`）与 `tray.rs`（点托盘）决定。
         .plugin(
             tauri_plugin_window_state::Builder::default()
-                .with_denylist(&["quick-panel", "quick-panel-body", hub::HUB_LABEL])
+                .with_denylist(&[
+                    "quick-panel",
+                    "quick-panel-body",
+                    hub::HUB_LABEL,
+                    commands::PHONE_BOSS_LABEL,
+                ])
                 .with_state_flags(
                     tauri_plugin_window_state::StateFlags::all()
                         & !tauri_plugin_window_state::StateFlags::VISIBLE,
@@ -325,8 +330,11 @@ pub fn run() {
                     .close_to_tray;
 
                 if close_to_tray {
+                    log::debug!("主窗口收到关闭请求：隐藏到托盘（close_to_tray=true）");
                     api.prevent_close();
                     let _ = window.hide();
+                } else {
+                    log::debug!("主窗口收到关闭请求：允许真正关闭（close_to_tray=false）");
                 }
             }
         })
@@ -459,7 +467,10 @@ pub fn run() {
             commands::phone_tap,
             commands::phone_swipe,
             commands::phone_key,
-            commands::phone_lock
+            commands::phone_lock,
+            commands::phone_boss_state,
+            commands::open_phone_boss_window,
+            commands::close_phone_boss_window
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

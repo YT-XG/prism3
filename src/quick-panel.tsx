@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { attachConsole, error as logError } from "@tauri-apps/plugin-log";
 
 import { HubPanel } from "./components/hub/hub-panel";
+import { PhoneBossPanel } from "./components/phone/phone-boss";
 import { QuickPanel } from "./components/quick-panel/quick-panel";
 import { QuickPanelBody } from "./components/quick-panel/quick-panel-body";
 import "./quick-panel.css";
@@ -15,9 +16,10 @@ if (import.meta.env.DEV) {
 }
 
 /**
- * 三个窗口共用同一个 HTML 入口，按窗口 label 分派：
+ * 四个窗口共用同一个 HTML 入口，按窗口 label 分派：
  * `quick-panel` = 灰条（常驻、独占交互与状态），`quick-panel-body` = 面板（按需显示），
- * `hub` = 组合窗口（透明大窗口里并排卡片，全局快捷键唤起）。
+ * `hub` = 组合窗口（透明大窗口里并排卡片，全局快捷键唤起），
+ * `phone-boss` = 手机「老板模式」悬浮窗（一枚置顶的「息屏」按键）。
  */
 const label = getCurrentWindow().label;
 
@@ -40,6 +42,7 @@ window.addEventListener("unhandledrejection", (event) => {
 function Root() {
   if (label === "hub") return <HubPanel />;
   if (label === "quick-panel-body") return <QuickPanelBody />;
+  if (label === "phone-boss") return <PhoneBossPanel />;
   return <QuickPanel />;
 }
 

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   CornerUpLeft,
+  Crown,
   Download,
   FolderOpen,
   House,
@@ -68,6 +69,8 @@ export function PhonePanel() {
 
   const [playing, setPlaying] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
+  /** 老板模式悬浮窗是否已经打开（窗口是独立进程内的 WebView，状态以 Rust 侧为准）。 */
+  const [boss, setBoss] = useState(false);
   const [box, setBox] = useState({ width: 0, height: 0 });
   const [trail, setTrail] = useState<{ from: Point; to: Point } | null>(null);
 
@@ -83,6 +86,14 @@ export function PhonePanel() {
     serial: ready ? serial : null,
     enabled: playing,
   });
+
+  // 悬浮窗可能在任意时刻被右键关掉，页面挂载时按 Rust 侧的真实状态对齐开关。
+  useEffect(() => {
+    void ipc
+      .phoneBossState()
+      .then(setBoss)
+      .catch(() => setBoss(false));
+  }, []);
 
   // 舞台尺寸：镜像按「等比缩放、不超出舞台」显示，坐标换算也依赖这个比例。
   useEffect(() => {
@@ -215,6 +226,25 @@ export function PhonePanel() {
     });
   };
 
+  /**
+   * 老板模式：开一块置顶悬浮窗，上面只有一枚「息屏」按键。
+   *
+   * 开关状态以 Rust 侧窗口存亡为准（`open` / `close` 都返回最新状态），
+   * 这样即使悬浮窗被右键关掉、或页面重挂载，按钮也不会和真实状态对不上。
+   */
+  const toggleBoss = () => {
+    void runAction(async () => {
+      // 先问一次真实状态：挂件可能已经被右键关掉，而页面上那个 `boss` 还是旧的 true。
+      // 只按本地状态取反就会出现「点一下什么也没发生，得再点一下」。
+      const open = (await ipc.phoneBossState())
+        ? await ipc.closePhoneBoss()
+        : await ipc.openPhoneBoss();
+      setBoss(open);
+      // 挂件上的文案刻意保持中性（旁人看不出用途），这里也就不再复述它叫什么按钮。
+      toast.success(open ? "老板模式已打开" : "老板模式已关闭");
+    });
+  };
+
   const deviceLabel = device ? device.model || device.serial : "未连接";
 
   return (
@@ -241,6 +271,19 @@ export function PhonePanel() {
         actions={
           <div className="flex items-center gap-1">
             <Button
+              size="sm"
+              variant={boss ? "secondary" : "ghost"}
+              onClick={toggleBoss}
+              // 只挡「正在开/关」的那一下：**不因「没有设备」而禁用**——
+              // 悬浮窗本身会在点击时现探设备并显示「未连接」，禁用只会变成点不动的按钮。
+              disabled={busy !== null}
+              aria-pressed={boss}
+              title="打开一块置顶小挂件（右键挂件可退出）"
+            >
+              <Crown />
+              老板模式
+            </Button>
+            <Button
               size="icon-sm"
               variant="ghost"
               onClick={() => setPlaying((previous) => !previous)}
@@ -265,12 +308,32 @@ export function PhonePanel() {
       />
 
       {!status ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>正在探测 adb 与设备…</CardTitle>
-            <CardDescription>首次会顺手拉起 adb server，可能要多等一两秒。</CardDescription>
-          </CardHeader>
-        </Card>
+        // `status` 为 null 有两种可能：还在探测，或者**探测本身失败了**。
+        // 早先两种情况共用「正在探测…」这一张卡，探测一失败页面就永远停在探测中，
+        // 既看不到原因也没有重试入口——那正是「点了没反应」的观感来源之一。
+        probing ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>正在探测 adb 与设备…</CardTitle>
+              <CardDescription>首次会顺手拉起 adb server，可能要多等一两秒。</CardDescription>
+            </CardHeader>
+          </Card>
+        ) : (
+          <Card>
+            <CardHeader>
+              <CardTitle>探测失败</CardTitle>
+              <CardDescription>
+                {error ?? "没能读到 adb 与设备状态。点「重新检测」再试一次。"}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button variant="outline" onClick={() => void probe()} disabled={probing}>
+                <RefreshCw className={cn(probing && "animate-spin")} />
+                重新检测
+              </Button>
+            </CardContent>
+          </Card>
+        )
       ) : !status.adbFound ? (
         <Card>
           <CardHeader>

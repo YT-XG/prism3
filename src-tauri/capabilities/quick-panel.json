@@ -1,14 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "quick-panel",
-  "description": "Capability for the quick panel windows (bar + body) and the hub window",
-  "windows": ["quick-panel", "quick-panel-body", "hub"],
+  "description": "Capability for the quick panel windows (bar + body), the hub window and the phone boss widget",
+  "windows": ["quick-panel", "quick-panel-body", "hub", "phone-boss"],
   "permissions": [
     "core:default",
     "core:window:allow-show",
     "core:window:allow-hide",
     "core:window:allow-set-position",
     "core:window:allow-set-size",
+    "core:window:allow-start-dragging",
     "core:event:allow-emit-to",
     "log:default"
   ]

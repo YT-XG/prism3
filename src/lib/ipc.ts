@@ -745,6 +745,12 @@ export const ipc = {
   phoneKey: (serial: string, key: PhoneKey) => invoke<void>("phone_key", { serial, key }),
   /** 锁屏；返回可展示的结果说明（含「无法确认」的情况）。 */
   phoneLock: (serial: string) => invoke<string>("phone_lock", { serial }),
+  /** 老板模式悬浮窗是否已打开（手机页挂载时兜底拉取，与开关按钮保持一致）。 */
+  phoneBossState: () => invoke<boolean>("phone_boss_state"),
+  /** 打开老板模式悬浮窗（不存在则现场创建）：一枚置顶的「息屏」按键，返回 `true`。 */
+  openPhoneBoss: () => invoke<boolean>("open_phone_boss_window"),
+  /** 关闭（销毁）老板模式悬浮窗，返回 `false`。 */
+  closePhoneBoss: () => invoke<boolean>("close_phone_boss_window"),
   /** 每次轮询变化的动态量（CPU/内存/网络/磁盘）。 */
   getSystemSnapshot: () => invoke<DynamicSnapshot>("get_system_snapshot"),
   /** 不随时间变化的静态信息（硬件型号/OS/主机名），进程启动时采集一次。 */
