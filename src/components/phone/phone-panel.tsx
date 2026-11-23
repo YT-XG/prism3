@@ -341,55 +341,61 @@ export function PhonePanel() {
             ref={stageRef}
             className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-xl border border-border/70 bg-[#0b0d12] p-2"
           >
-            {display && mirror.size ? (
-              <div
-                className="relative"
-                style={{ width: display.width, height: display.height }}
-              >
-                <canvas
-                  ref={canvasRef}
-                  width={mirror.size.width}
-                  height={mirror.size.height}
-                  className="block h-full w-full cursor-crosshair rounded-lg shadow-2xl"
-                  style={{ touchAction: "none" }}
-                  onPointerDown={handlePointerDown}
-                  onPointerMove={handlePointerMove}
-                  onPointerUp={handlePointerUp}
-                  onPointerCancel={handlePointerCancel}
-                />
-                {trail ? (
-                  // viewBox 用设备像素：SVG 跟着外层一起缩放，轨迹坐标不用再乘比例。
-                  <svg
-                    className="pointer-events-none absolute inset-0"
-                    viewBox={`0 0 ${mirror.size.width} ${mirror.size.height}`}
-                  >
-                    <line
-                      x1={trail.from.x}
-                      y1={trail.from.y}
-                      x2={trail.to.x}
-                      y2={trail.to.y}
-                      stroke="white"
-                      strokeOpacity={0.7}
-                      strokeWidth={Math.max(2, mirror.size.width / 140)}
-                      strokeLinecap="round"
-                    />
-                    <circle
-                      cx={trail.from.x}
-                      cy={trail.from.y}
-                      r={Math.max(4, mirror.size.width / 90)}
-                      fill="white"
-                      fillOpacity={0.55}
-                    />
-                  </svg>
-                ) : null}
-              </div>
-            ) : (
-              <p className="text-sm text-white/60">正在获取第一帧…</p>
-            )}
+            {/* 画布**始终挂载**：第一帧要能画进来才知道尺寸；在拿到尺寸前用 visibility 藏起来，
+                否则「等 size → 挂 canvas → 才能画第一帧」会多绕一帧。 */}
+            <div
+              className="relative"
+              style={{ width: display?.width ?? 0, height: display?.height ?? 0 }}
+            >
+              <canvas
+                ref={canvasRef}
+                width={mirror.size?.width ?? 0}
+                height={mirror.size?.height ?? 0}
+                className={cn(
+                  "block h-full w-full cursor-crosshair rounded-lg shadow-2xl",
+                  !display && "invisible",
+                )}
+                style={{ touchAction: "none" }}
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerUp}
+                onPointerCancel={handlePointerCancel}
+              />
+              {trail && mirror.size && display ? (
+                // viewBox 用设备像素：SVG 跟着外层一起缩放，轨迹坐标不用再乘比例。
+                <svg
+                  className="pointer-events-none absolute inset-0"
+                  viewBox={`0 0 ${mirror.size.width} ${mirror.size.height}`}
+                >
+                  <line
+                    x1={trail.from.x}
+                    y1={trail.from.y}
+                    x2={trail.to.x}
+                    y2={trail.to.y}
+                    stroke="white"
+                    strokeOpacity={0.7}
+                    strokeWidth={Math.max(2, mirror.size.width / 140)}
+                    strokeLinecap="round"
+                  />
+                  <circle
+                    cx={trail.from.x}
+                    cy={trail.from.y}
+                    r={Math.max(4, mirror.size.width / 90)}
+                    fill="white"
+                    fillOpacity={0.55}
+                  />
+                </svg>
+              ) : null}
+            </div>
+            {!display ? (
+              <p className="pointer-events-none absolute text-sm text-white/60">
+                正在获取第一帧…
+              </p>
+            ) : null}
           </div>
 
           <p className="text-center text-[11px] text-muted-foreground">
-            画面上单击 = 点按，按住拖动 = 滑动
+            画面上单击 = 点按，按住拖动 = 滑动；预览走截图轮询（约 1–3 帧/秒），点按本身是实时的
             {mirror.size ? `（坐标按 ${mirror.size.width}×${mirror.size.height} 换算）` : ""}
           </p>
 

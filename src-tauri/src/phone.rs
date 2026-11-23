@@ -3,8 +3,10 @@
 //! 设计取舍：
 //!
 //! - **只依赖 adb**。不做 scrcpy 那一套（要额外推 scrcpy-server、解 H.264、再解码），
-//!   截图轮询在 1080p 上实测 2–5 fps，点按与滑动足够；画质与延迟的取舍写在这里，
-//!   别为了「更流畅」悄悄引入视频管线。
+//!   截图轮询的实测开销（Redmi K90 Pro Max，1200×2608，USB）：
+//!   低细节画面约 0.6 s/帧（PNG ~1.1 MB）、带壁纸的主屏约 1.3 s/帧（PNG ~3.5 MB），
+//!   也就是 **0.7–3 fps**，随画面复杂度变化。点按 / 滑动本身只要 ~70–90 ms，
+//!   所以「控制是实时的、预览是低频的」——这个取舍写在这里，别为了「更流畅」悄悄引入视频管线。
 //! - 每帧用 `exec-out screencap -p` 取**原始 PNG 字节**，经 `tauri::ipc::Response`
 //!   直接作为 `ArrayBuffer` 交给前端（见 tauri `scripts/ipc-protocol.js`：非 JSON
 //!   响应走 `response.arrayBuffer()`）。刻意不走 base64：一张 1–3 MB 的图 base64 后
