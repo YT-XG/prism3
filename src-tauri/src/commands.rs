@@ -2138,6 +2138,73 @@ pub fn phone_lock(app: AppHandle, serial: String) -> AppResult<String> {
 }
 
 // ---------------------------------------------------------------------------
+// 手机无线调试（adb over Wi-Fi）：拔掉数据线，手机就不再一直充电
+// ---------------------------------------------------------------------------
+
+/// 无线调试现状。**只读**（`adb devices` + 两条 getprop/ip），可以放心轮询。
+///
+/// 永远返回结构体、不报错：没有 adb / 没连 Wi-Fi / 没设备都只是字段为 None，
+/// 界面上比「弹一个错误」更好用。
+#[tauri::command]
+pub async fn phone_wireless_info(app: AppHandle) -> phone::WirelessInfo {
+    tauri::async_runtime::spawn_blocking(move || phone::wireless_info(&app))
+        .await
+        .unwrap_or_default()
+}
+
+/// 一键切无线：把 adbd 切到 TCP（固定 5555）并立刻连上。
+///
+/// 需要 USB 那条还在（要它读手机的 Wi-Fi 地址、并下 `adb tcpip` 指令）。
+#[tauri::command]
+pub async fn phone_wireless_enable(app: AppHandle) -> AppResult<phone::WirelessInfo> {
+    tauri::async_runtime::spawn_blocking(move || phone::wireless_enable(&app))
+        .await
+        .map_err(|err| AppError::Other(format!("无线调试任务异常：{err}")))?
+}
+
+/// 自动发现并连上手机（记住的地址 → mDNS 广播 → 局域网邻居表），不用手填 IP。
+#[tauri::command]
+pub async fn phone_wireless_discover(app: AppHandle) -> AppResult<phone::WirelessInfo> {
+    tauri::async_runtime::spawn_blocking(move || phone::wireless_discover(&app))
+        .await
+        .map_err(|err| AppError::Other(format!("无线调试任务异常：{err}")))?
+}
+
+/// 手动连接一个已知地址（`ip:端口`）。
+#[tauri::command]
+pub async fn phone_wireless_connect(
+    app: AppHandle,
+    address: String,
+) -> AppResult<phone::WirelessInfo> {
+    tauri::async_runtime::spawn_blocking(move || phone::wireless_connect(&app, &address))
+        .await
+        .map_err(|err| AppError::Other(format!("无线调试任务异常：{err}")))?
+}
+
+/// 断开无线连接（USB 那条不受影响）。
+#[tauri::command]
+pub async fn phone_wireless_disconnect(
+    app: AppHandle,
+    address: String,
+) -> AppResult<phone::WirelessInfo> {
+    tauri::async_runtime::spawn_blocking(move || phone::wireless_disconnect(&app, &address))
+        .await
+        .map_err(|err| AppError::Other(format!("无线调试任务异常：{err}")))?
+}
+
+/// Android 11+「无线调试」配对（`adb tcpip` 走不通的机型才需要）。
+#[tauri::command]
+pub async fn phone_wireless_pair(
+    app: AppHandle,
+    address: String,
+    code: String,
+) -> AppResult<String> {
+    tauri::async_runtime::spawn_blocking(move || phone::wireless_pair(&app, &address, &code))
+        .await
+        .map_err(|err| AppError::Other(format!("无线调试任务异常：{err}")))?
+}
+
+// ---------------------------------------------------------------------------
 // 手机「老板模式」：一枚置顶悬浮窗，上面只有「息屏」一个按键（见 phone-boss.tsx）
 // ---------------------------------------------------------------------------
 

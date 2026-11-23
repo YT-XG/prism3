@@ -177,6 +177,9 @@ pub struct AppConfig {
     pub phone_adb_path: String,
     /// 手机页上次选中的设备序列号；空串表示还没选过（每次自动挑第一台已授权的）。
     pub phone_serial: String,
+    /// 上次成功连上的无线调试地址（`ip:端口`）；空串表示没连过。
+    /// 只用于「一键重连」与地址预填，**不自动发起连接**。
+    pub phone_wireless_addr: String,
 }
 
 impl Default for AppConfig {
@@ -216,6 +219,7 @@ impl Default for AppConfig {
             projects: Vec::new(),
             phone_adb_path: String::new(),
             phone_serial: String::new(),
+            phone_wireless_addr: String::new(),
         }
     }
 }
@@ -436,11 +440,13 @@ mod tests {
         let value = serde_json::to_value(AppConfig::default()).expect("配置应当可序列化");
         assert_eq!(value["phoneAdbPath"], "");
         assert_eq!(value["phoneSerial"], "");
+        assert_eq!(value["phoneWirelessAddr"], "");
 
         // 老配置里没有它们：回落到空串 = 自动探测 adb、每次自动挑设备。
         let config: AppConfig =
             serde_json::from_str(r#"{"theme":"dark"}"#).expect("老配置应当可读");
         assert!(config.phone_adb_path.is_empty());
         assert!(config.phone_serial.is_empty());
+        assert!(config.phone_wireless_addr.is_empty());
     }
 }

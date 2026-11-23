@@ -16,11 +16,13 @@ import {
   Sun,
   Volume1,
   Volume2,
+  Wifi,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/app/page-header";
+import { PhoneWirelessDialog } from "@/components/phone/phone-wireless-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -71,6 +73,8 @@ export function PhonePanel() {
   const [busy, setBusy] = useState<string | null>(null);
   /** 老板模式悬浮窗是否已经打开（窗口是独立进程内的 WebView，状态以 Rust 侧为准）。 */
   const [boss, setBoss] = useState(false);
+  /** 无线调试对话框（切到 Wi-Fi 后拔线，手机就不再充电）。 */
+  const [wirelessOpen, setWirelessOpen] = useState(false);
   const [box, setBox] = useState({ width: 0, height: 0 });
   const [trail, setTrail] = useState<{ from: Point; to: Point } | null>(null);
 
@@ -270,6 +274,15 @@ export function PhonePanel() {
         }
         actions={
           <div className="flex items-center gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setWirelessOpen(true)}
+              title="无线调试：切到 Wi-Fi 之后拔掉数据线，手机就不再充电"
+            >
+              <Wifi />
+              无线
+            </Button>
             <Button
               size="sm"
               variant={boss ? "secondary" : "ghost"}
@@ -506,6 +519,13 @@ export function PhonePanel() {
           ) : null}
         </div>
       )}
+
+      <PhoneWirelessDialog
+        open={wirelessOpen}
+        onClose={() => setWirelessOpen(false)}
+        // 连上 / 断开都会改 `phone_serial`，重新探测一次让镜像跟着换链路。
+        onChanged={() => void probe()}
+      />
     </div>
   );
 }

@@ -80,8 +80,26 @@ export interface PhoneStatus {
   error: string | null;
 }
 
-/** 手机页可以发送的按键（与 Rust 侧 `PhoneKey` 一一对应，后端只认白名单）。 */
-export type PhoneKey =
+/**
+ * 无线调试（adb over Wi-Fi）现状，与 Rust 侧 `WirelessInfo` 一一对应。
+ *
+ * 全部字段都可能为 `null`：没 adb / 没连 Wi-Fi / 没设备时后台只填能填的，
+ * 界面按「能不能点」自行决定，而不是靠一次报错。
+ */
+export interface WirelessInfo {
+  /** 当前 USB 连着的那台（切换无线要它）。 */
+  usbSerial: string | null;
+  /** 手机 `wlan0` 的局域网地址；走移动数据时为 `null`。 */
+  ip: string | null;
+  /** adbd 是否已监听 TCP；`null` = 还在 USB 模式。 */
+  tcpPort: number | null;
+  /** `adb devices` 里已有 `ip:端口` 且为 `device`。 */
+  connected: boolean;
+  /** 建议连的地址（已连接 → 上次记住 → `ip:5555`）。 */
+  address: string | null;
+}
+
+/** 手机页可以发送的按键（与 Rust 侧 `PhoneKey` 一一对应，后端只认白名单）。 */export type PhoneKey =
   | "back"
   | "home"
   | "recents"
@@ -159,6 +177,8 @@ export interface AppConfig {
   phoneAdbPath: string;
   /** 手机页上次选中的设备序列号；空串 = 每次自动挑第一台已授权的。 */
   phoneSerial: string;
+  /** 上次成功连上的无线调试地址（`ip:端口`）；空串 = 没连过（只用于预填/一键重连）。 */
+  phoneWirelessAddr: string;
 }
 
 /**
@@ -745,6 +765,21 @@ export const ipc = {
   phoneKey: (serial: string, key: PhoneKey) => invoke<void>("phone_key", { serial, key }),
   /** 锁屏；返回可展示的结果说明（含「无法确认」的情况）。 */
   phoneLock: (serial: string) => invoke<string>("phone_lock", { serial }),
+  /** 无线调试现状（只读，可轮询）。 */
+  phoneWirelessInfo: () => invoke<WirelessInfo>("phone_wireless_info"),
+  /** 一键切无线：adbd 切 TCP 5555 并立刻连上（需要 USB 那条还在）。 */
+  phoneWirelessEnable: () => invoke<WirelessInfo>("phone_wireless_enable"),
+  /** 自动发现并连上手机（记住的地址 → mDNS 广播 → 局域网邻居表），不用手填 IP。 */
+  phoneWirelessDiscover: () => invoke<WirelessInfo>("phone_wireless_discover"),
+  /** 手动连接一个 `ip:端口`。 */
+  phoneWirelessConnect: (address: string) =>
+    invoke<WirelessInfo>("phone_wireless_connect", { address }),
+  /** 断开无线连接（USB 不受影响）。 */
+  phoneWirelessDisconnect: (address: string) =>
+    invoke<WirelessInfo>("phone_wireless_disconnect", { address }),
+  /** Android 11+ 的「无线调试」配对：地址 + 6 位配对码。 */
+  phoneWirelessPair: (address: string, code: string) =>
+    invoke<string>("phone_wireless_pair", { address, code }),
   /** 老板模式悬浮窗是否已打开（手机页挂载时兜底拉取，与开关按钮保持一致）。 */
   phoneBossState: () => invoke<boolean>("phone_boss_state"),
   /** 打开老板模式悬浮窗（不存在则现场创建）：一枚置顶的「息屏」按键，返回 `true`。 */

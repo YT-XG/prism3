@@ -1,6 +1,64 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 
-import { ipc, type PhoneStatus } from "@/lib/ipc";
+import { ipc, type PhoneStatus, type WirelessInfo } from "@/lib/ipc";
+
+/**
+ * 无线调试（adb over Wi-Fi）的状态与动作。
+ *
+ * 只给对话框用：进对话框时拉一次，之后每次动作结束都用后端返回的新状态覆盖
+ * （后端那一步已经做完 `adb connect` 的等待，这里不用再猜）。
+ */
+export function usePhoneWireless() {
+  const [info, setInfo] = useState<WirelessInfo | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      setInfo(await ipc.phoneWirelessInfo());
+    } catch {
+      // 只读探测失败不值得弹错：界面按「还没有信息」显示即可。
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  /** 统一跑一个动作：置 busy、拿新状态、失败时把原因抛给调用方去 toast。 */
+  const run = useCallback(async (label: string, action: () => Promise<WirelessInfo>) => {
+    setBusy(label);
+    try {
+      const next = await action();
+      setInfo(next);
+      return next;
+    } finally {
+      setBusy(null);
+    }
+  }, []);
+
+  return {
+    info,
+    busy,
+    refresh,
+    /** 一键切无线（adbd → TCP 5555 → connect）。 */
+    enable: () => run("enable", () => ipc.phoneWirelessEnable()),
+    /** 自动发现并连接（记住的地址 → mDNS 广播 → 局域网邻居表）。 */
+    discover: () => run("discover", () => ipc.phoneWirelessDiscover()),
+    connect: (address: string) => run("connect", () => ipc.phoneWirelessConnect(address)),
+    disconnect: (address: string) =>
+      run("disconnect", () => ipc.phoneWirelessDisconnect(address)),
+    /** 配对走的是另一条 `adb pair`，成功后再手动连接。 */
+    pair: async (address: string, code: string) => {
+      setBusy("pair");
+      try {
+        await ipc.phoneWirelessPair(address, code);
+        await refresh();
+      } finally {
+        setBusy(null);
+      }
+    },
+  };
+}
 
 /** 设备分辨率的像素尺寸（= 一帧截图的原始尺寸，坐标换算也以它为准）。 */
 export interface PhoneFrameSize {

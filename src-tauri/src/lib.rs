@@ -468,6 +468,12 @@ pub fn run() {
             commands::phone_swipe,
             commands::phone_key,
             commands::phone_lock,
+            commands::phone_wireless_info,
+            commands::phone_wireless_enable,
+            commands::phone_wireless_discover,
+            commands::phone_wireless_connect,
+            commands::phone_wireless_disconnect,
+            commands::phone_wireless_pair,
             commands::phone_boss_state,
             commands::open_phone_boss_window,
             commands::close_phone_boss_window

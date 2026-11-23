@@ -735,6 +735,507 @@ pub fn install_platform_tools(app: &AppHandle) -> AppResult<ResolvedAdb> {
     })
 }
 
+// ---------------------------------------------------------------------------
+// 无线调试（adb over Wi-Fi）
+// ---------------------------------------------------------------------------
+
+/// `adb tcpip` 用的端口（Android 的「无线调试」页面是另一个随机端口，两种都能用；
+/// 固定 5555 是因为它是 `adb tcpip` 的约定值，切一次就一直有效，直到重启手机）。
+pub const WIRELESS_PORT: u16 = 5555;
+/// 切 tcpip / connect / disconnect 的硬超时（`adb connect` 连不上时会干等网络超时）。
+const WIRELESS_TIMEOUT: Duration = Duration::from_secs(12);
+/// `adb connect` 之后等设备真正进 `device` 状态的上限。
+const WIRELESS_SETTLE: Duration = Duration::from_secs(8);
+
+/// 无线调试的现状（手机页「无线」对话框用）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WirelessInfo {
+    /// 当前 USB 连着的那台（读 Wi-Fi IP、把 adbd 切到 TCP 都靠它）。
+    pub usb_serial: Option<String>,
+    /// 手机 `wlan0` 的局域网地址；没连 Wi-Fi 时是 None。
+    pub ip: Option<String>,
+    /// adbd 是否已经在监听 TCP（`service.adb.tcp.port`）；None = 还是 USB-only。
+    pub tcp_port: Option<u16>,
+    /// `adb devices` 里已经有 `ip:端口` 且状态是 `device`。
+    pub connected: bool,
+    /// 建议连的地址：已连接的优先 → 上次记住的 → `ip:5555`。
+    pub address: Option<String>,
+}
+
+/// 从 `ip -f inet addr show wlan0` 的输出里取第一个 IPv4（去掉 `/24` 后缀）。
+fn parse_wifi_ip(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("inet ") {
+            let addr = rest.split_whitespace().next()?;
+            let ip = addr.split('/').next().unwrap_or(addr);
+            if !ip.is_empty() {
+                return Some(ip.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// `getprop service.adb.tcp.port` 的输出 → 端口（`0` / 空 = 没监听）。
+fn parse_tcp_port(text: &str) -> Option<u16> {
+    text.trim().parse::<u16>().ok().filter(|port| *port != 0)
+}
+
+/// `adb connect` 的地址校验：只收 `ip:端口`（或主机名），端口 1–65535。
+///
+/// 这个串会直接进 adb 的参数表，所以**必须**挡掉空白与控制字符——
+/// 否则等于把「用户输入」拼进命令行。
+fn checked_address(address: &str) -> AppResult<String> {
+    let address = address.trim();
+    let Some((host, port)) = address.rsplit_once(':') else {
+        return Err(AppError::Other(
+            "地址要写成「手机IP:端口」，例如 192.168.1.20:5555".into(),
+        ));
+    };
+    let host = host.trim();
+    if host.is_empty()
+        || host.chars().count() > 64
+        || host
+            .chars()
+            .any(|ch| ch.is_whitespace() || ch == '\u{0}' || ch == '/' || ch == '\\')
+    {
+        return Err(AppError::Other(format!("地址里的 IP 不合法：{address}")));
+    }
+    let port: u16 = port
+        .trim()
+        .parse()
+        .map_err(|_| AppError::Other(format!("端口不合法：{address}")))?;
+    if port == 0 {
+        return Err(AppError::Other("端口不能是 0".into()));
+    }
+    Ok(format!("{host}:{port}"))
+}
+
+/// 在设备上跑一条 shell 命令，只取 stdout（失败/超时一律 None，调用方按「不知道」处理）。
+fn shell_text(adb: &Path, serial: &str, script: &str) -> Option<String> {
+    let mut args = base_args(serial);
+    args.push("shell".to_string());
+    args.push(script.to_string());
+    let output = run_process(adb, &args, STATUS_TIMEOUT).ok()?;
+    output
+        .success
+        .then(|| String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn read_wifi_ip(adb: &Path, serial: &str) -> Option<String> {
+    shell_text(adb, serial, "ip -f inet addr show wlan0").and_then(|text| parse_wifi_ip(&text))
+}
+
+fn read_tcp_port(adb: &Path, serial: &str) -> Option<u16> {
+    shell_text(adb, serial, "getprop service.adb.tcp.port").and_then(|text| parse_tcp_port(&text))
+}
+
+fn list_devices(adb: &Path) -> Vec<PhoneDevice> {
+    let args = vec!["devices".to_string(), "-l".to_string()];
+    match run_process(adb, &args, STATUS_TIMEOUT) {
+        Ok(output) => parse_devices(&String::from_utf8_lossy(&output.stdout)),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// 纯函数：把「设备列表 + 记住的地址」折成 UI 需要的现状（好测）。
+fn build_wireless_info(adb: &Path, devices: &[PhoneDevice], remembered: &str) -> WirelessInfo {
+    // 串里带 `:` 的就是 TCP 设备（`adb devices` 对 USB 设备给的是纯序列号）。
+    let usb = devices
+        .iter()
+        .find(|device| device.authorized && !device.serial.contains(':'))
+        .map(|device| device.serial.clone());
+    let tcp = devices
+        .iter()
+        .find(|device| device.authorized && device.serial.contains(':'))
+        .map(|device| device.serial.clone());
+    let tcp_parts = tcp
+        .as_deref()
+        .and_then(|serial| serial.rsplit_once(':'))
+        .map(|(host, port)| (host.to_string(), port.parse::<u16>().ok()));
+
+    // 没插线时读不到手机上的东西（没有设备可 `adb shell`），但**连接地址里就有 IP 与端口**。
+    // 早先这里只认 USB 读出来的值，于是「已经通过 Wi-Fi 连着」的界面却显示
+    // 「手机 IP：无 / adbd 端口：USB 模式」——自相矛盾。
+    let ip = usb
+        .as_deref()
+        .and_then(|serial| read_wifi_ip(adb, serial))
+        .or_else(|| {
+            tcp_parts
+                .as_ref()
+                .map(|(host, _)| host.clone())
+                .filter(|host| !host.is_empty())
+        });
+    let tcp_port = usb
+        .as_deref()
+        .and_then(|serial| read_tcp_port(adb, serial))
+        .or_else(|| tcp_parts.as_ref().and_then(|(_, port)| *port));
+    let address = tcp
+        .clone()
+        .or_else(|| (!remembered.is_empty()).then(|| remembered.to_string()))
+        .or_else(|| ip.as_ref().map(|ip| format!("{ip}:{WIRELESS_PORT}")));
+    WirelessInfo {
+        usb_serial: usb,
+        ip,
+        tcp_port,
+        connected: tcp.is_some(),
+        address,
+    }
+}
+
+/// 读出无线调试现状（不产生任何副作用，可以随时轮询）。
+pub fn wireless_info(app: &AppHandle) -> WirelessInfo {
+    let Some(adb) = resolve_adb(app) else {
+        return WirelessInfo::default();
+    };
+    let devices = list_devices(&adb.path);
+    build_wireless_info(
+        &adb.path,
+        &devices,
+        &config_snapshot(app).phone_wireless_addr,
+    )
+}
+
+fn run_connect(adb: &Path, address: &str) -> AppResult<()> {
+    let args = vec!["connect".to_string(), address.to_string()];
+    let output = run_process(adb, &args, WIRELESS_TIMEOUT)?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let message = if stdout.is_empty() {
+        output.error_tail()
+    } else {
+        stdout.clone()
+    };
+    // `adb connect` 连不上时**可能仍然退出码 0**，只能看文案。
+    if !output.success
+        || message.contains("unable to connect")
+        || message.contains("failed to connect")
+        || message.contains("cannot connect")
+    {
+        return Err(AppError::Other(format!("连不上 {address}：{message}")));
+    }
+
+    // 连上不等于可用：等它真的出现在 `adb devices` 里且是 `device`。
+    let deadline = Instant::now() + WIRELESS_SETTLE;
+    loop {
+        if list_devices(adb)
+            .iter()
+            .any(|device| device.serial == address && device.authorized)
+        {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(AppError::Other(format!(
+                "{address} 能握手但没进 device 状态：手机端可能弹了授权框、或调试密钥不被信任"
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(400));
+    }
+}
+
+/// 记住这次连的地址，并把它设成当前设备（拔线之后镜像还能继续用）。
+fn remember_wireless(app: &AppHandle, address: &str) {
+    let state = app.state::<config::AppState>();
+    let mut guard = state
+        .config
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard.phone_wireless_addr = address.to_string();
+    guard.phone_serial = address.to_string();
+    let snapshot = guard.clone();
+    drop(guard);
+    if let Err(err) = config::save(app, &snapshot) {
+        log::warn!("保存无线调试地址失败：{err}");
+    }
+}
+
+/// 一键切到无线：把 adbd 切到 TCP（端口固定 5555），然后立刻连上。
+///
+/// 需要手机已经有局域网 IP；连的是移动数据时**明说做不到**，而不是给一个连不上的地址。
+pub fn wireless_enable(app: &AppHandle) -> AppResult<WirelessInfo> {
+    let adb = require_adb(app)?;
+    let devices = list_devices(&adb.path);
+    let usb = devices
+        .iter()
+        .find(|device| device.authorized && !device.serial.contains(':'))
+        .map(|device| device.serial.clone())
+        .ok_or_else(|| {
+            AppError::Other("先用数据线连上手机，才能把它的 adbd 切到无线模式".into())
+        })?;
+
+    let ip = read_wifi_ip(&adb.path, &usb).ok_or_else(|| {
+        AppError::Other(
+            "手机没连 Wi-Fi（看起来只走移动数据）：无线调试要求手机与电脑在同一个局域网".into(),
+        )
+    })?;
+
+    let mut args = base_args(&usb);
+    args.push("tcpip".to_string());
+    args.push(WIRELESS_PORT.to_string());
+    let output = run_process(&adb.path, &args, WIRELESS_TIMEOUT)?;
+    if !output.success {
+        return Err(AppError::Other(format!(
+            "把 adbd 切到无线模式失败：{}",
+            output.error_tail()
+        )));
+    }
+
+    // adbd 是重启式的，端口要通过 getprop 确认真的起来了。
+    let deadline = Instant::now() + Duration::from_secs(6);
+    let mut port = None;
+    while Instant::now() < deadline {
+        port = read_tcp_port(&adb.path, &usb);
+        if port == Some(WIRELESS_PORT) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(400));
+    }
+    let port = port.filter(|port| *port == WIRELESS_PORT).ok_or_else(|| {
+        AppError::Other(
+            "adbd 没有进 TCP 模式（可能是系统限制）：改用手机上的「无线调试」+ 配对码".into(),
+        )
+    })?;
+
+    let address = format!("{ip}:{port}");
+    run_connect(&adb.path, &address)?;
+    remember_wireless(app, &address);
+    log::info!("无线调试已连上：{address}");
+    Ok(wireless_info(app))
+}
+
+fn is_ipv4(token: &str) -> bool {
+    let parts: Vec<&str> = token.split('.').collect();
+    parts.len() == 4 && parts.iter().all(|part| part.parse::<u8>().is_ok())
+}
+
+/// 从 `arp -a` 的输出里挑出邻居 IPv4。
+///
+/// 热点里的手机**必然**在邻居表里（它要跟网关 DHCP/上网通信），所以这是最靠得住的
+/// 「自动找 IP」手段。表头与掩码/广播行要跳过——中文与英文 Windows 的表头不同，
+/// 这里按「第一列是 IPv4、第二列像 MAC」来认，不依赖表头文案。
+fn parse_arp_neighbors(text: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut tokens = line.split_whitespace();
+        let Some(ip) = tokens.next() else { continue };
+        if !is_ipv4(ip) || ip.starts_with("255.") || ip.starts_with("224.") {
+            continue;
+        }
+        let Some(mac) = tokens.next() else { continue };
+        let mac_parts: Vec<&str> = mac.split(['-', ':']).collect();
+        if mac_parts.len() != 6 {
+            continue;
+        }
+        // 广播地址（ff-ff-ff-ff-ff-ff）与组播 MAC 不是设备，别拿去试连。
+        let lower = mac.to_lowercase();
+        if mac_parts.iter().all(|part| part.eq_ignore_ascii_case("ff")) || lower.starts_with("01-")
+        {
+            continue;
+        }
+        if !found.iter().any(|item| item == ip) {
+            found.push(ip.to_string());
+        }
+    }
+    found
+}
+
+/// `adb mdns services` 的输出 → `ip:端口`。
+///
+/// 手机开着「无线调试」时 adbd 会自己广播 `_adb-tls-connect._tcp`，末段就是地址与端口；
+/// `adb tcpip 5555` 模式通常不广播，所以这条只是**先手**，后面还有邻居表兜底。
+fn parse_mdns_services(text: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let Some(last) = line.split('\t').next_back() else {
+            continue;
+        };
+        let last = last.trim();
+        let Some((host, port)) = last.rsplit_once(':') else {
+            continue;
+        };
+        if !is_ipv4(host) || port.parse::<u16>().is_err() {
+            continue;
+        }
+        if !found.iter().any(|item| item == last) {
+            found.push(last.to_string());
+        }
+    }
+    found
+}
+
+fn list_mdns_services(adb: &Path) -> Vec<String> {
+    let args = vec!["mdns".to_string(), "services".to_string()];
+    match run_process(adb, &args, Duration::from_secs(4)) {
+        Ok(output) => parse_mdns_services(&String::from_utf8_lossy(&output.stdout)),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn arp_neighbors() -> Vec<String> {
+    match run_process(
+        Path::new("arp"),
+        &["-a".to_string()],
+        Duration::from_secs(4),
+    ) {
+        Ok(output) => parse_arp_neighbors(&String::from_utf8_lossy(&output.stdout)),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// 快速试一次连接：超时短、失败就是失败（发现流程要逐个试，不能每个都等 12 秒）。
+fn try_connect_fast(adb: &Path, address: &str) -> bool {
+    let args = vec!["connect".to_string(), address.to_string()];
+    let Ok(output) = run_process(adb, &args, Duration::from_secs(3)) else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    if !output.success || text.contains("unable") || text.contains("failed") {
+        return false;
+    }
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        if list_devices(adb)
+            .iter()
+            .any(|device| device.serial == address && device.authorized)
+        {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    false
+}
+
+/// 自动发现并连上手机：记住的地址 → mDNS 广播 → 局域网邻居表。
+///
+/// 这条路径的意义是「不用手填 IP」：电脑开热点、手机连上之后，它的地址一定在
+/// `arp -a` 里；而 `adb tcpip 5555` 已经让它在这个端口上监听。
+pub fn wireless_discover(app: &AppHandle) -> AppResult<WirelessInfo> {
+    let adb = require_adb(app)?;
+    let info = wireless_info(app);
+    if info.connected {
+        return Ok(info);
+    }
+
+    let mut tried: Vec<String> = Vec::new();
+
+    // 1) 上次连过的地址最快。
+    let remembered = config_snapshot(app).phone_wireless_addr;
+    if !remembered.is_empty() {
+        tried.push(remembered.clone());
+        if try_connect_fast(&adb.path, &remembered) {
+            remember_wireless(app, &remembered);
+            log::info!("无线调试（记住的地址）已连上：{remembered}");
+            return Ok(wireless_info(app));
+        }
+    }
+
+    // 2) mDNS：开着「无线调试」的手机自己会广播（端口是随机的，用广播里的）。
+    for address in list_mdns_services(&adb.path) {
+        if tried.iter().any(|item| item == &address) {
+            continue;
+        }
+        if try_connect_fast(&adb.path, &address) {
+            remember_wireless(app, &address);
+            log::info!("无线调试（mDNS 发现）已连上：{address}");
+            return Ok(wireless_info(app));
+        }
+        tried.push(address);
+    }
+
+    // 3) 邻居表：`adb tcpip 5555` 的端口是固定的，逐个试连。
+    for ip in arp_neighbors() {
+        let address = format!("{ip}:{WIRELESS_PORT}");
+        if tried.iter().any(|item| item == &address) {
+            continue;
+        }
+        if try_connect_fast(&adb.path, &address) {
+            remember_wireless(app, &address);
+            log::info!("无线调试（局域网邻居）已连上：{address}");
+            return Ok(wireless_info(app));
+        }
+        tried.push(address);
+    }
+
+    Err(AppError::Other(format!(
+        "没在局域网里找到可连接的手机（试过 {} 个地址）：先确认手机连的是电脑热点，并且用数据线点过一次「一键切到无线调试」（它会把 adbd 切到 5555）。",
+        tried.len()
+    )))
+}
+
+/// 手动连接一个已知地址（手机换网络、或上次连过的地址）。
+pub fn wireless_connect(app: &AppHandle, address: &str) -> AppResult<WirelessInfo> {
+    let adb = require_adb(app)?;
+    let address = checked_address(address)?;
+    run_connect(&adb.path, &address)?;
+    remember_wireless(app, &address);
+    log::info!("无线调试已连上：{address}");
+    Ok(wireless_info(app))
+}
+
+/// 断开无线连接（USB 那条不受影响）。记住的地址保留，方便再点「连接」。
+pub fn wireless_disconnect(app: &AppHandle, address: &str) -> AppResult<WirelessInfo> {
+    let adb = require_adb(app)?;
+    let address = checked_address(address)?;
+    let args = vec!["disconnect".to_string(), address.clone()];
+    let output = run_process(&adb.path, &args, WIRELESS_TIMEOUT)?;
+    if !output.success {
+        return Err(AppError::Other(format!(
+            "断开 {address} 失败：{}",
+            output.error_tail()
+        )));
+    }
+
+    // 当前设备别再指着这个已经断掉的串。
+    let state = app.state::<config::AppState>();
+    let mut guard = state
+        .config
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if guard.phone_serial == address {
+        guard.phone_serial.clear();
+    }
+    let snapshot = guard.clone();
+    drop(guard);
+    if let Err(err) = config::save(app, &snapshot) {
+        log::warn!("保存断连状态失败：{err}");
+    }
+    log::info!("已断开无线调试：{address}");
+    Ok(wireless_info(app))
+}
+
+/// Android 11+ 的「无线调试」配对（手机端会给一个随机端口 + 6 位配对码）。
+///
+/// 只有 `adb tcpip` 走不通的机型才需要它——配对成功后再 `wireless_connect`。
+pub fn wireless_pair(app: &AppHandle, address: &str, code: &str) -> AppResult<String> {
+    let adb = require_adb(app)?;
+    let address = checked_address(address)?;
+    let code = code.trim();
+    if code.is_empty() || code.chars().count() > 12 || code.chars().any(char::is_whitespace) {
+        return Err(AppError::Other("配对码要填手机屏幕上那 6 位数字".into()));
+    }
+    let args = vec!["pair".to_string(), address.clone(), code.to_string()];
+    let output = run_process(&adb.path, &args, WIRELESS_TIMEOUT)?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = output.error_tail();
+    if !output.success || stdout.contains("Failed") || stderr.contains("Failed") {
+        return Err(AppError::Other(format!(
+            "配对失败：{}",
+            if stdout.is_empty() { stderr } else { stdout }
+        )));
+    }
+    log::info!("无线调试配对成功：{address}");
+    Ok(if stdout.is_empty() {
+        "配对成功".to_string()
+    } else {
+        stdout
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -820,5 +1321,103 @@ emulator-5554          unauthorized
         assert_eq!(PhoneKey::Sleep.code(), 223);
         assert_eq!(PhoneKey::VolumeUp.code(), 24);
         assert_eq!(PhoneKey::VolumeDown.code(), 25);
+    }
+
+    #[test]
+    fn parses_wlan_ip_from_ip_addr_output() {
+        let text = "\
+3: wlan0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP
+    inet 192.168.137.232/24 brd 192.168.137.255 scope global wlan0
+       valid_lft forever preferred_lft forever
+    inet6 fe80::1234:5678/64 scope link
+";
+        assert_eq!(parse_wifi_ip(text), Some("192.168.137.232".to_string()));
+        // 只有 IPv6 / 空输出都不能当成本地地址（没连 Wi-Fi 时就是这样）。
+        assert_eq!(parse_wifi_ip("    inet6 fe80::1/64 scope link"), None);
+        assert_eq!(parse_wifi_ip(""), None);
+    }
+
+    #[test]
+    fn tcp_port_only_accepts_real_ports() {
+        assert_eq!(parse_tcp_port("5555"), Some(5555));
+        assert_eq!(parse_tcp_port(" 5555\n"), Some(5555));
+        // 0 是 adbd 回到 USB 模式后的值，等于「没监听」。
+        assert_eq!(parse_tcp_port("0"), None);
+        assert_eq!(parse_tcp_port(""), None);
+        assert_eq!(parse_tcp_port("abc"), None);
+    }
+
+    #[test]
+    fn wireless_info_derives_ip_and_port_from_tcp_device() {
+        // 拔了线之后 `adb devices` 里只剩 TCP 那条：IP / 端口必须从连接地址推出来，
+        // 否则界面会自相矛盾（明明连着 Wi-Fi，却显示「手机 IP：无」）。
+        let devices = parse_devices(
+            "List of devices attached\n192.168.137.232:5555   device product:myron model:25102RKBEC\n",
+        );
+        let info = build_wireless_info(Path::new("adb-not-installed"), &devices, "");
+        assert!(info.connected);
+        assert!(info.usb_serial.is_none());
+        assert_eq!(info.ip.as_deref(), Some("192.168.137.232"));
+        assert_eq!(info.tcp_port, Some(5555));
+        assert_eq!(info.address.as_deref(), Some("192.168.137.232:5555"));
+    }
+
+    #[test]
+    fn wireless_info_falls_back_to_remembered_address() {
+        let info = build_wireless_info(Path::new("adb-not-installed"), &[], "192.168.137.7:5555");
+        assert!(!info.connected);
+        assert_eq!(info.address.as_deref(), Some("192.168.137.7:5555"));
+    }
+
+    #[test]
+    fn parses_arp_neighbors() {
+        // 中文与英文 Windows 的表头不同，按「IPv4 + MAC」认行，不依赖文案。
+        let zh = "\
+接口: 192.168.137.1 --- 0x13
+  Internet 地址         物理地址              类型
+  192.168.137.255       ff-ff-ff-ff-ff-ff     静态
+  224.0.0.22            01-00-5e-00-00-16     静态
+  192.168.137.232       a4-7b-9d-11-22-33     动态
+  192.168.137.1         aa-bb-cc-dd-ee-ff     动态
+";
+        assert_eq!(
+            parse_arp_neighbors(zh),
+            vec!["192.168.137.232", "192.168.137.1"]
+        );
+
+        let en = "\
+Interface: 192.168.137.1 --- 0x13
+  Internet Address      Physical Address      Type
+  192.168.137.99        a4-7b-9d-11-22-44     dynamic
+";
+        assert_eq!(parse_arp_neighbors(en), vec!["192.168.137.99"]);
+        assert!(parse_arp_neighbors("").is_empty());
+    }
+
+    #[test]
+    fn parses_mdns_services() {
+        let text = "\
+List of discovered mdns services
+adb-25102RKBEC-abc123	_adb-tls-connect._tcp	192.168.137.232:41235
+adb-25102RKBEC-def456	_adb-tls-pairing._tcp	192.168.137.232:39111
+";
+        assert_eq!(
+            parse_mdns_services(text),
+            vec!["192.168.137.232:41235", "192.168.137.232:39111"]
+        );
+        assert!(parse_mdns_services("List of discovered mdns services").is_empty());
+    }
+
+    #[test]
+    fn connect_address_is_validated() {
+        assert_eq!(
+            checked_address(" 192.168.137.232:5555 ").unwrap(),
+            "192.168.137.232:5555"
+        );
+        // 少了端口、端口为 0、带空白的多余参数都必须挡掉。
+        assert!(checked_address("192.168.137.232").is_err());
+        assert!(checked_address("192.168.137.232:0").is_err());
+        assert!(checked_address(" :5555").is_err());
+        assert!(checked_address("192.168.1.2:5555 extra").is_err());
     }
 }
