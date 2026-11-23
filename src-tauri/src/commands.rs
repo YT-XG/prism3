@@ -21,6 +21,7 @@ use crate::mouse::{self, MouseBattery, MouseState};
 use crate::note_image;
 use crate::note_io::{self, ExportReport, ImportOptions, ImportReport};
 use crate::paste::{self, PasteContent, PasteOutcome};
+use crate::phone::{self, PhoneStatus};
 use crate::repo::{note, note_folder, note_link, tag, work_log};
 use crate::status::{self, AppStatus, AppStatusState};
 use crate::updater::{self, UpdateSnapshot};
@@ -2046,6 +2047,78 @@ pub fn open_update_installer(app: AppHandle) -> AppResult<()> {
 #[tauri::command]
 pub fn open_update_download_url(app: AppHandle) -> AppResult<()> {
     updater::open_download_url(&app)
+}
+
+// ---------------------------------------------------------------------------
+// 手机（Android）远程控制：adb 截屏 + 触摸 / 按键注入（见 `phone.rs`）
+// ---------------------------------------------------------------------------
+
+/// 探测 adb 与已连接设备（手机页挂载时调一次，之后靠「刷新」）。
+///
+/// 可能现场拉起 adb server（首次 1–2 秒），因此走 `async` 不占 UI 线程。
+#[tauri::command(async)]
+pub fn phone_status(app: AppHandle) -> PhoneStatus {
+    phone::status(&app)
+}
+
+/// 一键下载并解压 platform-tools（约 8 MB），装好后立刻重新探测。
+///
+/// 下载与解压都是阻塞的（reqwest blocking + 系统 `tar.exe`），放到阻塞线程池执行；
+/// 失败原样冒到前端（页面据此显示「下载失败」而不是永远转圈）。
+#[tauri::command]
+pub async fn phone_install_adb(app: AppHandle) -> AppResult<PhoneStatus> {
+    tauri::async_runtime::spawn_blocking(move || {
+        phone::install_platform_tools(&app)?;
+        Ok(phone::status(&app))
+    })
+    .await
+    .map_err(|err| AppError::Other(format!("下载 platform-tools 的任务异常：{err}")))?
+}
+
+/// 记住选中的设备（写 `phone_serial`，下次打开手机页直接选中它）。
+#[tauri::command]
+pub fn phone_select_device(app: AppHandle, serial: String) -> AppResult<()> {
+    phone::select_device(&app, &serial)
+}
+
+/// 截一张 PNG 原图。返回 `tauri::ipc::Response`：前端拿到的是 `ArrayBuffer`，
+/// 不经过 base64（一帧 1–3 MB，编码一次要多花 1/3 的带宽与一次大字符串分配）。
+#[tauri::command(async)]
+pub fn phone_screencap(app: AppHandle, serial: String) -> AppResult<tauri::ipc::Response> {
+    let bytes = phone::screencap(&app, &serial)?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// 在设备坐标上点一下。
+#[tauri::command(async)]
+pub fn phone_tap(app: AppHandle, serial: String, x: i32, y: i32) -> AppResult<()> {
+    phone::tap(&app, &serial, x, y)
+}
+
+/// 从 `(from_x, from_y)` 滑到 `(to_x, to_y)`，`duration_ms` 是滑动时长。
+#[tauri::command(async)]
+pub fn phone_swipe(
+    app: AppHandle,
+    serial: String,
+    from_x: i32,
+    from_y: i32,
+    to_x: i32,
+    to_y: i32,
+    duration_ms: u32,
+) -> AppResult<()> {
+    phone::swipe(&app, &serial, (from_x, from_y), (to_x, to_y), duration_ms)
+}
+
+/// 发送一个白名单里的按键（`back` / `home` / `recents` / `power` / `wake` / `volumeUp` …）。
+#[tauri::command(async)]
+pub fn phone_key(app: AppHandle, serial: String, key: phone::PhoneKey) -> AppResult<()> {
+    phone::key(&app, &serial, key)
+}
+
+/// 锁屏（先 `KEYCODE_SLEEP`，不生效才退到电源键），返回一句可展示的结果说明。
+#[tauri::command(async)]
+pub fn phone_lock(app: AppHandle, serial: String) -> AppResult<String> {
+    phone::lock(&app, &serial)
 }
 
 fn emit_quick_panel_state(app: &AppHandle, config: &AppConfig) {

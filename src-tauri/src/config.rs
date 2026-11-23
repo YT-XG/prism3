@@ -172,6 +172,11 @@ pub struct AppConfig {
     pub note_trash_retention_days: u32,
     /// 本地项目快捷启动列表（见 `projects.rs`）；空 = 还没添加过项目。
     pub projects: Vec<ProjectEntry>,
+    /// 手动指定的 adb.exe 路径（见 `phone.rs`）；空串表示自动探测
+    /// （应用内下载的 platform-tools → PATH → Android SDK）。
+    pub phone_adb_path: String,
+    /// 手机页上次选中的设备序列号；空串表示还没选过（每次自动挑第一台已授权的）。
+    pub phone_serial: String,
 }
 
 impl Default for AppConfig {
@@ -209,6 +214,8 @@ impl Default for AppConfig {
             note_editor_mode: "wysiwyg".to_string(),
             note_trash_retention_days: 0,
             projects: Vec::new(),
+            phone_adb_path: String::new(),
+            phone_serial: String::new(),
         }
     }
 }
@@ -421,5 +428,19 @@ mod tests {
             serde_json::from_str(r#"{"fileSearch":true}"#).expect("老配置应当可读");
         assert_eq!(config.note_editor_mode, "wysiwyg");
         assert_eq!(config.note_trash_retention_days, 0);
+    }
+
+    #[test]
+    fn phone_keys_are_camel_case_and_default_to_auto_detect() {
+        // 前端按这两个键名读写手机页设置（与 `AppConfig` 的 camelCase 约定一致）。
+        let value = serde_json::to_value(AppConfig::default()).expect("配置应当可序列化");
+        assert_eq!(value["phoneAdbPath"], "");
+        assert_eq!(value["phoneSerial"], "");
+
+        // 老配置里没有它们：回落到空串 = 自动探测 adb、每次自动挑设备。
+        let config: AppConfig =
+            serde_json::from_str(r#"{"theme":"dark"}"#).expect("老配置应当可读");
+        assert!(config.phone_adb_path.is_empty());
+        assert!(config.phone_serial.is_empty());
     }
 }

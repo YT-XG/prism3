@@ -3,6 +3,7 @@ import { DevicesPanel } from "@/components/devices/devices-panel";
 import { HomeDashboard } from "@/components/home/home-dashboard";
 import { MonitorPanel } from "@/components/monitor/monitor-panel";
 import { NotesPanel } from "@/components/notes/notes-panel";
+import { PhonePanel } from "@/components/phone/phone-panel";
 import { ProjectsPanel } from "@/components/projects/projects-panel";
 import { SearchPanel } from "@/components/search/search-panel";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -14,7 +15,7 @@ import { isCustomWindowId } from "@/lib/apps";
 import { cn } from "@/lib/utils";
 
 /**
- * 窗口内容宿主：把九个页面原样装进浮层窗口。
+ * 窗口内容宿主：把各个页面原样装进浮层窗口。
  *
  * 两套滚动语义必须保留（与旧 `app-shell` 一致）：
  * - 速记 / 剪贴板 / 项目 / 工作 **不套 ScrollArea**：Radix 的 Viewport 内部是
@@ -49,6 +50,16 @@ export function PageHost({ windowId }: { windowId: string }) {
     return (
       <div className="h-full min-h-0">
         <HomeDashboard />
+      </div>
+    );
+  }
+
+  if (view === "phone") {
+    // 手机页整页自己排布（镜像占满剩余高度），不能套 ScrollArea——
+    // 否则画面会被内容高度撑成一条，只能靠滚动看。
+    return (
+      <div className="flex h-full min-h-0 flex-col px-5 pt-4 pb-5">
+        <PhonePanel />
       </div>
     );
   }

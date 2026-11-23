@@ -15,6 +15,7 @@ mod mouse;
 mod note_image;
 mod note_io;
 mod paste;
+mod phone;
 mod process;
 mod projects;
 mod repo;
@@ -355,7 +356,7 @@ pub fn run() {
             commands::cancel_file_index,
             commands::open_search_result,
             commands::open_project_folder,
-   commands::open_external_url,
+            commands::open_external_url,
             commands::suggest_project_commands,
             commands::get_project_git_state,
             commands::check_project_port,
@@ -450,7 +451,15 @@ pub fn run() {
             commands::cancel_update,
             commands::install_update,
             commands::open_update_installer,
-            commands::open_update_download_url
+            commands::open_update_download_url,
+            commands::phone_status,
+            commands::phone_install_adb,
+            commands::phone_select_device,
+            commands::phone_screencap,
+            commands::phone_tap,
+            commands::phone_swipe,
+            commands::phone_key,
+            commands::phone_lock
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

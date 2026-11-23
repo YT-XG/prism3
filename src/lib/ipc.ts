@@ -52,6 +52,45 @@ export interface WirelessBattery {
   transport: string;
 }
 
+/**
+ * 一台通过 adb 看到的 Android 设备（与 Rust 侧 `PhoneDevice` 一一对应）。
+ *
+ * `state` 是 adb 的原话：`device` = 已授权、可截屏与注入；`unauthorized` = 手机上
+ * 还没点「允许 USB 调试」；`offline` = 掉线。只有 `authorized` 才值得渲染镜像。
+ */
+export interface PhoneDevice {
+  serial: string;
+  state: string;
+  /** 设备型号（`devices -l` 的 `model:`）；取不到时为空串。 */
+  model: string;
+  product: string;
+  authorized: boolean;
+}
+
+/** 手机页需要的环境信息（与 Rust 侧 `PhoneStatus` 一一对应）。 */
+export interface PhoneStatus {
+  adbFound: boolean;
+  adbPath: string;
+  /** adb 来源：`config` / `bundled` / `path` / `sdk`；没找到时为空串。 */
+  adbSource: string;
+  devices: PhoneDevice[];
+  /** 应该使用的设备序列号；`null` = 一台都没有。 */
+  selected: string | null;
+  /** 本次探测的失败原因；成功时为 `null`。 */
+  error: string | null;
+}
+
+/** 手机页可以发送的按键（与 Rust 侧 `PhoneKey` 一一对应，后端只认白名单）。 */
+export type PhoneKey =
+  | "back"
+  | "home"
+  | "recents"
+  | "power"
+  | "wake"
+  | "sleep"
+  | "volumeUp"
+  | "volumeDown";
+
 /** 与 Rust 侧 `AppConfig` 一一对应。 */
 export interface AppConfig {
   theme: Theme;
@@ -116,6 +155,10 @@ export interface AppConfig {
   noteTrashRetentionDays: number;
   /** 本地项目快捷启动列表（对应 Rust 侧 `ProjectEntry`）。 */
   projects: ProjectEntry[];
+  /** 手动指定的 adb.exe；空串 = 自动探测（应用内下载的 platform-tools → PATH → SDK）。 */
+  phoneAdbPath: string;
+  /** 手机页上次选中的设备序列号；空串 = 每次自动挑第一台已授权的。 */
+  phoneSerial: string;
 }
 
 /**
@@ -669,6 +712,39 @@ export const ipc = {
   readWirelessBatteries: () => invoke<WirelessBattery[]>("read_wireless_batteries"),
   /** 读取缓存的多品牌无线外设电量（窗口挂载 / 热重载后兜底拉取）。 */
   getWirelessBatteries: () => invoke<WirelessBattery[]>("get_wireless_batteries"),
+  /** 探测 adb 与已连接手机（手机页挂载、点「刷新」、下载完 adb 后各调一次）。 */
+  phoneStatus: () => invoke<PhoneStatus>("phone_status"),
+  /** 下载并解压 platform-tools（约 8 MB）；完成后返回新的探测结果。 */
+  phoneInstallAdb: () => invoke<PhoneStatus>("phone_install_adb"),
+  /** 记住选中的设备（写 `phoneSerial`，下次打开手机页直接选中它）。 */
+  phoneSelectDevice: (serial: string) => invoke<void>("phone_select_device", { serial }),
+  /** 截一张 PNG：拿到的是原始字节（`ArrayBuffer`），不是 base64。 */
+  phoneScreencap: (serial: string) =>
+    invoke<ArrayBuffer>("phone_screencap", { serial }),
+  /** 设备坐标上点一下。 */
+  phoneTap: (serial: string, x: number, y: number) =>
+    invoke<void>("phone_tap", { serial, x, y }),
+  /** 设备坐标上从 `(fromX, fromY)` 滑到 `(toX, toY)`。 */
+  phoneSwipe: (
+    serial: string,
+    fromX: number,
+    fromY: number,
+    toX: number,
+    toY: number,
+    durationMs: number,
+  ) =>
+    invoke<void>("phone_swipe", {
+      serial,
+      fromX,
+      fromY,
+      toX,
+      toY,
+      durationMs,
+    }),
+  /** 发送白名单按键。 */
+  phoneKey: (serial: string, key: PhoneKey) => invoke<void>("phone_key", { serial, key }),
+  /** 锁屏；返回可展示的结果说明（含「无法确认」的情况）。 */
+  phoneLock: (serial: string) => invoke<string>("phone_lock", { serial }),
   /** 每次轮询变化的动态量（CPU/内存/网络/磁盘）。 */
   getSystemSnapshot: () => invoke<DynamicSnapshot>("get_system_snapshot"),
   /** 不随时间变化的静态信息（硬件型号/OS/主机名），进程启动时采集一次。 */

@@ -10,6 +10,7 @@ export type AppView =
   | "monitor"
   | "search"
   | "devices"
+  | "phone"
   | "clipboard"
   | "notes"
   | "projects"

@@ -8,6 +8,7 @@ import {
   NotebookPen,
   Search,
   Settings,
+  Smartphone,
   type LucideIcon,
 } from "lucide-react";
 
@@ -117,6 +118,17 @@ export const APPS: AppDef[] = [
     min: { w: 600, h: 440 },
   },
   {
+    id: "phone",
+    label: "手机",
+    title: "手机",
+    description: "adb 镜像与触控",
+    icon: Smartphone,
+    // 竖屏比例：镜像按手机分辨率等比缩放，窗口本身只需要比手机窄一点。
+    tint: ["#7ee0a1", "#12996b"],
+    size: { w: 430, h: 800 },
+    min: { w: 340, h: 520 },
+  },
+  {
     id: "settings",
     label: "设置",
     title: "设置",
@@ -146,6 +158,7 @@ export const DOCK_ORDER: AppView[] = [
   "work",
   "monitor",
   "devices",
+  "phone",
   "settings",
 ];
 
