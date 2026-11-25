@@ -14,7 +14,13 @@ const SHUTDOWN_EVENT = "shutdown:state";
  * 剩余秒数在前端按截止时刻每秒重算——不需要后端推送秒数。
  */
 export function useShutdownState() {
-  const [state, setState] = useState<ShutdownState>({ active: false, deadlineSecs: null });
+  const [state, setState] = useState<ShutdownState>({
+    active: false,
+    deadlineSecs: null,
+    mode: null,
+    dailyTime: null,
+    weekdays: [],
+  });
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {

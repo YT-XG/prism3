@@ -207,6 +207,9 @@ pub fn run() {
             // 也正因为有它，「取出耳机 → 自动连上次那台」在重启之后依然成立。
             ble::sync_from_config(&handle);
 
+            // 每天定时关机：配置了时刻才起调度线程（默认关闭时零开销）。
+            power::sync_daily(&handle);
+
             // 剪贴板：启用则起采集线程（默认关闭时零开销）。
             clipboard::sync(&handle, &initial_config);
 
@@ -483,6 +486,7 @@ pub fn run() {
             commands::close_phone_boss_window,
             commands::get_shutdown_state,
             commands::schedule_shutdown,
+            commands::set_daily_shutdown,
             commands::cancel_shutdown
         ])
         .build(tauri::generate_context!())

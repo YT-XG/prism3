@@ -694,14 +694,22 @@ export interface UpdateState {
 
 /**
  * 定时关机状态（与 Rust 侧 `ShutdownState` 一一对应）：命令返回值与
- * `shutdown:state` 事件载荷同构。倒计时由 Windows 的 `shutdown /s /t` 维护，
- * 这里只记截止时刻，所以重启应用后界面会回到空闲（系统那份计划仍然有效）。
+ * `shutdown:state` 事件载荷同构。倒计时由 Windows 的 `shutdown /s /t` 维护；
+ * 每天定时由 Prism3 的调度线程守着（需要应用保持运行）。
  */
+export type ShutdownMode = "countdown" | "daily";
+
 export interface ShutdownState {
-  /** 是否有一个由本应用挂起的关机倒计时。 */
+  /** 是否有一个正在等待执行的关机计划。 */
   active: boolean;
   /** 触发关机的秒级 unix 时间戳；未激活时为 null。 */
   deadlineSecs: number | null;
+  /** 当前模式；空闲时为 null。 */
+  mode: ShutdownMode | null;
+  /** 每天定时的 `HH:mm`；未配置为 null（倒计时模式下同为空）。 */
+  dailyTime: string | null;
+  /** 每天定时选中的星期（0 = 周日 … 6 = 周六）；空数组 = 每天。 */
+  weekdays: number[];
 }
 
 export const ipc = {
@@ -800,10 +808,13 @@ export const ipc = {
   closePhoneBoss: () => invoke<boolean>("close_phone_boss_window"),
   /** 读取定时关机状态（窗口挂载后兜底拉取；变化由 `shutdown:state` 事件广播）。 */
   getShutdownState: () => invoke<ShutdownState>("get_shutdown_state"),
-  /** 设置定时关机：`minutes` 分钟后由 Windows 关闭计算机。 */
+  /** 设置倒计时关机：`minutes` 分钟后由 Windows 关闭计算机。 */
   scheduleShutdown: (minutes: number) =>
     invoke<ShutdownState>("schedule_shutdown", { minutes }),
-  /** 取消定时关机（同时撤掉系统里挂起的关机计划）。 */
+  /** 保存每天定时关机：`time` = `HH:mm`，`weekdays` = 0–6（空数组 = 每天）。 */
+  setDailyShutdown: (time: string, weekdays: number[]) =>
+    invoke<ShutdownState>("set_daily_shutdown", { time, weekdays }),
+  /** 取消关机计划（倒计时与每天定时都适用）。 */
   cancelShutdown: () => invoke<ShutdownState>("cancel_shutdown"),
   /** 每次轮询变化的动态量（CPU/内存/网络/磁盘）。 */
   getSystemSnapshot: () => invoke<DynamicSnapshot>("get_system_snapshot"),

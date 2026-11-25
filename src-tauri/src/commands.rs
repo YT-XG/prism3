@@ -324,6 +324,9 @@ pub fn set_config(
     config.quick_panel_edge = guard.quick_panel_edge;
     config.quick_panel_y = guard.quick_panel_y;
     ble::preserve_config_keys(&mut config, &guard);
+    // 「定时关机」的两个键只由专用命令写（同 BLE 三键的先例），整份回写不覆盖。
+    config.shutdown_time = guard.shutdown_time.clone();
+    config.shutdown_weekdays = guard.shutdown_weekdays.clone();
     let panel_toggled = guard.quick_panel != config.quick_panel;
     let search_toggled = guard.file_search != config.file_search;
     let search_roots_changed = guard.file_search_roots != config.file_search_roots;
@@ -391,6 +394,8 @@ pub fn reset_config(app: AppHandle, state: State<'_, AppState>) -> AppResult<App
     purge_expired_notes_now(&app);
     // 恢复默认是**显式**动作（不是过期副本回写）：BLE 键也要跟着回默认并停掉看门狗。
     ble::sync_from_config(&app);
+    // 每天定时关机同样回默认（空 = 关闭）并停掉调度线程。
+    power::sync_daily(&app);
     crate::hotkey::sync(&default.hub_shortcut);
     Ok(default)
 }
@@ -2397,7 +2402,9 @@ pub fn get_shutdown_state(state: State<'_, ShutdownStore>) -> ShutdownState {
     state.snapshot()
 }
 
-/// 设置定时关机：`minutes` 分钟后由 Windows 关闭计算机（1 分钟 ~ 24 小时）。
+/// 设置倒计时关机：`minutes` 分钟后由 Windows 关闭计算机（1 分钟 ~ 24 小时）。
+///
+/// 倒计时与「每天定时」互斥：开倒计时会把配置里的每天定时一起清掉。
 #[tauri::command]
 pub fn schedule_shutdown(
     app: AppHandle,
@@ -2407,8 +2414,21 @@ pub fn schedule_shutdown(
     power::schedule(&app, &state, minutes)
 }
 
-/// 取消定时关机，同时撤掉系统里挂起的关机计划。
+/// 保存每天定时关机：`time` = `HH:mm`，`weekdays` = 0–6（空 = 每天）。
 #[tauri::command]
-pub fn cancel_shutdown(app: AppHandle, state: State<'_, ShutdownStore>) -> ShutdownState {
+pub fn set_daily_shutdown(
+    app: AppHandle,
+    time: String,
+    weekdays: Vec<u32>,
+) -> AppResult<ShutdownState> {
+    power::set_daily(&app, &time, &weekdays)
+}
+
+/// 取消关机计划（倒计时与每天定时都适用），并清掉配置里的每天定时。
+#[tauri::command]
+pub fn cancel_shutdown(
+    app: AppHandle,
+    state: State<'_, ShutdownStore>,
+) -> AppResult<ShutdownState> {
     power::cancel(&app, &state)
 }

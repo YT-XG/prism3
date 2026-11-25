@@ -180,6 +180,11 @@ pub struct AppConfig {
     /// 上次成功连上的无线调试地址（`ip:端口`）；空串表示没连过。
     /// 只用于「一键重连」与地址预填，**不自动发起连接**。
     pub phone_wireless_addr: String,
+    /// 每天定时关机的时刻（`HH:mm`）；空串表示关闭。
+    /// **只由「定时关机」页的专用命令写**（`set_config` 会保留内存权威值）。
+    pub shutdown_time: String,
+    /// 每天定时关机选中的星期（0 = 周日 … 6 = 周六）；空数组 = 每天。
+    pub shutdown_weekdays: Vec<u32>,
 }
 
 impl Default for AppConfig {
@@ -220,6 +225,8 @@ impl Default for AppConfig {
             phone_adb_path: String::new(),
             phone_serial: String::new(),
             phone_wireless_addr: String::new(),
+            shutdown_time: String::new(),
+            shutdown_weekdays: Vec::new(),
         }
     }
 }
@@ -361,6 +368,20 @@ mod tests {
         assert_eq!(config.custom_apps[0].url, DEFAULT_CUSTOM_APP_URL);
         assert!(config.custom_apps_seeded);
         assert!(!config.custom_app_open_external);
+    }
+
+    #[test]
+    fn shutdown_keys_are_camel_case_and_default_to_off() {
+        // 「定时关机」页按这两个键名读配置（专用命令写），改名即破坏契约。
+        let value = serde_json::to_value(AppConfig::default()).expect("配置应当可序列化");
+        assert_eq!(value["shutdownTime"], "");
+        assert_eq!(value["shutdownWeekdays"], serde_json::json!([]));
+
+        // 老配置里没有这两个键：回落到「关闭」，而不是整份配置反序列化失败。
+        let config: AppConfig =
+            serde_json::from_str(r#"{"fileSearch":true}"#).expect("老配置应当可读");
+        assert!(config.shutdown_time.is_empty());
+        assert!(config.shutdown_weekdays.is_empty());
     }
 
     #[test]
