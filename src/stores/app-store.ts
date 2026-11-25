@@ -14,7 +14,8 @@ export type AppView =
   | "clipboard"
   | "notes"
   | "projects"
-  | "work";
+  | "work"
+  | "shutdown";
 
 interface AppState {
   config: AppConfig | null;

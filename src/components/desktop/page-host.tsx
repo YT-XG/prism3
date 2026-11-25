@@ -4,6 +4,7 @@ import { HomeDashboard } from "@/components/home/home-dashboard";
 import { MonitorPanel } from "@/components/monitor/monitor-panel";
 import { NotesPanel } from "@/components/notes/notes-panel";
 import { PhonePanel } from "@/components/phone/phone-panel";
+import { ShutdownPanel } from "@/components/power/shutdown-panel";
 import { ProjectsPanel } from "@/components/projects/projects-panel";
 import { SearchPanel } from "@/components/search/search-panel";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -85,11 +86,12 @@ export function PageHost({ windowId }: { windowId: string }) {
       <div
         className={cn(
           "mx-auto w-full px-6 pt-6 pb-8",
-          view === "settings" ? "max-w-3xl" : "max-w-none",
+          view === "settings" || view === "shutdown" ? "max-w-3xl" : "max-w-none",
         )}
       >
         {view === "search" && <SearchPanel />}
         {view === "settings" && <SettingsPanel />}
+        {view === "shutdown" && <ShutdownPanel />}
         {view === "monitor" && <MonitorPanel />}
         {view === "devices" && <DevicesPanel />}
       </div>

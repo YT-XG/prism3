@@ -6,6 +6,7 @@ import {
   ListChecks,
   MonitorSmartphone,
   NotebookPen,
+  Power,
   Search,
   Settings,
   Smartphone,
@@ -129,6 +130,16 @@ export const APPS: AppDef[] = [
     min: { w: 340, h: 520 },
   },
   {
+    id: "shutdown",
+    label: "定时关机",
+    title: "定时关机",
+    description: "倒计时到点自动关机",
+    icon: Power,
+    tint: ["#ff9d8a", "#e2564d"],
+    size: { w: 720, h: 540 },
+    min: { w: 480, h: 380 },
+  },
+  {
     id: "settings",
     label: "设置",
     title: "设置",
@@ -159,6 +170,7 @@ export const DOCK_ORDER: AppView[] = [
   "monitor",
   "devices",
   "phone",
+  "shutdown",
   "settings",
 ];
 

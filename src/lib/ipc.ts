@@ -692,6 +692,18 @@ export interface UpdateState {
   downloadUrl: string | null;
 }
 
+/**
+ * 定时关机状态（与 Rust 侧 `ShutdownState` 一一对应）：命令返回值与
+ * `shutdown:state` 事件载荷同构。倒计时由 Windows 的 `shutdown /s /t` 维护，
+ * 这里只记截止时刻，所以重启应用后界面会回到空闲（系统那份计划仍然有效）。
+ */
+export interface ShutdownState {
+  /** 是否有一个由本应用挂起的关机倒计时。 */
+  active: boolean;
+  /** 触发关机的秒级 unix 时间戳；未激活时为 null。 */
+  deadlineSecs: number | null;
+}
+
 export const ipc = {
   getConfig: () => invoke<AppConfig>("get_config"),
   /** 读取壁纸并编码为 data URL（Rust 侧读文件、按文件头判类型）。 */
@@ -786,6 +798,13 @@ export const ipc = {
   openPhoneBoss: () => invoke<boolean>("open_phone_boss_window"),
   /** 关闭（销毁）老板模式悬浮窗，返回 `false`。 */
   closePhoneBoss: () => invoke<boolean>("close_phone_boss_window"),
+  /** 读取定时关机状态（窗口挂载后兜底拉取；变化由 `shutdown:state` 事件广播）。 */
+  getShutdownState: () => invoke<ShutdownState>("get_shutdown_state"),
+  /** 设置定时关机：`minutes` 分钟后由 Windows 关闭计算机。 */
+  scheduleShutdown: (minutes: number) =>
+    invoke<ShutdownState>("schedule_shutdown", { minutes }),
+  /** 取消定时关机（同时撤掉系统里挂起的关机计划）。 */
+  cancelShutdown: () => invoke<ShutdownState>("cancel_shutdown"),
   /** 每次轮询变化的动态量（CPU/内存/网络/磁盘）。 */
   getSystemSnapshot: () => invoke<DynamicSnapshot>("get_system_snapshot"),
   /** 不随时间变化的静态信息（硬件型号/OS/主机名），进程启动时采集一次。 */

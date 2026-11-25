@@ -16,6 +16,7 @@ mod note_image;
 mod note_io;
 mod paste;
 mod phone;
+mod power;
 mod process;
 mod projects;
 mod repo;
@@ -189,6 +190,9 @@ pub fn run() {
 
             // 多品牌无线外设电量（Logitech HID++ / CompX / 标准 HID）：同样按需（见 wireless.rs）。
             app.manage(wireless::WirelessState::new());
+
+            // 定时关机：只记截止时刻，真正的关机计划由 Windows 的 `shutdown /s /t` 维护（见 power.rs）。
+            app.manage(power::ShutdownStore::new());
 
             // 剪贴板历史：与「启用与否」无关地先读一次落盘历史（几毫秒），
             // 这样「先禁用、之后重新启用」也能立刻看到旧记录。
@@ -476,7 +480,10 @@ pub fn run() {
             commands::phone_wireless_pair,
             commands::phone_boss_state,
             commands::open_phone_boss_window,
-            commands::close_phone_boss_window
+            commands::close_phone_boss_window,
+            commands::get_shutdown_state,
+            commands::schedule_shutdown,
+            commands::cancel_shutdown
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

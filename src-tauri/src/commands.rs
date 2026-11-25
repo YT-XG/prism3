@@ -22,6 +22,7 @@ use crate::note_image;
 use crate::note_io::{self, ExportReport, ImportOptions, ImportReport};
 use crate::paste::{self, PasteContent, PasteOutcome};
 use crate::phone::{self, PhoneStatus};
+use crate::power::{self, ShutdownState, ShutdownStore};
 use crate::repo::{note, note_folder, note_link, tag, work_log};
 use crate::status::{self, AppStatus, AppStatusState};
 use crate::updater::{self, UpdateSnapshot};
@@ -2384,4 +2385,30 @@ fn emit_quick_panel_body_state(app: &AppHandle, open: bool, edge: DockEdge) -> A
         QuickPanelBodyState { open, edge },
     )?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 定时关机（见 power.rs）
+// ---------------------------------------------------------------------------
+
+/// 读取定时关机状态（页面挂载 / 热重载后兜底拉取：事件不缓存）。
+#[tauri::command]
+pub fn get_shutdown_state(state: State<'_, ShutdownStore>) -> ShutdownState {
+    state.snapshot()
+}
+
+/// 设置定时关机：`minutes` 分钟后由 Windows 关闭计算机（1 分钟 ~ 24 小时）。
+#[tauri::command]
+pub fn schedule_shutdown(
+    app: AppHandle,
+    state: State<'_, ShutdownStore>,
+    minutes: u32,
+) -> AppResult<ShutdownState> {
+    power::schedule(&app, &state, minutes)
+}
+
+/// 取消定时关机，同时撤掉系统里挂起的关机计划。
+#[tauri::command]
+pub fn cancel_shutdown(app: AppHandle, state: State<'_, ShutdownStore>) -> ShutdownState {
+    power::cancel(&app, &state)
 }
