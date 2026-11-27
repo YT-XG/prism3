@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
-  ArrowDown,
-  ArrowUp,
   CircleAlert,
   CircleCheck,
   GripVertical,
@@ -28,7 +26,7 @@ const FLASH_MS = 1600;
 /**
  * 手机「老板模式」悬浮窗（window label = `phone-boss`，由 `quick-panel.html` 承载）。
  *
- * 挂件上有三枚按键：**同步**（锁屏）+ **上滑 / 下滑**（在画面中央竖滑一次）。
+ * 挂件上有三枚按键：**同步**（锁屏）+ **上 / 下**（竖滑一次：上 = 从上往下，下 = 从下往上）。
  * 它的用途是「老板走过来」那一刻：镜像窗口可以最小化到托盘，这块挂件始终置顶
  * 浮在所有窗口上面。
  *
@@ -178,8 +176,9 @@ export function PhoneBossPanel() {
           <GripVertical className="size-3.5" />
         </div>
 
-        {/* 上滑（手指从下往上）：把画面内容向上滚 / 收起通知。 */}
+        {/* 下按钮 = 从下往上滑（收起通知 / 内容上滚）。 */}
         <SwipeButton
+          label="下"
           direction="up"
           feedback={swipe}
           onClick={() => void swipeOnce("up")}
@@ -204,8 +203,9 @@ export function PhoneBossPanel() {
           {label}
         </button>
 
-        {/* 下滑（手指从上往下）：拉出通知栏 / 下拉刷新。 */}
+        {/* 上按钮 = 从上往下滑（拉出通知栏 / 下拉刷新）。 */}
         <SwipeButton
+          label="上"
           direction="down"
           feedback={swipe}
           onClick={() => void swipeOnce("down")}
@@ -215,21 +215,23 @@ export function PhoneBossPanel() {
   );
 }
 
-/** 上/下滑按键：箭头图标 + 一次性颜色反馈（颜色与「同步」按钮同一套语义）。 */
+/** 上/下按键：文字标签 + 一次性颜色反馈（颜色与「同步」按钮同一套语义）。 */
 function SwipeButton({
+  label,
   direction,
   feedback,
   onClick,
 }: {
+  /** 按钮上的字：`上` = 从上往下滑，`下` = 从下往上滑。 */
+  label: "上" | "下";
   direction: SwipeDirection;
   feedback: SwipeFeedback | null;
   onClick: () => void;
 }) {
   const state = feedback?.direction === direction ? feedback.state : null;
-  const Arrow = direction === "up" ? ArrowUp : ArrowDown;
-  const Icon = state === "done" ? CircleCheck : state === "error" ? CircleAlert : Arrow;
+  const Icon = state === "done" ? CircleCheck : state === "error" ? CircleAlert : null;
   const tip =
-    direction === "up" ? "向上滑动（从下往上）" : "向下滑动（从上往下）";
+    direction === "up" ? "下：从下往上滑动" : "上：从上往下滑动";
 
   return (
     <button
@@ -238,7 +240,7 @@ function SwipeButton({
       title={`${tip} · 拖动可移动位置 · 右键关闭`}
       aria-label={tip}
       className={cn(
-        "flex h-full w-9 shrink-0 items-center justify-center rounded-xl text-white transition-[filter,background-color,transform] select-none",
+        "flex h-full w-9 shrink-0 items-center justify-center rounded-xl text-[13px] font-medium text-white transition-[filter,background-color,transform] select-none",
         "active:scale-[0.985] active:brightness-95",
         state === null && "bg-white/10 hover:bg-white/15",
         state === "busy" && "animate-pulse bg-[var(--brand)]",
@@ -246,7 +248,7 @@ function SwipeButton({
         state === "error" && "bg-red-600/90",
       )}
     >
-      <Icon className="size-3.5" />
+      {Icon ? <Icon className="size-3.5" /> : label}
     </button>
   );
 }
