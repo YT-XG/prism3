@@ -2137,6 +2137,16 @@ pub fn phone_key(app: AppHandle, serial: String, key: phone::PhoneKey) -> AppRes
     phone::key(&app, &serial, key)
 }
 
+/// 老板模式挂件：在画面中央竖滑（`up` = 从下往上，`down` = 从上往下）。
+#[tauri::command(async)]
+pub fn phone_swipe_vertical(
+    app: AppHandle,
+    serial: String,
+    direction: phone::SwipeDirection,
+) -> AppResult<()> {
+    phone::swipe_vertical(&app, &serial, direction)
+}
+
 /// 锁屏（先 `KEYCODE_SLEEP`，不生效才退到电源键），返回一句可展示的结果说明。
 #[tauri::command(async)]
 pub fn phone_lock(app: AppHandle, serial: String) -> AppResult<String> {
@@ -2211,15 +2221,15 @@ pub async fn phone_wireless_pair(
 }
 
 // ---------------------------------------------------------------------------
-// 手机「老板模式」：一枚置顶悬浮窗，上面只有「息屏」一个按键（见 phone-boss.tsx）
+// 手机「老板模式」：一枚置顶悬浮窗，上面是「同步」+ 上/下滑三枚按键（见 phone-boss.tsx）
 // ---------------------------------------------------------------------------
 
 /// 老板模式悬浮窗的 label（前端 `quick-panel.tsx` 按它分派到 `PhoneBossPanel`）。
 pub const PHONE_BOSS_LABEL: &str = "phone-boss";
 
-/// 悬浮窗口尺寸（逻辑像素）：比胶囊本身大一圈，专门留出投影的余量——
+/// 悬浮窗口尺寸（逻辑像素）：比胶囊本身（200×56）大一圈，专门留出投影的余量——
 /// 窗口是透明的，投影一旦贴着窗口边缘就会被裁掉，挂件看起来就会「贴」在桌面上。
-const PHONE_BOSS_WIDTH: f64 = 168.0;
+const PHONE_BOSS_WIDTH: f64 = 232.0;
 const PHONE_BOSS_HEIGHT: f64 = 88.0;
 /// 胶囊在窗口里的内缩（与 `phone-boss.tsx` 的居中布局一致）。
 const PHONE_BOSS_INSET: f64 = 16.0;

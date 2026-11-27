@@ -1,16 +1,26 @@
 import { useEffect, useRef, useState } from "react";
 
-import { CircleAlert, CircleCheck, GripVertical, RefreshCw } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  CircleAlert,
+  CircleCheck,
+  GripVertical,
+  RefreshCw,
+} from "lucide-react";
 import { debug as logDebug } from "@tauri-apps/plugin-log";
 
-import { ipc } from "@/lib/ipc";
+import { ipc, type SwipeDirection } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
 /**
- * 悬浮窗里的一枚按键有五种状态：
+ * 悬浮窗里的「同步」按键有五种状态：
  * `idle` 待按、`busy` 正在发锁屏指令、`done` 已发成功、`error` 失败、`offline` 没找到已授权的设备。
  */
 type Phase = "idle" | "busy" | "done" | "error" | "offline";
+
+/** 上下滑按键的瞬时反馈。 */
+type SwipeFeedback = { direction: SwipeDirection; state: "busy" | "done" | "error" };
 
 /** 成功提示停留多久再回到「待按」（再久就挡住下一次点击的手感）。 */
 const FLASH_MS = 1600;
@@ -18,9 +28,9 @@ const FLASH_MS = 1600;
 /**
  * 手机「老板模式」悬浮窗（window label = `phone-boss`，由 `quick-panel.html` 承载）。
  *
- * 整块挂件只有**一个按键：息屏**。它的用途是「老板走过来」那一刻：
- * 镜像窗口可以最小化到托盘，这枚按钮始终置顶浮在所有窗口上面，按一下就把手机屏幕
- * 熄掉（走 `phone_lock`：先 `KEYCODE_SLEEP`，读不到屏幕状态时绝不补按电源键）。
+ * 挂件上有三枚按键：**同步**（锁屏）+ **上滑 / 下滑**（在画面中央竖滑一次）。
+ * 它的用途是「老板走过来」那一刻：镜像窗口可以最小化到托盘，这块挂件始终置顶
+ * 浮在所有窗口上面。
  *
  * 三条刻意的设计：
  * 1. **窗口不抢焦点**（`focusable: false`，见 `commands.rs::build_phone_boss_window`），
@@ -31,11 +41,14 @@ const FLASH_MS = 1600;
  */
 export function PhoneBossPanel() {
   const [phase, setPhase] = useState<Phase>("idle");
+  const [swipe, setSwipe] = useState<SwipeFeedback | null>(null);
   const timerRef = useRef<number | undefined>(undefined);
+  const swipeTimerRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     return () => {
       if (timerRef.current !== undefined) window.clearTimeout(timerRef.current);
+      if (swipeTimerRef.current !== undefined) window.clearTimeout(swipeTimerRef.current);
     };
   }, []);
 
@@ -100,6 +113,32 @@ export function PhoneBossPanel() {
     }
   };
 
+  /** 上/下滑：`up` = 从下往上，`down` = 从上往下（坐标由后端按屏幕尺寸算）。 */
+  const swipeOnce = async (direction: SwipeDirection) => {
+    if (swipe?.state === "busy") return;
+    if (swipeTimerRef.current !== undefined) {
+      window.clearTimeout(swipeTimerRef.current);
+      swipeTimerRef.current = undefined;
+    }
+    setSwipe({ direction, state: "busy" });
+    const serial = await resolveSerial();
+    if (!serial) {
+      setSwipe(null);
+      setPhase("offline");
+      return;
+    }
+    try {
+      await ipc.phoneSwipeVertical(serial, direction);
+      setSwipe({ direction, state: "done" });
+    } catch {
+      setSwipe({ direction, state: "error" });
+    }
+    swipeTimerRef.current = window.setTimeout(() => {
+      swipeTimerRef.current = undefined;
+      setSwipe(null);
+    }, FLASH_MS);
+  };
+
   const label =
     phase === "busy"
       ? "同步中…"
@@ -123,14 +162,14 @@ export function PhoneBossPanel() {
       data-tauri-drag-region
       title={tip}
       onContextMenu={(event) => {
-        // 右键 = 退出老板模式：悬浮窗上只留一个按键，出口放在这里。
+        // 右键 = 退出老板模式：悬浮窗上不额外放退出按钮。
         event.preventDefault();
         void ipc.closePhoneBoss().catch(() => {});
       }}
       // 外层只是透明留白（窗口比胶囊大一圈，留着拖动与点击余量）。
       className="flex h-full w-full items-center justify-center"
     >
-      <div className="flex h-14 w-[136px] items-center gap-0.5 rounded-2xl bg-[#10141c]/95 p-1">
+      <div className="flex h-14 w-[200px] items-center gap-1 rounded-2xl bg-[#10141c]/95 p-1">
         {/* 拖动把手：整窗唯一的「非按键」区域，窗口不给焦点，只能靠它换位置。 */}
         <div
           data-tauri-drag-region
@@ -138,6 +177,14 @@ export function PhoneBossPanel() {
         >
           <GripVertical className="size-3.5" />
         </div>
+
+        {/* 上滑（手指从下往上）：把画面内容向上滚 / 收起通知。 */}
+        <SwipeButton
+          direction="up"
+          feedback={swipe}
+          onClick={() => void swipeOnce("up")}
+        />
+
         <button
           type="button"
           onClick={() => void lock()}
@@ -156,7 +203,50 @@ export function PhoneBossPanel() {
           <Icon className="size-3.5" />
           {label}
         </button>
+
+        {/* 下滑（手指从上往下）：拉出通知栏 / 下拉刷新。 */}
+        <SwipeButton
+          direction="down"
+          feedback={swipe}
+          onClick={() => void swipeOnce("down")}
+        />
       </div>
     </div>
+  );
+}
+
+/** 上/下滑按键：箭头图标 + 一次性颜色反馈（颜色与「同步」按钮同一套语义）。 */
+function SwipeButton({
+  direction,
+  feedback,
+  onClick,
+}: {
+  direction: SwipeDirection;
+  feedback: SwipeFeedback | null;
+  onClick: () => void;
+}) {
+  const state = feedback?.direction === direction ? feedback.state : null;
+  const Arrow = direction === "up" ? ArrowUp : ArrowDown;
+  const Icon = state === "done" ? CircleCheck : state === "error" ? CircleAlert : Arrow;
+  const tip =
+    direction === "up" ? "向上滑动（从下往上）" : "向下滑动（从上往下）";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={`${tip} · 拖动可移动位置 · 右键关闭`}
+      aria-label={tip}
+      className={cn(
+        "flex h-full w-9 shrink-0 items-center justify-center rounded-xl text-white transition-[filter,background-color,transform] select-none",
+        "active:scale-[0.985] active:brightness-95",
+        state === null && "bg-white/10 hover:bg-white/15",
+        state === "busy" && "animate-pulse bg-[var(--brand)]",
+        state === "done" && "bg-emerald-600/90",
+        state === "error" && "bg-red-600/90",
+      )}
+    >
+      <Icon className="size-3.5" />
+    </button>
   );
 }

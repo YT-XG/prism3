@@ -474,6 +474,7 @@ pub fn run() {
             commands::phone_tap,
             commands::phone_swipe,
             commands::phone_key,
+            commands::phone_swipe_vertical,
             commands::phone_lock,
             commands::phone_wireless_info,
             commands::phone_wireless_enable,

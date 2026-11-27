@@ -116,6 +116,17 @@ impl PhoneKey {
     }
 }
 
+/// 老板挂件上的竖滑方向。
+///
+/// `up` = 手指从下往上（内容向上滚，通常用于收起通知 / 上滑），
+/// `down` = 手指从上往下（拉出通知栏 / 下拉刷新）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SwipeDirection {
+    Up,
+    Down,
+}
+
 /// 已解析到的 adb 可执行文件及来源。
 pub struct ResolvedAdb {
     pub path: PathBuf,
@@ -558,6 +569,70 @@ pub fn swipe(
         duration.to_string(),
     ];
     run_shell(&adb.path, &serial, &args, "滑动")
+}
+
+/// 在画面中央竖滑一次（老板挂件专用：不需要截图也知道屏幕尺寸）。
+///
+/// 坐标取画面中线、高度 20% ↔ 80%，避免滑到状态栏 / 手势区域。
+pub fn swipe_vertical(
+    app: &AppHandle,
+    serial: &str,
+    direction: SwipeDirection,
+) -> AppResult<()> {
+    let serial = checked_serial(serial)?;
+    let adb = require_adb(app)?;
+    let (width, height) = read_screen_size(&adb.path, &serial)
+        .ok_or_else(|| AppError::Other("读不到手机屏幕尺寸，无法滑动".into()))?;
+
+    // `wm size` 报的是自然方向（竖屏）；横屏时滑动轴会与画面不一致，
+    // 老板挂件只做快速竖滑，这是可接受的取舍。
+    let x = (width / 2) as i32;
+    let top = (height / 5) as i32;
+    let bottom = (height * 4 / 5) as i32;
+    let (from, to) = match direction {
+        SwipeDirection::Up => ((x, bottom), (x, top)),
+        SwipeDirection::Down => ((x, top), (x, bottom)),
+    };
+    let args = vec![
+        "input".to_string(),
+        "swipe".to_string(),
+        from.0.to_string(),
+        from.1.to_string(),
+        to.0.to_string(),
+        to.1.to_string(),
+        "260".to_string(),
+    ];
+    run_shell(&adb.path, &serial, &args, "滑动")
+}
+
+/// 读当前屏幕尺寸：优先 `Override size`（用户改过分辨率 / 缩放时才是真实可用尺寸），
+/// 没有则用 `Physical size`。
+fn read_screen_size(adb: &Path, serial: &str) -> Option<(u32, u32)> {
+    shell_text(adb, serial, "wm size").and_then(|text| parse_screen_size(&text))
+}
+
+/// 纯函数：解析 `adb shell wm size` 的输出。
+pub fn parse_screen_size(text: &str) -> Option<(u32, u32)> {
+    for prefix in ["Override size:", "Physical size:"] {
+        for line in text.lines() {
+            let Some(rest) = line.trim().strip_prefix(prefix) else {
+                continue;
+            };
+            let Some((width, height)) = rest.trim().split_once('x') else {
+                continue;
+            };
+            let (Ok(width), Ok(height)) = (
+                width.trim().parse::<u32>(),
+                height.trim().parse::<u32>(),
+            ) else {
+                continue;
+            };
+            if width > 0 && height > 0 {
+                return Some((width, height));
+            }
+        }
+    }
+    None
 }
 
 fn send_key(adb: &Path, serial: &str, code: u32) -> AppResult<()> {
@@ -1419,5 +1494,21 @@ adb-25102RKBEC-def456	_adb-tls-pairing._tcp	192.168.137.232:39111
         assert!(checked_address("192.168.137.232:0").is_err());
         assert!(checked_address(" :5555").is_err());
         assert!(checked_address("192.168.1.2:5555 extra").is_err());
+    }
+
+    #[test]
+    fn screen_size_prefers_override_and_ignores_garbage() {
+        assert_eq!(
+            parse_screen_size("Physical size: 1200x2608\n"),
+            Some((1200, 2608))
+        );
+        // 改过分辨率 / 显示缩放时，Override 才是真实可用尺寸。
+        assert_eq!(
+            parse_screen_size("Physical size: 1200x2608\nOverride size: 1080x2340\n"),
+            Some((1080, 2340))
+        );
+        assert_eq!(parse_screen_size("garbage"), None);
+        assert_eq!(parse_screen_size("Physical size: 0x0"), None);
+        assert_eq!(parse_screen_size("Physical size: 1080"), None);
     }
 }

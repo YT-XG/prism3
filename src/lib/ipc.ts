@@ -109,6 +109,12 @@ export interface WirelessInfo {
   | "volumeUp"
   | "volumeDown";
 
+/**
+ * 老板挂件上的竖滑方向（与 Rust 侧 `SwipeDirection` 一一对应）。
+ * `up` = 手指从下往上，`down` = 从上往下。
+ */
+export type SwipeDirection = "up" | "down";
+
 /** 与 Rust 侧 `AppConfig` 一一对应。 */
 export interface AppConfig {
   theme: Theme;
@@ -783,6 +789,9 @@ export const ipc = {
     }),
   /** 发送白名单按键。 */
   phoneKey: (serial: string, key: PhoneKey) => invoke<void>("phone_key", { serial, key }),
+  /** 在画面中央竖滑一次（老板挂件用；后端读 `wm size` 算坐标）。 */
+  phoneSwipeVertical: (serial: string, direction: SwipeDirection) =>
+    invoke<void>("phone_swipe_vertical", { serial, direction }),
   /** 锁屏；返回可展示的结果说明（含「无法确认」的情况）。 */
   phoneLock: (serial: string) => invoke<string>("phone_lock", { serial }),
   /** 无线调试现状（只读，可轮询）。 */
